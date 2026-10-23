@@ -35,7 +35,7 @@ jobs:
       - run: uv run ruff format --check src tests
       - run: uv run cosmos validate -m examples/ecommerce/semantic
       - run: uv run cosmos test -m examples/ecommerce/semantic
-      - name: Espera o SQL Server
+      - name: Wait for SQL Server
         run: |
           for i in $(seq 1 60); do
             uv run python -c "import pymssql; pymssql.connect('localhost', 'sa', 'Cosmos!Passw0rd', port=1433)" && break

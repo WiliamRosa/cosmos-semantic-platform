@@ -1,4 +1,5 @@
-"""Linha de comando: ``cosmos validate``, ``query``, ``sql``, ``schema``, ``demo-data``, ``reference``."""
+"""Command line: ``cosmos validate``, ``query``, ``sql``, ``schema``, ``test``, ``import``,
+``demo-data``, ``reference``, ``serve`` and ``mcp``."""
 
 from __future__ import annotations
 
@@ -17,16 +18,19 @@ from cosmos_semantic.engine import Engine
 from cosmos_semantic.loader import load_project
 from cosmos_semantic.planner import Principal, QueryRequest
 
-app = typer.Typer(help="Cosmos Semantic: camada semântica com motor próprio.", no_args_is_help=True)
+app = typer.Typer(
+    help="Cosmos Semantic: a semantic layer with its own engine.", no_args_is_help=True
+)
 
-ModelOpt = Annotated[
-    Path, typer.Option("--model", "-m", help="Arquivo ou pasta do modelo semântico.")
+ModelOpt = Annotated[Path, typer.Option("--model", "-m", help="Semantic model file or folder.")]
+ConnOpt = Annotated[Path, typer.Option("--connections", "-c", help="connections.yml file.")]
+SourceOpt = Annotated[
+    str | None, typer.Option("--source", "-s", help="Data source in connections.yml.")
 ]
-ConnOpt = Annotated[Path, typer.Option("--connections", "-c", help="Arquivo connections.yml.")]
-SourceOpt = Annotated[str | None, typer.Option("--source", "-s", help="Origem de connections.yml.")]
 UserOpt = Annotated[
-    list[str] | None, typer.Option("--user", "-u", help="Contexto do usuário, como region=Sul.")
+    list[str] | None, typer.Option("--user", "-u", help="User context, such as region=Sul.")
 ]
+DEFAULT_CASES = [Path("reference/queries.yml"), Path("reference/queries_advanced.yml")]
 
 
 @app.callback()
@@ -37,7 +41,7 @@ def _setup() -> None:
 
 
 def _fail(exc: Exception) -> None:
-    typer.secho(f"erro: {exc}", fg=typer.colors.RED, err=True)
+    typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
     raise typer.Exit(1)
 
 
@@ -46,24 +50,35 @@ def _principal(user: list[str] | None, channel: str = "cli") -> Principal:
     for item in user or []:
         key, sep, value = item.partition("=")
         if not sep:
-            _fail(ValueError(f"--user espera chave=valor, recebeu `{item}`"))
+            _fail(ValueError(f"--user expects key=value, got `{item}`"))
         values[key] = value
     return Principal(user=values, channel=channel)  # type: ignore[arg-type]
 
 
-def _request(metrics: list[str], dimensions, filters, order_by, limit) -> QueryRequest:
+def _request(metrics: list[str], dimensions, filters, order_by, limit, as_of) -> QueryRequest:
     return QueryRequest(
         metrics=metrics,
         dimensions=dimensions or [],
         filters=filters or [],
         order_by=order_by or [],
         limit=limit,
+        as_of=dt.date.fromisoformat(as_of) if as_of else None,
     )
+
+
+DimOpt = Annotated[list[str] | None, typer.Option("--by", "-b", help="Dimensions to group by.")]
+WhereOpt = Annotated[list[str] | None, typer.Option("--where", "-w", help="Filter expressions.")]
+OrderOpt = Annotated[
+    list[str] | None, typer.Option("--order", help="Order by; `-` for descending.")
+]
+LimitOpt = Annotated[int | None, typer.Option("--limit", "-l")]
+AsOfOpt = Annotated[str | None, typer.Option("--as-of", help="Reference date YYYY-MM-DD.")]
+AgentOpt = Annotated[bool, typer.Option(help="Query as an AI agent (MCP channel).")]
 
 
 @app.command()
 def validate(model: ModelOpt = Path("semantic")) -> None:
-    """Valida o modelo: referências, entidades, caminhos de join e filtros por linha."""
+    """Validates the model: references, entities, join paths and row filters."""
     try:
         graph = compile_project(load_project(model), strict=False)
     except errors.CosmosError as exc:
@@ -71,12 +86,11 @@ def validate(model: ModelOpt = Path("semantic")) -> None:
     for issue in graph.issues:
         color = typer.colors.RED if issue.severity == "error" else typer.colors.YELLOW
         typer.secho(str(issue), fg=color)
-    errors_found = [i for i in graph.issues if i.severity == "error"]
-    if errors_found:
+    if any(i.severity == "error" for i in graph.issues):
         raise typer.Exit(1)
     typer.secho(
-        f"ok: {len(graph.models)} modelos, {len(graph.measure_owner)} medidas, "
-        f"{len(graph.metrics)} métricas",
+        f"ok: {len(graph.models)} models, {len(graph.measure_owner)} measures, "
+        f"{len(graph.metrics)} metrics",
         fg=typer.colors.GREEN,
     )
 
@@ -85,35 +99,36 @@ def validate(model: ModelOpt = Path("semantic")) -> None:
 def schema(
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
 ) -> None:
-    """Gera o JSON Schema do formato de autoria v1."""
+    """Generates the JSON Schema of the v1 authoring format."""
     from cosmos_semantic.spec import json_schema
 
     text = json.dumps(json_schema(), indent=2, ensure_ascii=False) + "\n"
     if output:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text, encoding="utf-8", newline="\n")
-        typer.echo(f"schema escrito em {output}")
+        typer.echo(f"schema written to {output}")
     else:
         sys.stdout.write(text)
 
 
 @app.command()
 def sql(
-    metrics: Annotated[list[str], typer.Argument(help="Métricas ou medidas.")],
+    metrics: Annotated[list[str], typer.Argument(help="Metrics or measures.")],
     model: ModelOpt = Path("semantic"),
     connections: ConnOpt = Path("connections.yml"),
-    dimension: Annotated[list[str] | None, typer.Option("--by", "-b")] = None,
-    filter: Annotated[list[str] | None, typer.Option("--where", "-w")] = None,
-    order_by: Annotated[list[str] | None, typer.Option("--order")] = None,
-    limit: Annotated[int | None, typer.Option("--limit", "-l")] = None,
+    dimension: DimOpt = None,
+    filter: WhereOpt = None,
+    order_by: OrderOpt = None,
+    limit: LimitOpt = None,
+    as_of: AsOfOpt = None,
     user: UserOpt = None,
-    agent: Annotated[bool, typer.Option(help="Consultar como agente de IA (canal MCP).")] = False,
+    agent: AgentOpt = False,
 ) -> None:
-    """Mostra o SQL que o motor gera, sem executar."""
+    """Shows the SQL the engine generates, without running it."""
     try:
         engine = Engine.from_paths(model, load_connections(connections))
         compiled = engine.compile(
-            _request(metrics, dimension, filter, order_by, limit),
+            _request(metrics, dimension, filter, order_by, limit, as_of),
             _principal(user, "mcp" if agent else "cli"),
         )
     except errors.CosmosError as exc:
@@ -123,23 +138,24 @@ def sql(
 
 @app.command()
 def query(
-    metrics: Annotated[list[str], typer.Argument(help="Métricas ou medidas.")],
+    metrics: Annotated[list[str], typer.Argument(help="Metrics or measures.")],
     model: ModelOpt = Path("semantic"),
     connections: ConnOpt = Path("connections.yml"),
-    dimension: Annotated[list[str] | None, typer.Option("--by", "-b")] = None,
-    filter: Annotated[list[str] | None, typer.Option("--where", "-w")] = None,
-    order_by: Annotated[list[str] | None, typer.Option("--order")] = None,
-    limit: Annotated[int | None, typer.Option("--limit", "-l")] = None,
+    dimension: DimOpt = None,
+    filter: WhereOpt = None,
+    order_by: OrderOpt = None,
+    limit: LimitOpt = None,
+    as_of: AsOfOpt = None,
     user: UserOpt = None,
-    agent: Annotated[bool, typer.Option(help="Consultar como agente de IA (canal MCP).")] = False,
+    agent: AgentOpt = False,
     show_sql: Annotated[bool, typer.Option("--show-sql")] = False,
     as_json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Executa um pedido de métricas na origem."""
+    """Runs a metrics request on the data source."""
     try:
         engine = Engine.from_paths(model, load_connections(connections))
         result = engine.query(
-            _request(metrics, dimension, filter, order_by, limit),
+            _request(metrics, dimension, filter, order_by, limit, as_of),
             _principal(user, "mcp" if agent else "cli"),
         )
     except errors.CosmosError as exc:
@@ -156,7 +172,7 @@ def query(
     typer.echo("  ".join("-" * w for w in widths))
     for row in rows:
         typer.echo("  ".join(_fmt(row[n]).ljust(w) for n, w in zip(names, widths, strict=True)))
-    typer.secho(f"{len(rows)} linhas", fg=typer.colors.BRIGHT_BLACK, err=True)
+    typer.secho(f"{len(rows)} rows", fg=typer.colors.BRIGHT_BLACK, err=True)
 
 
 def _fmt(value) -> str:
@@ -170,16 +186,16 @@ def _fmt(value) -> str:
 @app.command("demo-data")
 def demo_data_cmd(
     target: Annotated[
-        str, typer.Option(help="Origem de connections.yml, ou `parquet:<pasta>`.")
+        str, typer.Option(help="Data source in connections.yml, or `parquet:<folder>`.")
     ] = "local",
     connections: ConnOpt = Path("connections.yml"),
-    customers: Annotated[int, typer.Option(help="Número de clientes; pedidos = 3x.")] = 2_000,
+    customers: Annotated[int, typer.Option(help="Number of customers; orders = 3x.")] = 2_000,
     seed: int = 42,
     anchor: Annotated[
-        str | None, typer.Option(help="Data-âncora AAAA-MM-DD; padrão: hoje.")
+        str | None, typer.Option(help="Anchor date YYYY-MM-DD; default: today.")
     ] = None,
 ) -> None:
-    """Gera os dados sintéticos do e-commerce e carrega numa origem."""
+    """Generates the synthetic e-commerce data and loads it into a data source."""
     from cosmos_semantic import demo_data
 
     tables = demo_data.generate(
@@ -187,12 +203,12 @@ def demo_data_cmd(
     )
     if target.startswith("parquet:"):
         for path in demo_data.write_parquet(tables, target.split(":", 1)[1]):
-            typer.echo(f"escrito {path}")
+            typer.echo(f"wrote {path}")
         return
     try:
         config = load_connections(connections).data_sources[target]
     except KeyError:
-        _fail(errors.ModelError(f"origem `{target}` não está em {connections}"))
+        _fail(errors.ModelError(f"data source `{target}` is not in {connections}"))
     if config.path:
         Path(config.path).parent.mkdir(parents=True, exist_ok=True)
     connector = connect(config)
@@ -201,18 +217,20 @@ def demo_data_cmd(
     finally:
         connector.close()
     counts = ", ".join(f"{n}={t.num_rows}" for n, t in tables.items())
-    typer.secho(f"dados carregados em `{target}`: {counts}", fg=typer.colors.GREEN)
+    typer.secho(f"data loaded into `{target}`: {counts}", fg=typer.colors.GREEN)
 
 
 @app.command()
 def reference(
     model: ModelOpt = Path("examples/ecommerce/semantic"),
-    cases: Annotated[Path, typer.Option(help="Arquivo de casos.")] = Path("reference/queries.yml"),
+    cases: Annotated[
+        list[Path] | None, typer.Option(help="Case files; default: basic and advanced.")
+    ] = None,
     connections: ConnOpt = Path("examples/ecommerce/connections.yml"),
     source: SourceOpt = None,
-    phase: Annotated[int, typer.Option(help="Roda os casos até esta fase.")] = 1,
+    phase: Annotated[int, typer.Option(help="Run cases up to this phase.")] = 1,
 ) -> None:
-    """Roda as consultas de referência e compara o motor com o SQL escrito à mão."""
+    """Runs the reference queries and compares the engine with hand-written SQL."""
     from cosmos_semantic.reference import load_cases, run_case
 
     graph = compile_project(load_project(model))
@@ -220,22 +238,19 @@ def reference(
     config: DataSourceConfig = conns.data_sources[source or conns.default or "local"]
     connector = connect(config)
     resolver = _glossary_resolver(graph)
+    colors = {"pass": typer.colors.GREEN, "fail": typer.colors.RED, "skip": typer.colors.YELLOW}
     failed = 0
     try:
-        for case in load_cases(cases):
-            if case.phase > phase:
-                continue
-            result = run_case(case, graph, connector, resolver=resolver)
-            color = {
-                "pass": typer.colors.GREEN,
-                "fail": typer.colors.RED,
-                "skip": typer.colors.YELLOW,
-            }
-            typer.secho(
-                f"{case.id} {result.status:4}  {case.title}  {result.detail}",
-                fg=color[result.status],
-            )
-            failed += result.status == "fail"
+        for file in cases or DEFAULT_CASES:
+            for case in load_cases(file):
+                if case.phase > phase:
+                    continue
+                result = run_case(case, graph, connector, resolver=resolver)
+                typer.secho(
+                    f"{case.id} {result.status:4}  {case.title}  {result.detail}",
+                    fg=colors[result.status],
+                )
+                failed += result.status == "fail"
     finally:
         connector.close()
     if failed:
@@ -256,7 +271,7 @@ def _glossary_resolver(graph):
 
 @app.command("test")
 def test_rules(model: ModelOpt = Path("semantic")) -> None:
-    """Executa os exemplos das regras de negócio no DuckDB, sem acessar as origens."""
+    """Runs the business rules' examples on DuckDB, without touching the data sources."""
     from cosmos_semantic.ontology import run_rule_tests
 
     try:
@@ -267,22 +282,22 @@ def test_rules(model: ModelOpt = Path("semantic")) -> None:
     results = run_rule_tests(project)
     for r in results:
         color = typer.colors.GREEN if r.passed else typer.colors.RED
-        typer.secho(f"{r.rule}[{r.index}] {'ok' if r.passed else 'falhou'} {r.detail}", fg=color)
+        typer.secho(f"{r.rule}[{r.index}] {'ok' if r.passed else 'failed'} {r.detail}", fg=color)
     if any(not r.passed for r in results):
         raise typer.Exit(1)
-    typer.secho(f"{len(results)} exemplos de regras ok", fg=typer.colors.GREEN)
+    typer.secho(f"{len(results)} rule examples ok", fg=typer.colors.GREEN)
 
 
 @app.command("import")
 def import_cmd(
-    kind: Annotated[str, typer.Argument(help="dbt, ossie ou cube.")],
-    source: Annotated[Path, typer.Argument(help="Arquivo ou pasta de origem.")],
-    output: Annotated[Path, typer.Option("--output", "-o", help="Arquivo .yml de saída.")],
+    kind: Annotated[str, typer.Argument(help="dbt, ossie or cube.")],
+    source: Annotated[Path, typer.Argument(help="Source file or folder.")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output .yml file.")],
     schema_name: Annotated[
-        str | None, typer.Option("--schema", help="Esquema das tabelas (dbt e Cube).")
+        str | None, typer.Option("--schema", help="Table schema (dbt and Cube).")
     ] = None,
 ) -> None:
-    """Importa um modelo de dbt (atual e legado), Apache Ossie ou Cube (YAML estático)."""
+    """Imports a model from dbt (latest and legacy), Apache Ossie or Cube (static YAML)."""
     from cosmos_semantic.interchange import dump_project, import_model
 
     options = {"schema": schema_name} if kind in ("dbt", "cube") and schema_name else {}
@@ -294,14 +309,14 @@ def import_cmd(
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(dump_project(result.project), encoding="utf-8", newline="\n")
     for warning in result.warnings:
-        typer.secho(f"aviso: {warning}", fg=typer.colors.YELLOW)
+        typer.secho(f"warning: {warning}", fg=typer.colors.YELLOW)
     for issue in graph.issues:
         color = typer.colors.RED if issue.severity == "error" else typer.colors.YELLOW
         typer.secho(str(issue), fg=color)
     p = result.project
     typer.secho(
-        f"importado em {output}: {len(p.semantic_models)} modelos, {len(p.metrics)} métricas, "
-        f"{len(p.business_rules)} regras, {len(result.warnings)} avisos",
+        f"imported into {output}: {len(p.semantic_models)} models, {len(p.metrics)} metrics, "
+        f"{len(p.business_rules)} rules, {len(result.warnings)} warnings",
         fg=typer.colors.GREEN,
     )
     if any(i.severity == "error" for i in graph.issues):
@@ -327,13 +342,13 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8080,
     allow_anonymous: Annotated[
-        bool, typer.Option(help="Aceita chamadas sem credencial (só desenvolvimento).")
+        bool, typer.Option(help="Accept calls without credentials (development only).")
     ] = False,
 ) -> None:
-    """Sobe a API REST (/v1) e o servidor MCP (/mcp) no mesmo processo.
+    """Starts the REST API (/v1) and the MCP server (/mcp) in the same process.
 
-    Identidade: COSMOS_OIDC_ISSUER e COSMOS_OIDC_AUDIENCE (tokens do provedor), ou
-    COSMOS_DEV_API_KEYS com chaves de desenvolvimento.
+    Identity: COSMOS_OIDC_ISSUER and COSMOS_OIDC_AUDIENCE (provider tokens), or
+    COSMOS_DEV_API_KEYS with development keys.
     """
     import uvicorn
 
@@ -347,7 +362,7 @@ def serve(
     if not authenticator.settings.enabled and not allow_anonymous:
         _fail(
             errors.ModelError(
-                "configure COSMOS_OIDC_ISSUER ou COSMOS_DEV_API_KEYS, ou use --allow-anonymous"
+                "set COSMOS_OIDC_ISSUER or COSMOS_DEV_API_KEYS, or use --allow-anonymous"
             )
         )
     mcp_app = build_mcp(service, authenticator).streamable_http_app(
@@ -362,7 +377,7 @@ def mcp(
     model: ModelOpt = Path("semantic"),
     connections: ConnOpt = Path("connections.yml"),
 ) -> None:
-    """Servidor MCP via stdio, para clientes locais. O contexto vem de COSMOS_API_KEY."""
+    """MCP server over stdio, for local clients. The user context comes from COSMOS_API_KEY."""
     from cosmos_semantic.mcp_server import build_mcp
 
     try:

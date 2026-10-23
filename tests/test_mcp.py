@@ -52,12 +52,12 @@ def test_without_credentials_the_agent_gets_an_error(server, monkeypatch):
 def test_agent_answers_with_synonyms_only(server, monkeypatch):
     monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
     concept = call(server, "search_concepts", text="compradores ativos")["concepts"][0]
-    assert concept["maps_to"] == "rule:cliente_ativo"
+    assert concept["maps_to"] == "rule:active_customer"
     result = call(
         server,
         "query",
         metrics=["customer_count"],
-        filters=["{rule.cliente_ativo}"],
+        filters=["{rule.active_customer}"],
     )
     assert result["row_count"] == 1 and result["rows"][0]["customer_count"] >= 0
 

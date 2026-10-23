@@ -1,120 +1,123 @@
 # Cosmos Semantic
 
-> Repositório: `cosmos-semantic-platform`. Licença: open core, com o núcleo sob Apache 2.0 ([ADR 0005](docs/decisions/0005-open-core.md)).
+> Repository: `cosmos-semantic-platform`. License: open core, with the core under Apache 2.0 ([ADR 0005](docs/decisions/0005-open-core.md)).
 
-Camada semântica para agentes de IA e aplicações, com **motor próprio**: formato YAML próprio com o vocabulário do [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl), versionado e com JSON Schema, geração de SQL para cada origem e interoperabilidade nativa com o [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (antigo Open Semantic Interchange, OSI). O [Cube](https://github.com/cube-js/cube) e o dbt são **origens de importação e destinos de exportação**, não dependências.
+A semantic layer for AI agents and applications, with **its own engine**: its own versioned YAML format with the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and a JSON Schema, SQL generation for each data source, and native interoperability with [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (formerly Open Semantic Interchange, OSI). [Cube](https://github.com/cube-js/cube) and dbt are **import sources and export targets**, not dependencies.
 
-**Status:** fases 0 e 1 implementadas. O motor, a ontologia (glossário e regras de negócio), a API REST, o servidor MCP, a identidade OIDC e a importação de dbt, Ossie e Cube estão prontos. As consultas de referência passam em DuckDB, Postgres e SQL Server; a validação no Databricks depende de um SQL warehouse configurado. Ver [roadmap](docs/roadmap.md).
+**Status:** phases 0 and 1 are implemented. The engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity and dbt, Ossie and Cube import are ready. Reference queries and a randomized cross-database test pass on DuckDB, Postgres and SQL Server; Databricks validation depends on a configured SQL warehouse. See the [roadmap](docs/roadmap.md).
 
-## Começando
+## In one sentence
 
-Requer Python 3.11+ e [uv](https://docs.astral.sh/uv/).
+Define entities, metrics, business concepts and business rules once, and any AI agent or application queries the same number, with SQL generated and run directly on your data source, and the model portable to Ossie, Cube and dbt.
+
+## Getting started
+
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync --all-extras
 
-# Gera dados sintéticos do e-commerce num DuckDB local (data/ecommerce.duckdb)
+# Generate synthetic e-commerce data into a local DuckDB (data/ecommerce.duckdb)
 uv run cosmos demo-data -c examples/ecommerce/connections.yml
 
-# Valida o modelo de exemplo
+# Validate the example model
 uv run cosmos validate -m examples/ecommerce/semantic
 
-# Consulta: receita e ticket médio por status
+# Revenue and average order value by status
 uv run cosmos query revenue average_order_value --by orders.status \
   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
-# Métricas de modelos diferentes, com filtro por linha do usuário; --show-sql mostra o SQL gerado
+# Metrics from different models, with the user's row filter; --show-sql prints the generated SQL
 uv run cosmos query revenue paid_value customer_count --by customers.region -u region=Sul --show-sql \
   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
-# Regras de negócio como filtro e como agrupamento
-uv run cosmos query customer_count --where "{rule.cliente_ativo}" --by customers.segment -u region=Sudeste   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+# Business rules as a filter and as a grouping; --as-of pins "today"
+uv run cosmos query customer_count --where "{rule.active_customer}" --by customers.segment \
+  -u region=Sudeste --as-of 2026-10-22 -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
-# Testes das regras de negócio (no DuckDB, sem acessar as origens) e consultas de referência
+# Business rule examples (on DuckDB, without touching the data sources) and reference queries
 uv run cosmos test -m examples/ecommerce/semantic
 uv run cosmos reference
 
-# Importar modelos de outras ferramentas
-uv run cosmos import cube caminho/do/modelo -o semantic/importado.yml
-uv run cosmos import dbt caminho/do/projeto/models --schema analytics -o semantic/dbt.yml
-uv run cosmos import ossie modelo.yaml -o semantic/ossie.yml
+# Import models from other tools
+uv run cosmos import cube path/to/model -o semantic/imported.yml
+uv run cosmos import dbt path/to/dbt/models --schema analytics -o semantic/dbt.yml
+uv run cosmos import ossie model.yaml -o semantic/ossie.yml
 ```
 
-### API REST e MCP
+### REST API and MCP
 
-`cosmos serve` sobe a API REST em `/v1` e o servidor MCP em `/mcp` no mesmo processo; a documentação interativa fica em `/docs`.
+`cosmos serve` starts the REST API at `/v1` and the MCP server at `/mcp` in the same process; interactive docs are at `/docs`.
 
 ```bash
-# Produção: tokens do provedor OIDC (o Cosmos só valida, não emite)
+# Production: tokens from the OIDC provider (Cosmos only validates, never issues)
 export COSMOS_OIDC_ISSUER=https://login.microsoftonline.com/<tenant>/v2.0
 export COSMOS_OIDC_AUDIENCE=api://cosmos-semantic
-# Desenvolvimento: chaves de API ligadas a um contexto fixo (arquivo com `keys: {<chave>: {subject, user}}`)
+# Development: API keys bound to a fixed context (a file with `keys: {<key>: {subject, user}}`)
 export COSMOS_DEV_API_KEYS=dev-keys.yml
 
 uv run cosmos serve -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
-curl -X POST localhost:8080/v1/query -H "X-API-Key: <chave>" -H "content-type: application/json"   -d '{"metrics": ["revenue"], "dimensions": ["customers.segment"]}'
+curl -X POST localhost:8080/v1/query -H "X-API-Key: <key>" -H "content-type: application/json" \
+  -d '{"metrics": ["revenue"], "dimensions": ["customers.segment"]}'
 ```
 
-Para clientes MCP locais (Claude Desktop, Claude Code), use o transporte stdio: `cosmos mcp -m ... -c ...` com `COSMOS_API_KEY` definida. As ferramentas são `search_concepts`, `explain`, `list_members`, `query` e `show_sql`. Cada chamada vale para o usuário dono do token; dados pessoais nunca chegam a agentes.
+For local MCP clients (Claude Desktop, Claude Code), use the stdio transport: `cosmos mcp -m ... -c ...` with `COSMOS_API_KEY` set. The tools are `search_concepts`, `explain`, `list_members`, `query` and `show_sql`. Every call runs as the user who owns the token; personal data never reaches agents.
 
-### Origens
+### Data sources
 
-Postgres local: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml up -d`, depois `cosmos demo-data --target postgres` e `cosmos reference --source postgres`. Para rodar os testes também no Postgres, defina `COSMOS_PG_URI=postgresql://cosmos:cosmos@localhost:55432/cosmos`.
+Local Postgres: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml up -d`, then `cosmos demo-data --target postgres` and `cosmos reference --source postgres`. To also run the tests on Postgres, set `COSMOS_PG_URI=postgresql://cosmos:cosmos@localhost:55432/cosmos`.
 
-SQL Server local: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile sqlserver up -d` e `COSMOS_MSSQL_URI='mssql+pymssql://sa:Cosmos!Passw0rd@localhost:14330/master'`. Cada origem aceita `schema_map` em `connections.yml` (por exemplo `public: dbo`) para usar o mesmo modelo em esquemas diferentes.
+Local SQL Server: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile sqlserver up -d` and `COSMOS_MSSQL_URI='mssql+pymssql://sa:Cosmos!Passw0rd@localhost:14330/master'`. Every data source accepts a `schema_map` in `connections.yml` (for example `public: dbo`) to use the same model with different schemas.
 
-Databricks: defina `DATABRICKS_HTTP_PATH` (SQL warehouse) e `DATABRICKS_TOKEN` com `DATABRICKS_SERVER_HOSTNAME`, ou `DATABRICKS_CONFIG_PROFILE` com um perfil do Databricks CLI.
+Databricks: set `DATABRICKS_HTTP_PATH` (SQL warehouse) and `DATABRICKS_TOKEN` with `DATABRICKS_SERVER_HOSTNAME`, or `DATABRICKS_CONFIG_PROFILE` with a Databricks CLI profile.
 
-O editor valida e completa os arquivos do modelo pelo JSON Schema em [schema/](schema/), referenciado na primeira linha de cada arquivo (`# yaml-language-server: $schema=...`). Depois de mudar `spec.py`, regenere com `uv run cosmos schema -o schema/cosmos-semantic.v1.schema.json`.
+Editors validate and autocomplete model files through the JSON Schema in [schema/](schema/), referenced on the first line of each file (`# yaml-language-server: $schema=...`). After changing `spec.py`, regenerate it with `uv run cosmos schema -o schema/cosmos-semantic.v1.schema.json`.
 
-## Em uma frase
+## Principles
 
-Defina entidades, métricas, conceitos de negócio e regras de negócio uma vez, e qualquer agente de IA ou aplicação consulta o mesmo número, com o SQL gerado e executado direto na sua origem de dados, e com o modelo exportável para Ossie, Cube e dbt.
+1. **The engine is ours.** The semantic model, metric planner and SQL generation are the core of the product.
+2. **Compatible, not dependent.** Cube, dbt and Ossie are import and export formats.
+3. **Query the source directly.** No intermediate infrastructure in the MVP; caching comes later.
+4. **Same number everywhere.** The same request returns the same result on every supported database.
+5. **One differentiator per phase.** Scope only grows after it is validated.
+6. **Open core.** Everything that defines or computes a number is Apache 2.0; the paid part covers enterprise identity, auditing, managed operations and support.
 
-## Princípios
+## Documentation
 
-1. **O motor é nosso.** Modelo semântico, planejador de métricas e geração de SQL são o núcleo do produto.
-2. **Compatível, não dependente.** Cube, dbt e Ossie são formatos de exportação e importação.
-3. **Consulta direto na origem.** Sem infraestrutura intermediária no MVP; cache vem depois.
-4. **Um diferencial por fase.** O escopo só cresce depois de validado.
-5. **Núcleo aberto.** Tudo o que define ou calcula um número é Apache 2.0; a parte paga cobre identidade corporativa, auditoria, operação gerenciada e suporte.
-
-## Documentação
-
-| Documento | Conteúdo |
+| Document | Contents |
 | --- | --- |
-| [Visão do produto](docs/visao-do-produto.md) | Problema, público, posicionamento, versões grátis e paga |
-| [Arquitetura](docs/arquitetura.md) | Componentes, planejador de consultas, segurança, implantação |
-| [Modelo semântico](docs/modelo-semantico.md) | O formato de autoria, o SQL gerado e as exportações |
-| [Interoperabilidade](docs/interoperabilidade-ossie.md) | Mapeamento com o Apache Ossie e importação de dbt e Cube |
-| [Roadmap](docs/roadmap.md) | Fases, escopo do MVP e critérios de avanço |
-| [Decisões de arquitetura](docs/decisions/) | Registros das decisões (ADRs); a 0004 substitui a 0001, a 0005 define nome e licença, a 0006 coloca a ontologia no MVP, a 0007 define conectores, origens, identidade e importação |
+| [Product vision](docs/product-vision.md) | Problem, audience, positioning, free and paid editions |
+| [Architecture](docs/architecture.md) | Components, query planner, cross-database guarantees, security, deployment |
+| [Semantic model](docs/semantic-model.md) | The authoring format, the generated SQL and the exports |
+| [Interoperability](docs/interoperability.md) | Mapping to Apache Ossie, and dbt and Cube import |
+| [Roadmap](docs/roadmap.md) | Phases, MVP scope and exit criteria |
+| [Architecture decisions](docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import |
 
-## Estrutura do repositório
+## Repository layout
 
 ```text
 src/cosmos_semantic/
-  spec.py            formato de autoria v1 (Pydantic); fonte do JSON Schema
-  loader.py          leitura dos arquivos YAML
-  compiler.py        validação e grafo semântico, com joins inferidos das entidades
-  expressions.py     referências {membro} e $user, e proteção dos filtros de quem consulta
-  planner.py         plano de consulta e SQL por dialeto (SQLGlot)
-  connectors.py      DuckDB, Postgres (ADBC), Databricks e SQL Server (SQLAlchemy), sempre em Arrow
-  engine.py          modelo + conexões -> consultas executadas
-  ontology.py        regras de negócio (dimensões virtuais e testes) e glossário SKOS
-  catalog.py         membros, busca de conceitos e explicações
-  auth.py            validação de tokens OIDC e chaves de desenvolvimento
-  service.py         consulta com auditoria, compartilhada por REST e MCP
-  api.py             API REST (FastAPI)
-  mcp_server.py      servidor MCP
-  interchange/       importação de dbt, Ossie e Cube
-  demo_data.py       dados sintéticos em pt_BR
-  reference.py       execução das consultas de referência
-  cli.py             comando `cosmos`
-schema/              JSON Schema do formato
-examples/ecommerce/  modelo e conexões de exemplo
-reference/           as 20 consultas de referência
-tests/fixtures/      modelos de exemplo em dbt, Ossie e Cube
-deploy/              docker compose local
-docs/                documentação e ADRs
+  spec.py            v1 authoring format (Pydantic); source of the JSON Schema
+  loader.py          reading YAML files
+  compiler.py        validation and semantic graph, with joins inferred from entities
+  expressions.py     {member} and $user references, and protection of caller filters
+  planner.py         query plan and per-dialect SQL (SQLGlot)
+  connectors.py      DuckDB, Postgres (ADBC), Databricks and SQL Server (SQLAlchemy), always Arrow
+  engine.py          model + connections -> executed queries
+  ontology.py        business rules (virtual dimensions and tests) and SKOS glossary
+  catalog.py         members, concept search and explanations
+  auth.py            OIDC token validation and development keys
+  service.py         querying with auditing, shared by REST and MCP
+  api.py             REST API (FastAPI)
+  mcp_server.py      MCP server
+  interchange/       dbt, Ossie and Cube import
+  demo_data.py       pt_BR synthetic data
+  reference.py       running the reference queries
+  cli.py             the `cosmos` command
+schema/              JSON Schema of the format
+examples/ecommerce/  example model and connections
+reference/           reference queries (basic and advanced)
+tests/fixtures/      example models in dbt, Ossie and Cube
+deploy/              local docker compose
+docs/                documentation and ADRs
 ```

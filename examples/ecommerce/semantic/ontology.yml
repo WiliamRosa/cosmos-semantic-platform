@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../../../schema/cosmos-semantic.v1.schema.json
+#
+# Identifiers and definitions are in English; labels and synonyms are bilingual on purpose,
+# so agents find concepts from questions asked in Portuguese or English.
+version: 1
+
+glossary:
+  - concept: customer
+    pref_label: { pt: Cliente, en: Customer }
+    alt_labels: { pt: [comprador, consumidor], en: [buyer, client] }
+    definition: Registered person or company that can place orders
+    maps_to: entity:customer
+
+  - concept: active_customer
+    pref_label: { pt: Cliente ativo, en: Active customer }
+    alt_labels: { pt: [cliente recorrente, comprador ativo], en: [active buyer, recurring customer] }
+    broader: customer
+    definition: Customer with a purchase in the last 90 days
+    maps_to: rule:active_customer
+
+  - concept: gross_revenue
+    pref_label: { pt: Receita bruta, en: Gross revenue }
+    alt_labels: { pt: [faturamento bruto, vendas], en: [sales] }
+    definition: Sum of order values, before discounts
+    maps_to: metric:revenue
+
+  - concept: net_revenue
+    pref_label: { pt: Receita líquida, en: Net revenue }
+    alt_labels: { pt: [faturamento líquido], en: [net sales] }
+    broader: gross_revenue
+    definition: Gross revenue minus discounts
+    maps_to: metric:net_revenue
+
+  - concept: average_order_value
+    pref_label: { pt: Ticket médio, en: Average order value }
+    alt_labels: { pt: [valor médio do pedido], en: [aov] }
+    definition: Gross revenue divided by the number of orders
+    maps_to: metric:average_order_value
+
+  - concept: customer_region
+    pref_label: { pt: Região do cliente, en: Customer region }
+    alt_labels: { pt: [região], en: [region] }
+    definition: Brazilian region where the customer lives
+    maps_to: dimension:customers.region
+
+business_rules:
+  - name: active_customer
+    kind: predicate
+    owner: sales-leadership
+    effective_from: 2026-01-01
+    description: Customer with a purchase in the last 90 days
+    inputs:
+      last_purchase: time
+    logic: "{last_purchase} >= CURRENT_DATE - INTERVAL '90' DAY"
+    applies_to:
+      - model: customers
+        bind: { last_purchase: last_order_at }
+    tests:
+      - given: { last_purchase: 2026-10-01 }
+        today: 2026-10-16
+        expect: true
+      - given: { last_purchase: 2026-05-01 }
+        today: 2026-10-16
+        expect: false
+
+  - name: order_size_band
+    kind: classification
+    owner: sales-leadership
+    effective_from: 2026-01-01
+    description: Order size band by gross value (band names are Brazilian business labels)
+    inputs:
+      amount: number
+    decision_table:
+      - when: "{amount} >= 5000"
+        then: Grande
+      - when: "{amount} >= 1000"
+        then: Médio
+      - otherwise: Pequeno
+    applies_to:
+      - model: orders
+        bind: { amount: amount }
+    tests:
+      - given: { amount: 7200 }
+        expect: Grande
+      - given: { amount: 1000 }
+        expect: Médio
+      - given: { amount: 80 }
+        expect: Pequeno
+
+  - name: order_net_value
+    kind: derived
+    owner: controllership
+    effective_from: 2026-01-01
+    description: Order value minus discount
+    inputs:
+      amount: number
+      discount: number
+    logic: "{amount} - {discount}"
+    applies_to:
+      - model: orders
+        bind: { amount: amount, discount: discount }
+    tests:
+      - given: { amount: 100, discount: 10 }
+        expect: 90

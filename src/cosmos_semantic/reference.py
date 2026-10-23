@@ -1,4 +1,4 @@
-"""Executa as consultas de referência: resultado do motor versus SQL escrito à mão."""
+"""Runs the reference queries: engine result versus hand-written SQL."""
 
 from __future__ import annotations
 
@@ -102,14 +102,14 @@ def run_case(
     *,
     resolver=None,
 ) -> CaseResult:
-    """``resolver`` responde perguntas do glossário: texto -> ``maps_to`` do conceito encontrado."""
+    """``resolver`` answers glossary questions: text -> ``maps_to`` of the concept found."""
     if case.question is not None:
         if resolver is None:
-            return CaseResult(case, "skip", "sem busca no glossário")
+            return CaseResult(case, "skip", "no glossary search")
         found = resolver(case.question)
         if found == case.expect_maps_to:
             return CaseResult(case, "pass")
-        return CaseResult(case, "fail", f"esperado {case.expect_maps_to}, obtido {found}")
+        return CaseResult(case, "fail", f"expected {case.expect_maps_to}, got {found}")
 
     assert case.request is not None
     principal = Principal(user=case.user, channel=case.channel)
@@ -123,28 +123,32 @@ def run_case(
             return CaseResult(case, "pass", str(exc))
         return CaseResult(case, "fail", f"{type(exc).__name__}: {exc}")
     if case.expect_error:
-        return CaseResult(case, "fail", f"esperava {case.expect_error}, mas a consulta foi gerada")
+        return CaseResult(
+            case, "fail", f"expected {case.expect_error}, but the query was generated"
+        )
 
     expected_sql = case.sql_for(connector.dialect)
     if expected_sql is None:
-        return CaseResult(case, "skip", "sem SQL de referência")
+        return CaseResult(case, "skip", "no reference SQL")
     expected_sql = remap_sql(expected_sql, connector.dialect, connector.config.schema_map)
     got = connector.execute(compiled.sql).to_pylist()
     want = connector.execute(expected_sql).to_pylist()
     columns = [c.name for c in compiled.columns]
     missing = [c for c in columns if want and c not in want[0]]
     if missing:
-        return CaseResult(case, "fail", f"o SQL de referência não tem as colunas {missing}")
+        return CaseResult(case, "fail", f"the reference SQL lacks columns {missing}")
     got_rows, want_rows = _rows(got, columns), _rows(want, columns)
     if len(got_rows) != len(want_rows):
         return CaseResult(
-            case, "fail", f"{len(got_rows)} linhas no motor, {len(want_rows)} na referência"
+            case,
+            "fail",
+            f"{len(got_rows)} rows from the engine, {len(want_rows)} from the reference",
         )
     for g_row, w_row in zip(got_rows, want_rows, strict=True):
         if not _close(g_row, w_row):
-            return CaseResult(case, "fail", f"motor {g_row} != referência {w_row}")
+            return CaseResult(case, "fail", f"engine {g_row} != reference {w_row}")
     if not got_rows and not case.expect_empty:
-        return CaseResult(case, "fail", "as duas consultas vieram vazias; o caso não prova nada")
+        return CaseResult(case, "fail", "both queries returned no rows; the case proves nothing")
     if got_rows and case.expect_empty:
-        return CaseResult(case, "fail", f"esperava vazio, veio {len(got_rows)} linhas")
-    return CaseResult(case, "pass", f"{len(got_rows)} linhas")
+        return CaseResult(case, "fail", f"expected no rows, got {len(got_rows)}")
+    return CaseResult(case, "pass", f"{len(got_rows)} rows")

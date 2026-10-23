@@ -1,9 +1,10 @@
-"""Identidade (ADR 0007): o Cosmos valida tokens OIDC de um provedor externo e não emite tokens.
+"""Identity (ADR 0007): Cosmos validates OIDC tokens from an external provider and never
+issues tokens.
 
-- Produção: token JWT do provedor (Entra ID primeiro; Keycloak, Okta e Auth0 pelo mesmo
-  caminho), validado pelo JWKS publicado no ``/.well-known/openid-configuration`` do emissor.
-- Desenvolvimento: chaves de API ligadas a um contexto de usuário fixo, declaradas num arquivo
-  apontado por ``COSMOS_DEV_API_KEYS``. Nunca habilite em produção.
+- Production: the provider's JWT (Entra ID first; Keycloak, Okta and Auth0 work the same way),
+  validated against the JWKS published in the issuer's ``/.well-known/openid-configuration``.
+- Development: API keys bound to a fixed user context, declared in a file pointed to by
+  ``COSMOS_DEV_API_KEYS``. Never enable in production.
 """
 
 from __future__ import annotations
@@ -23,11 +24,11 @@ from cosmos_semantic.spec import UserContextField
 
 
 class AuthError(CosmosError):
-    """Credencial ausente ou inválida (HTTP 401)."""
+    """Missing or invalid credential (HTTP 401)."""
 
 
 class ForbiddenError(CosmosError):
-    """Credencial válida, mas sem as declarações exigidas (HTTP 403)."""
+    """Valid credential without the required claims (HTTP 403)."""
 
 
 class DevKey(BaseModel):
@@ -76,11 +77,11 @@ def principal_from_claims(
         value = _claim(claims, field.claim)
         if value is None:
             if field.required:
-                missing.append(f"{name} (declaração `{field.claim}`)")
+                missing.append(f"{name} (claim `{field.claim}`)")
             continue
         user[name] = value
     if missing:
-        raise ForbiddenError("o token não tem as declarações exigidas: " + ", ".join(missing))
+        raise ForbiddenError("the token lacks the required claims: " + ", ".join(missing))
     subject = claims.get("preferred_username") or claims.get("upn") or claims.get("sub")
     return Principal(user=user, channel=channel, subject=subject)
 
@@ -117,7 +118,7 @@ class Authenticator:
         import jwt
 
         if not self.settings.issuer:
-            raise AuthError("tokens OIDC não estão configurados (COSMOS_OIDC_ISSUER)")
+            raise AuthError("OIDC tokens are not configured (COSMOS_OIDC_ISSUER)")
         try:
             key = self._jwks.get_signing_key_from_jwt(token)
             return jwt.decode(
@@ -129,7 +130,7 @@ class Authenticator:
                 options={"require": ["exp", "iss"], "verify_aud": bool(self.settings.audience)},
             )
         except jwt.PyJWTError as exc:
-            raise AuthError(f"token inválido: {exc}") from exc
+            raise AuthError(f"invalid token: {exc}") from exc
 
     def authenticate(
         self,
@@ -144,7 +145,7 @@ class Authenticator:
             for key, dev in self.settings.dev_keys.items():
                 if hmac.compare_digest(key.encode(), api_key.encode()):
                     return Principal(user=dict(dev.user), channel=channel, subject=dev.subject)
-            raise AuthError("chave de API inválida")
+            raise AuthError("invalid API key")
         if not bearer:
-            raise AuthError("envie `Authorization: Bearer <token>`")
+            raise AuthError("send `Authorization: Bearer <token>`")
         return principal_from_claims(self.claims(bearer), self.user_context, channel)

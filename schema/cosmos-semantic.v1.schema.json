@@ -28,7 +28,7 @@
             }
           ],
           "default": null,
-          "description": "Área ou pessoa responsável. Obrigatório na validação.",
+          "description": "Team or person responsible. Validation warns when it is missing.",
           "title": "Owner"
         },
         "effective_from": {
@@ -42,7 +42,7 @@
             }
           ],
           "default": null,
-          "description": "Desde quando a versão atual vale.",
+          "description": "Since when the current version applies.",
           "title": "Effective From"
         },
         "description": {
@@ -124,7 +124,7 @@
     },
     "Concept": {
       "additionalProperties": false,
-      "description": "Conceito do glossário, no estilo SKOS.",
+      "description": "A SKOS-style glossary concept.",
       "properties": {
         "concept": {
           "maxLength": 64,
@@ -197,7 +197,7 @@
             }
           ],
           "default": null,
-          "description": "Membro ou regra que define o conceito: `metric:net_revenue`, `rule:cliente_ativo`.",
+          "description": "Member or rule that defines the concept: `metric:net_revenue`, `rule:active_customer`.",
           "title": "Maps To"
         }
       },
@@ -281,7 +281,7 @@
             }
           ],
           "default": null,
-          "description": "Janela móvel, como `7 days`. Fora do MVP.",
+          "description": "Rolling window, such as `7 days`. Not in the MVP.",
           "title": "Window"
         }
       },
@@ -375,7 +375,7 @@
           "type": "string"
         },
         "expr": {
-          "description": "Expressão sobre medidas ou métricas, referenciadas como `{nome}`.",
+          "description": "Expression over measures or metrics, referenced as `{name}`.",
           "title": "Expr",
           "type": "string"
         }
@@ -417,7 +417,7 @@
             }
           ],
           "default": null,
-          "description": "Expressão SQL; sem ela, usa a coluna `name`.",
+          "description": "SQL expression; defaults to the `name` column.",
           "title": "Expr"
         },
         "description": {
@@ -446,7 +446,7 @@
             }
           ],
           "default": null,
-          "description": "Classificação de LGPD. Agentes nunca recebem o valor bruto dessas colunas.",
+          "description": "LGPD (personal data) classification. AI agents never receive raw values.",
           "title": "Sensitivity"
         }
       },
@@ -459,7 +459,7 @@
     },
     "Entity": {
       "additionalProperties": false,
-      "description": "Chave que liga modelos entre si; os joins são inferidos a partir delas.",
+      "description": "A key that links models together; joins are inferred from entities.",
       "properties": {
         "name": {
           "maxLength": 64,
@@ -486,7 +486,7 @@
             }
           ],
           "default": null,
-          "description": "Expressão SQL; sem ela, usa a coluna `name`.",
+          "description": "SQL expression; defaults to the `name` column.",
           "title": "Expr"
         },
         "description": {
@@ -540,7 +540,7 @@
             }
           ],
           "default": null,
-          "description": "Expressão SQL agregada; sem ela, `count` conta linhas e os demais usam a coluna `name`.",
+          "description": "SQL expression to aggregate; without it `count` counts rows and the other aggregations use the `name` column.",
           "title": "Expr"
         },
         "description": {
@@ -645,7 +645,7 @@
           "type": "string"
         },
         "filter": {
-          "description": "Expressão SQL com `{dimensao}` ou `{modelo.dimensao}` e `$user.<campo>`.",
+          "description": "SQL expression with `{dimension}` or `{model.dimension}` and `$user.<field>`.",
           "title": "Filter",
           "type": "string"
         }
@@ -670,7 +670,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Entrada da regra -> coluna ou dimensão do modelo.",
+          "description": "Rule input -> model column or dimension.",
           "title": "Bind",
           "type": "object"
         }
@@ -860,7 +860,7 @@
       "additionalProperties": false,
       "properties": {
         "claim": {
-          "description": "Nome da declaração no token do provedor de identidade.",
+          "description": "Claim name in the identity provider's token.",
           "title": "Claim",
           "type": "string"
         },
@@ -890,11 +890,11 @@
     }
   },
   "additionalProperties": false,
-  "description": "Um arquivo (ou o conjunto de arquivos) do modelo semântico.",
+  "description": "One file (or the merged set of files) of a semantic model.",
   "properties": {
     "version": {
       "const": 1,
-      "description": "Versão do formato de autoria.",
+      "description": "Authoring format version.",
       "title": "Version",
       "type": "integer"
     },
@@ -908,7 +908,7 @@
         }
       ],
       "default": null,
-      "description": "Fuso do negócio, como `America/Sao_Paulo`. Define o \"hoje\" de regras e filtros com CURRENT_DATE, igual em qualquer origem. Padrão: UTC.",
+      "description": "Business time zone, such as `America/Sao_Paulo`. Defines what \"today\" means for rules and filters using CURRENT_DATE, identically on every data source. Default: UTC.",
       "title": "Timezone"
     },
     "semantic_models": {
@@ -981,7 +981,7 @@
     "custom_extensions": {
       "additionalProperties": true,
       "default": {},
-      "description": "Informação de outras ferramentas, preservada na importação.",
+      "description": "Information from other tools, preserved on import.",
       "title": "Custom Extensions",
       "type": "object"
     }
@@ -989,7 +989,7 @@
   "required": [
     "version"
   ],
-  "title": "Cosmos Semantic, formato de autoria v1",
+  "title": "Cosmos Semantic authoring format v1",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

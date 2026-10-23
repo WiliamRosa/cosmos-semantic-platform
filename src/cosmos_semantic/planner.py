@@ -1,8 +1,8 @@
-"""Planejador de consultas e geração de SQL.
+"""Query planner and SQL generation.
 
-Estratégia contra multiplicação de linhas (fan-out): as medidas são agrupadas pelo modelo
-dono; cada grupo vira uma CTE que parte do modelo dono e só faz joins muitos-para-um, então
-nenhuma linha se repete antes da agregação. As CTEs são unidas pelas dimensões pedidas.
+Fan-out strategy: measures are grouped by their owner model; each group becomes a CTE that
+starts at the owner model and only follows many-to-one joins, so no row is repeated before
+aggregation. The CTEs are then joined on the requested dimensions.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlglot import exp
+from sqlglot.dialects.dialect import Dialect
 
 from cosmos_semantic.compiler import DimensionRef, JoinEdge, SemanticGraph
 from cosmos_semantic.errors import PolicyError, QueryError
@@ -41,20 +42,20 @@ class QueryRequest(BaseModel):
 
     metrics: list[str] = Field(min_length=1)
     dimensions: list[str] = []
-    filters: list[str] = Field([], description="Expressões com referências `{modelo.dimensao}`.")
+    filters: list[str] = Field([], description="Expressions with `{model.dimension}` references.")
     order_by: list[str] = Field(
-        [], description="Membros pedidos; prefixo `-` para ordem decrescente."
+        [], description="Requested members; prefix with `-` for descending order."
     )
     limit: int | None = Field(None, ge=1)
     as_of: dt.date | None = Field(
         None,
-        description="Data de referência para CURRENT_DATE; padrão: hoje no fuso do modelo.",
+        description="Reference date for CURRENT_DATE; default: today in the model's time zone.",
     )
 
 
 @dataclass
 class Principal:
-    """Quem consulta: atributos já extraídos do token e o canal."""
+    """Who is asking: attributes already extracted from the token, and the channel."""
 
     user: dict[str, Any] = field(default_factory=dict)
     channel: Literal["api", "mcp", "cli"] = "cli"
@@ -84,7 +85,7 @@ class CompiledQuery:
 
 @dataclass(frozen=True)
 class _Input:
-    """Uma medida agregada, com o filtro da métrica que a usa (se houver)."""
+    """An aggregated measure, with the filter of the metric that uses it (if any)."""
 
     measure: str
     filter: str | None
@@ -116,20 +117,20 @@ class Planner:
         self.schema_map = schema_map or {}
 
     def now(self) -> dt.datetime:
-        """Agora no fuso do negócio, sem fuso explícito (as colunas do modelo são locais)."""
+        """Now in the business time zone, without an explicit offset (model columns are local)."""
         zone = ZoneInfo(self.graph.project.timezone or "UTC")
         return dt.datetime.now(zone).replace(tzinfo=None, microsecond=0)
 
     def _trunc(self, value: exp.Expression, grain: str) -> exp.Expression:
         unit = grain.upper()
         if unit == "WEEK" and self.dialect == "tsql":
-            unit = "ISO_WEEK"  # a semana do SQL Server depende de DATEFIRST; ISO começa na segunda
+            unit = "ISO_WEEK"  # SQL Server weeks depend on DATEFIRST; ISO weeks start on Monday
         return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit))
 
     def _table(self, name: str, alias: str) -> exp.Table:
         return table_ref(name, self.dialect, self.schema_map).as_(alias)
 
-    # -- entrada pública -----------------------------------------------------
+    # -- public entry point ----------------------------------------------------
 
     def plan(self, request: QueryRequest, principal: Principal | None = None) -> CompiledQuery:
         principal = principal or Principal()
@@ -137,7 +138,7 @@ class Planner:
 
         dims = [g.resolve_dimension(d) for d in request.dimensions]
         if len({d.alias for d in dims}) != len(dims):
-            raise QueryError("dimensão repetida no pedido")
+            raise QueryError("dimension requested more than once")
         filters = [parse_template(f, self.dialect, error=QueryError) for f in request.filters]
         for template in filters:
             check_request_expression(template)
@@ -149,7 +150,7 @@ class Planner:
         cumulative: dict[str, CumulativeMetric] = {}
         for name in request.metrics:
             if name in metric_exprs:
-                raise QueryError(f"métrica `{name}` repetida no pedido")
+                raise QueryError(f"metric `{name}` requested more than once")
             metric_exprs[name] = self._metric_expr(name, groups, set())
             metric = g.metrics.get(name)
             if isinstance(metric, CumulativeMetric):
@@ -158,7 +159,7 @@ class Planner:
         models = {g.measure_owner[i.measure] for grp in groups.values() for i in grp.inputs}
         data_sources = {g.models[m].spec.data_source for m in models}
         if len(data_sources) > 1:
-            raise QueryError("as métricas pedidas estão em origens diferentes")
+            raise QueryError("the requested metrics live in different data sources")
 
         ctes: list[tuple[str, exp.Select]] = []
         used_models: set[str] = set()
@@ -167,7 +168,7 @@ class Planner:
             ctes.append((f"{group.model}_agg", select))
             used_models |= joined
 
-        final = self._final_select(ctes, groups, dims, metric_exprs, cumulative, request)
+        final = self._final_select(ctes, dims, metric_exprs, cumulative, request)
         now = self.now()
         as_of = request.as_of or now.date()
         clock = now if request.as_of is None else dt.datetime.combine(request.as_of, dt.time())
@@ -188,11 +189,11 @@ class Planner:
         level = self.graph.dimension(ref).sensitivity
         if principal.is_agent and level:
             raise PolicyError(
-                f"`{ref.model}.{ref.name}` é dado {_LEVEL[level]} (LGPD) e não chega a "
-                "agentes de IA nem como agrupamento nem como filtro"
+                f"`{ref.model}.{ref.name}` is {_LEVEL[level]} data (LGPD) and never reaches "
+                "AI agents, neither as a grouping nor as a filter"
             )
 
-    # -- métricas -----------------------------------------------------------
+    # -- metrics ---------------------------------------------------------------
 
     def _metric_expr(
         self, name: str, groups: dict[str, _Group], stack: set[str], extra_filter: str | None = None
@@ -202,9 +203,9 @@ class Planner:
             return self._input(_Input(name, extra_filter), groups)
         metric = g.metrics.get(name)
         if metric is None:
-            raise QueryError(f"métrica `{name}` não existe")
+            raise QueryError(f"metric `{name}` does not exist")
         if name in stack:
-            raise QueryError(f"ciclo na métrica `{name}`")
+            raise QueryError(f"metric cycle at `{name}`")
         stack = stack | {name}
 
         if isinstance(metric, SimpleMetric):
@@ -227,11 +228,11 @@ class Planner:
             )
         if isinstance(metric, CumulativeMetric):
             if metric.window:
-                raise QueryError(f"`{name}`: métricas com `window` ficam fora do MVP")
+                raise QueryError(f"`{name}`: metrics with `window` are not in the MVP")
             if extra_filter or stack != {name}:
-                raise QueryError(f"`{name}`: métrica acumulada não pode compor outra métrica")
+                raise QueryError(f"`{name}`: a cumulative metric cannot be part of another metric")
             return self._input(_Input(metric.measure, None), groups)
-        raise QueryError(f"tipo de métrica não suportado em `{name}`")
+        raise QueryError(f"unsupported metric type in `{name}`")
 
     def _input(self, item: _Input, groups: dict[str, _Group]) -> exp.Expression:
         owner = self.graph.measure_owner[item.measure]
@@ -241,7 +242,7 @@ class Planner:
             group.inputs[item] = f"{item.measure}{suffix}"
         return exp.column(group.inputs[item], table=f"{owner}_agg")
 
-    # -- uma CTE por modelo dono --------------------------------------------
+    # -- one CTE per owner model -------------------------------------------------
 
     def _group_select(
         self,
@@ -261,8 +262,8 @@ class Planner:
         def dim_sql(ref: DimensionRef, condition: bool = False) -> exp.Expression:
             if ref.model != base and ref.model not in g.reachable(base):
                 raise QueryError(
-                    f"`{ref.model}.{ref.name}` não é alcançável a partir de `{base}` "
-                    "(só joins muitos-para-um são permitidos)"
+                    f"`{ref.model}.{ref.name}` is not reachable from `{base}` "
+                    "(only many-to-one joins are allowed)"
                 )
             need(ref.model)
             dim = g.dimension(ref)
@@ -274,13 +275,13 @@ class Planner:
                 column = _tsql_boolean(column, condition)
             return column
 
-        def ref_resolver(context: str | None, condition: bool = False):
-            return lambda r: dim_sql(g.resolve_dimension(r, context=context), condition)
-
         def request_ref(r: str, condition: bool = False) -> exp.Expression:
             ref = g.resolve_dimension(r, context=base if r.startswith("rule.") else None)
             self._check_sensitivity(ref, principal)
             return dim_sql(ref, condition)
+
+        def model_ref(context: str):
+            return lambda r, condition: dim_sql(g.resolve_dimension(r, context=context), condition)
 
         def fill(template: Template, resolver, user=None) -> exp.Expression:
             return substitute(
@@ -289,9 +290,6 @@ class Planner:
                 user,
                 resolve_condition=lambda r: resolver(r, True),
             )
-
-        def model_ref(context: str):
-            return lambda r, condition: dim_sql(g.resolve_dimension(r, context=context), condition)
 
         dim_exprs = [dim_sql(d) for d in dims]
         projections = [e.copy().as_(d.alias) for e, d in zip(dim_exprs, dims, strict=True)]
@@ -306,8 +304,8 @@ class Planner:
             )
             projections.append(self._aggregate(measure, base, condition).as_(alias))
 
-        # Filtros por linha de todo modelo que participa, inclusive os que entram por join
-        # por causa de outro filtro por linha.
+        # Row filters of every participating model, including models joined only because
+        # another row filter needs them.
         applied: set[str] = set()
         while True:
             pending = [m for m in [base, *joins] if m not in applied]
@@ -333,6 +331,7 @@ class Planner:
         if conditions:
             select = select.where(exp.and_(*conditions))
         if dims:
+            # Group by expressions, not ordinals: SQL Server does not accept GROUP BY 1.
             select = select.group_by(*[e.copy() for e in dim_exprs])
         return select, {base, *joins}
 
@@ -353,7 +352,7 @@ class Planner:
         if measure.agg == "count_distinct":
             return exp.Count(this=exp.Distinct(expressions=[value]))
         if measure.agg == "avg":
-            # AVG de coluna inteira trunca no SQL Server e no Postgres devolve NUMERIC.
+            # AVG over an integer column truncates in SQL Server and returns NUMERIC in Postgres.
             value = exp.Cast(this=value, to=exp.DataType.build("double"))
         return _SAFE_AGGS[measure.agg](this=value)
 
@@ -362,31 +361,29 @@ class Planner:
 
         def resolve(name: str) -> exp.Expression:
             if name not in declared:
-                raise PolicyError(f"`$user.{name}` não está declarado em user_context")
+                raise PolicyError(f"`$user.{name}` is not declared in user_context")
             if name not in principal.user or principal.user[name] is None:
                 raise PolicyError(
-                    f"consulta negada: o contexto do usuário não tem `{name}`, exigido por um "
-                    "filtro por linha"
+                    f"query denied: the user context has no `{name}`, which a row filter requires"
                 )
             return literal(principal.user[name])
 
         return resolve
 
-    # -- junção das CTEs -----------------------------------------------------
+    # -- joining the CTEs --------------------------------------------------------
 
     def _final_select(
         self,
         ctes: list[tuple[str, exp.Select]],
-        groups: dict[str, _Group],
         dims: list[DimensionRef],
         metric_exprs: dict[str, exp.Expression],
         cumulative: dict[str, CumulativeMetric],
         request: QueryRequest,
     ) -> exp.Select:
         names = [name for name, _ in ctes]
-        # Com mais de uma CTE e dimensões, a "espinha" é a união das combinações de dimensões de
-        # todas elas; cada CTE entra por LEFT JOIN com igualdade segura para nulos. FULL JOIN com
-        # IS NOT DISTINCT FROM não é aceito pelo Postgres.
+        # With more than one CTE and dimensions, the "spine" is the union of the dimension
+        # combinations of all CTEs; each CTE is LEFT JOINed to it with null-safe equality.
+        # Postgres rejects FULL JOIN with IS NOT DISTINCT FROM.
         use_spine = len(names) > 1 and bool(dims)
         anchor = "dimensions" if use_spine else names[0]
 
@@ -425,20 +422,21 @@ class Planner:
             select = select.with_(anchor, as_=spine)
 
         order = []
+        known = {d.alias for d in dims}
         for item in request.order_by:
             desc = item.startswith("-")
             key = item.lstrip("-")
-            known = {d.alias: d for d in dims}
             if key not in metric_exprs and key not in known:
                 try:
                     key = self.graph.resolve_dimension(key).alias
                 except QueryError as exc:
                     raise QueryError(
-                        f"order_by `{item}` não está entre os membros pedidos"
+                        f"order_by `{item}` is not among the requested members"
                     ) from exc
                 if key not in known:
-                    raise QueryError(f"order_by `{item}` não está entre os membros pedidos")
-            order.append(exp.Ordered(this=exp.column(key), desc=desc))
+                    raise QueryError(f"order_by `{item}` is not among the requested members")
+            # Nulls always last, ascending or descending: each database has its own default.
+            order.append(exp.Ordered(this=exp.column(key), desc=desc, nulls_first=False))
         if order:
             select = select.order_by(*order)
         if request.limit:
@@ -448,9 +446,7 @@ class Planner:
     def _cumulative(self, value, metric: CumulativeMetric, dims, dim_out) -> exp.Expression:
         time_dims = [d for d in dims if self.graph.dimension(d).type == "time"]
         if len(time_dims) != 1:
-            raise QueryError(
-                f"`{metric.name}` precisa de exatamente uma dimensão de tempo no pedido"
-            )
+            raise QueryError(f"`{metric.name}` needs exactly one time dimension in the request")
         time = time_dims[0]
         partition = [dim_out(d) for d in dims if d != time]
         if metric.grain_to_date:
@@ -458,21 +454,38 @@ class Planner:
         spec = exp.WindowSpec(
             kind="ROWS", start="UNBOUNDED", start_side="PRECEDING", end="CURRENT ROW"
         )
+        # A null period sorts last on every database. SQL Server cannot say NULLS LAST inside a
+        # window, so the first key does it portably and the second keeps the dialect's default.
+        null_last = exp.Case(
+            ifs=[
+                exp.If(
+                    this=exp.Is(this=dim_out(time), expression=exp.null()),
+                    true=exp.Literal.number(1),
+                )
+            ],
+            default=exp.Literal.number(0),
+        )
+        default_nulls_first = Dialect.get_or_raise(self.dialect).NULL_ORDERING == "nulls_are_small"
         return exp.Window(
             this=exp.Sum(this=value),
             partition_by=partition or None,
-            order=exp.Order(expressions=[exp.Ordered(this=dim_out(time))]),
+            order=exp.Order(
+                expressions=[
+                    exp.Ordered(this=null_last, nulls_first=default_nulls_first),
+                    exp.Ordered(this=dim_out(time), nulls_first=default_nulls_first),
+                ]
+            ),
             spec=spec,
         )
 
 
-_LEVEL = {"personal": "pessoal", "sensitive": "pessoal sensível"}
+_LEVEL = {"personal": "personal", "sensitive": "sensitive personal"}
 
 
 def _pin_clock(tree: exp.Expression, as_of: dt.date, clock: dt.datetime) -> exp.Expression:
-    """Troca CURRENT_DATE e CURRENT_TIMESTAMP pela data e hora de referência: o "hoje" passa
-    a ser o do negócio, não o relógio (e o fuso) de cada servidor, e a consulta fica
-    reproduzível e auditável."""
+    """Replaces CURRENT_DATE and CURRENT_TIMESTAMP with the reference date and time: "today"
+    becomes the business date, not each server's clock (and time zone), and the query becomes
+    reproducible and auditable."""
     day = exp.cast(exp.Literal.string(as_of.isoformat()), "DATE")
     moment = exp.cast(exp.Literal.string(clock.isoformat(sep=" ")), "TIMESTAMP")
     timestamps = tuple(
@@ -492,7 +505,7 @@ def _pin_clock(tree: exp.Expression, as_of: dt.date, clock: dt.datetime) -> exp.
 
 
 def _safe_division(node: exp.Expression) -> exp.Expression:
-    """Divisão em métrica derivada é sempre real e protegida contra zero, em qualquer banco."""
+    """Division in derived metrics is always real and safe against zero, on every database."""
     if isinstance(node, exp.Div):
         return exp.Div(
             this=exp.Cast(this=node.this, to=exp.DataType.build("double")),
@@ -502,7 +515,8 @@ def _safe_division(node: exp.Expression) -> exp.Expression:
 
 
 def _tsql_boolean(value: exp.Expression, condition: bool) -> exp.Expression:
-    """No SQL Server, coluna BIT vira predicado em condição e predicado vira 1/0 como valor."""
+    """In SQL Server a BIT column becomes a predicate in conditions, and a predicate becomes
+    1/0 when used as a value."""
     is_predicate = not isinstance(value, exp.Column | exp.Literal | exp.Case | exp.Cast)
     if condition:
         return value if is_predicate else exp.EQ(this=value, expression=exp.Literal.number(1))
@@ -528,7 +542,7 @@ def _dim_member(d: DimensionRef) -> str:
 
 
 def _ordered(joins: dict[str, JoinEdge], base: str) -> list[tuple[str, JoinEdge]]:
-    """Ordena os joins para que cada um venha depois do modelo de onde parte."""
+    """Orders joins so each one comes after the model it starts from."""
     done, ordered = {base}, []
     remaining = dict(joins)
     while remaining:
@@ -540,5 +554,5 @@ def _ordered(joins: dict[str, JoinEdge], base: str) -> list[tuple[str, JoinEdge]
                 del remaining[target]
                 progressed = True
         if not progressed:
-            raise QueryError("não foi possível ordenar os joins")
+            raise QueryError("could not order the joins")
     return ordered

@@ -1,8 +1,8 @@
-"""Importação de modelos do Cube, só YAML estático (ADR 0007).
+"""Importing Cube models, static YAML only (ADR 0007).
 
-Modelos em JavaScript e YAML com templates Jinja ou Python geram aviso e não são importados,
-porque exigiriam executar código do usuário. Regras de acesso do ``cube.js`` também são código:
-o relatório lista o que precisa ser recriado como ``row_filters`` e ``sensitivity``.
+JavaScript models and YAML with Jinja or Python templates produce a warning and are not
+imported, because they would require running user code. Access rules in ``cube.js`` are code
+too: the report lists what must be recreated as ``row_filters`` and ``sensitivity``.
 """
 
 from __future__ import annotations
@@ -48,29 +48,29 @@ def import_cube(path: str | Path, *, schema: str | None = None) -> ImportResult:
     for file in files:
         if file.suffix in (".js", ".ts"):
             warnings.append(
-                f"{file.name}: modelo em JavaScript não é importado (exigiria executar código)"
+                f"{file.name}: JavaScript models are not imported (they would require running code)"
             )
             continue
         if file.suffix == ".py":
-            warnings.append(f"{file.name}: arquivo Python do Cube não é importado")
+            warnings.append(f"{file.name}: Cube Python files are not imported")
             continue
         if file.suffix not in (".yml", ".yaml"):
             continue
         text = file.read_text(encoding="utf-8")
         if _TEMPLATE.search(text):
-            warnings.append(f"{file.name}: YAML com template Jinja/Python não é importado")
+            warnings.append(f"{file.name}: YAML with Jinja/Python templates is not imported")
             continue
         data = yaml.safe_load(text) or {}
         cubes.extend(data.get("cubes") or [])
         if data.get("views"):
             extensions.setdefault("views", []).extend(data["views"])
             warnings.append(
-                f"{file.name}: `views` não têm equivalente no MVP; guardadas em custom_extensions"
+                f"{file.name}: `views` have no MVP equivalent; kept in custom_extensions"
             )
     if any(f.name in ("cube.js", "cube.py") for f in files):
         warnings.append(
-            "cube.js/cube.py encontrado: regras de acesso (queryRewrite, contextToAppId) são código; "
-            "recrie-as como row_filters e sensitivity"
+            "cube.js/cube.py found: access rules (queryRewrite, contextToAppId) are code; "
+            "recreate them as row_filters and sensitivity"
         )
 
     models: dict[str, dict[str, Any]] = {}
@@ -86,10 +86,10 @@ def import_cube(path: str | Path, *, schema: str | None = None) -> ImportResult:
         if not table and cube.get("sql"):
             table = _table_from_sql(cube["sql"])
             if not table:
-                warnings.append(f"{where}: `sql` não é um SELECT * de uma tabela; cube ignorado")
+                warnings.append(f"{where}: `sql` is not a SELECT * from a table; cube skipped")
                 continue
         if not table:
-            warnings.append(f"{where}: sem `sql_table`; cube ignorado")
+            warnings.append(f"{where}: no `sql_table`; cube skipped")
             continue
         if schema and "." not in table:
             table = f"{schema}.{table}"
@@ -100,7 +100,7 @@ def import_cube(path: str | Path, *, schema: str | None = None) -> ImportResult:
         for dim in cube.get("dimensions") or []:
             dname, sql = dim["name"], _strip_cube(dim.get("sql", dim["name"]))
             if _MEMBER_REF.search(sql):
-                warnings.append(f"{where}.{dname}: dimensão que referencia outro membro; ignorada")
+                warnings.append(f"{where}.{dname}: dimension referencing another member; skipped")
                 continue
             if dim.get("primary_key"):
                 model.setdefault("entities", []).append(
@@ -112,7 +112,7 @@ def import_cube(path: str | Path, *, schema: str | None = None) -> ImportResult:
             kind = _DIM_TYPE.get(dim.get("type", "string"))
             if kind is None:
                 warnings.append(
-                    f"{where}.{dname}: tipo `{dim.get('type')}` não suportado; ignorada"
+                    f"{where}.{dname}: type `{dim.get('type')}` is not supported; skipped"
                 )
                 continue
             item = {"name": dname, "type": kind}
@@ -124,14 +124,14 @@ def import_cube(path: str | Path, *, schema: str | None = None) -> ImportResult:
             col_to_dim[name][sql] = dname
         if cube.get("access_policy"):
             warnings.append(
-                f"{where}: `access_policy` precisa ser recriada como row_filters e sensitivity"
+                f"{where}: `access_policy` must be recreated as row_filters and sensitivity"
             )
         for key in ("pre_aggregations", "refresh_key", "segments_meta", "hierarchies", "folders"):
             if cube.get(key):
                 extensions.setdefault("cubes", {}).setdefault(name, {})[key] = cube[key]
                 if key == "pre_aggregations":
                     warnings.append(
-                        f"{where}: pre_aggregations guardadas em custom_extensions (sem cache no MVP)"
+                        f"{where}: pre_aggregations kept in custom_extensions (no cache in the MVP)"
                     )
         models[name] = model
 
@@ -181,7 +181,7 @@ def _table_from_sql(sql: str) -> str | None:
 
 
 def _cube_filter(sql: str, dims: dict[str, str]) -> str:
-    """``{CUBE}.status = 'x'`` vira ``{status} = 'x'`` quando a coluna é uma dimensão."""
+    """``{CUBE}.status = 'x'`` becomes ``{status} = 'x'`` when the column is a dimension."""
     text = _strip_cube(sql)
     tree = sqlglot.parse_one(text)
 
@@ -201,16 +201,16 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> None:
     if kind == "number":
         refs = _MEMBER_REF.findall(str(sql or ""))
         if not refs:
-            warnings.append(f"{where}: medida `number` sem referências a medidas; ignorada")
+            warnings.append(f"{where}: `number` measure without measure references; skipped")
             return
         expr = _MEMBER_REF.sub(lambda m: "{" + (m.group(2) or m.group(1)) + "}", str(sql))
         metrics.append({"name": name, "type": "derived", "expr": _strip_cube(expr)})
         return
     if kind not in _AGG:
-        warnings.append(f"{where}: tipo `{kind}` não suportado; ignorada")
+        warnings.append(f"{where}: type `{kind}` is not supported; skipped")
         return
     if kind == "count_distinct_approx":
-        warnings.append(f"{where}: count_distinct_approx importada como contagem exata")
+        warnings.append(f"{where}: count_distinct_approx imported as an exact count")
     filters = [f["sql"] for f in measure.get("filters") or [] if f.get("sql")]
     window = measure.get("rolling_window")
     base_name = f"{name}__base" if filters or window else name
@@ -227,10 +227,10 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> None:
         else:
             metric["window"] = str(window.get("trailing", "unbounded"))
             warnings.append(
-                f"{where}: janela móvel fica fora do MVP; a métrica será recusada em consultas"
+                f"{where}: rolling windows are not in the MVP; queries using the metric will be refused"
             )
         if filters:
-            warnings.append(f"{where}: filtros em medida acumulada foram descartados")
+            warnings.append(f"{where}: filters on a cumulative measure were dropped")
         metrics.append(metric)
     elif filters:
         flt = " AND ".join(f"({_cube_filter(f, dims)})" for f in filters)
@@ -243,7 +243,7 @@ def _segment(cube, segment, dims, model, warnings) -> dict | None:
     try:
         tree = sqlglot.parse_one(sql)
     except sqlglot.errors.ParseError:
-        warnings.append(f"cubes.{cube}.segments.{name}: SQL inválido; ignorado")
+        warnings.append(f"cubes.{cube}.segments.{name}: invalid SQL; skipped")
         return None
     columns = sorted({c.name for c in tree.find_all(exp.Column)})
     types = {d["name"]: d["type"] for d in model.get("dimensions", [])}
@@ -257,12 +257,12 @@ def _segment(cube, segment, dims, model, warnings) -> dict | None:
     ).sql()
     logic = re.sub(r"__in_([A-Za-z0-9_]+)", lambda m: "{" + m.group(1) + "}", logic)
     warnings.append(
-        f"cubes.{cube}.segments.{name}: virou a regra `{name}`; defina `owner` e `effective_from`"
+        f"cubes.{cube}.segments.{name}: became rule `{name}`; set `owner` and `effective_from`"
     )
     return {
         "name": name,
         "kind": "predicate",
-        "description": segment.get("description") or f"Segmento `{name}` importado do Cube",
+        "description": segment.get("description") or f"Segment `{name}` imported from Cube",
         "inputs": inputs,
         "logic": logic,
         "applies_to": [{"model": cube, "bind": bind}],
@@ -273,13 +273,11 @@ def _join(cube, join, models, pk, warnings) -> None:
     target = join["name"]
     where = f"cubes.{cube}.joins.{target}"
     if target not in models:
-        warnings.append(f"{where}: cube de destino não importado; join ignorado")
+        warnings.append(f"{where}: target cube was not imported; join skipped")
         return
     sides = _equality(join.get("sql", ""), cube, target)
     if sides is None:
-        warnings.append(
-            f"{where}: só joins por igualdade simples entre duas colunas são importados"
-        )
+        warnings.append(f"{where}: only simple equality joins between two columns are imported")
         return
     local_col, remote_col = sides
     relationship = join.get("relationship", "many_to_one")
@@ -288,7 +286,7 @@ def _join(cube, join, models, pk, warnings) -> None:
     elif relationship in _ONE_TO_MANY:
         _link(models, pk, source=target, source_col=remote_col, target=cube, target_col=local_col)
     else:
-        warnings.append(f"{where}: relationship `{relationship}` desconhecido; join ignorado")
+        warnings.append(f"{where}: unknown relationship `{relationship}`; join skipped")
 
 
 def _link(models, pk, *, source, source_col, target, target_col) -> None:
@@ -309,7 +307,7 @@ def _link(models, pk, *, source, source_col, target, target_col) -> None:
 
 
 def _equality(sql: str, cube: str, target: str) -> tuple[str, str] | None:
-    """Lê ``{CUBE}.a = {alvo}.b`` (em qualquer ordem) e devolve (a, b)."""
+    """Reads ``{CUBE}.a = {target}.b`` (in either order) and returns (a, b)."""
     text = re.sub(r"\$?\{CUBE\}", f"__c_{cube}", sql)
     text = re.sub(
         r"\$?\{([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\}",

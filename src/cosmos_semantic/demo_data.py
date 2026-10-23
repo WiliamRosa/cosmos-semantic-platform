@@ -1,8 +1,9 @@
-"""Gerador de dados sintéticos de um e-commerce brasileiro, para testes e demonstração.
+"""Synthetic data generator for a Brazilian e-commerce, for tests and demos.
 
-Determinístico pela semente e pela data-âncora: os pedidos cobrem os 18 meses anteriores à
-âncora, para que regras como "cliente ativo nos últimos 90 dias" sempre tenham casos dos dois
-lados. Inclui CPF, e-mail e plano de saúde para exercitar as regras de LGPD.
+Deterministic given the seed and the anchor date: orders cover the 18 months before the
+anchor, so rules like "customer active in the last 90 days" always have cases on both sides.
+Includes CPF (Brazilian taxpayer id), e-mail and health plan to exercise LGPD rules. Values
+are in Portuguese on purpose: this is Brazilian data.
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ def generate(
             {
                 "product_id": i,
                 "name": f"{fake.word().capitalize()} {fake.word()}",
-                # ~5% sem categoria: testa dimensões nulas
+                # ~5% without a category: exercises null dimensions
                 "category": None if rng.random() < 0.05 else rng.choice(CATEGORIES),
                 "list_price": round(rng.uniform(15, 2_500), 2),
             }
@@ -227,7 +228,7 @@ def load_duckdb(con, tables: dict[str, pa.Table], schema: str = "public") -> Non
 
 
 def load_postgres(con, tables: dict[str, pa.Table], schema: str = "public") -> None:
-    """``con`` é uma conexão ADBC do Postgres."""
+    """``con`` is an ADBC Postgres connection."""
     with con.cursor() as cur:
         cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
         for name, table in tables.items():
@@ -247,9 +248,9 @@ _ARROW_TO_SQL = {
 def load_sql(
     connector, tables: dict[str, pa.Table], schema: str = "public", chunk: int = 500
 ) -> None:
-    """Carga genérica por INSERT, traduzida pelo SQLGlot para o dialeto da origem.
+    """Generic INSERT-based load, translated by SQLGlot into the source dialect.
 
-    Serve para Databricks e SQL Server, que não têm ingestão Arrow pelo mesmo caminho.
+    Used for Databricks and SQL Server, which have no Arrow ingestion through the same path.
     """
     import sqlglot
     from sqlglot import exp

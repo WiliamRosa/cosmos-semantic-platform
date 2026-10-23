@@ -1,18 +1,18 @@
 class CosmosError(Exception):
-    """Erro base do Cosmos Semantic."""
+    """Base error for Cosmos Semantic."""
 
 
 class ModelError(CosmosError):
-    """O modelo semântico é inválido."""
+    """The semantic model is invalid."""
 
 
 class QueryError(CosmosError):
-    """O pedido de consulta não pode ser atendido com o modelo atual."""
+    """The query request cannot be answered with the current model."""
 
 
 class PolicyError(CosmosError):
-    """Uma política de acesso ou de LGPD negou a consulta."""
+    """An access or LGPD (personal data) policy denied the query."""
 
 
 class ConnectorError(CosmosError):
-    """Falha ao executar SQL numa origem."""
+    """Running SQL on a data source failed."""

@@ -1,4 +1,4 @@
-"""Gates do roadmap: o motor dá o mesmo resultado que o SQL escrito à mão."""
+"""Roadmap gates: the engine returns the same result as hand-written SQL."""
 
 from __future__ import annotations
 

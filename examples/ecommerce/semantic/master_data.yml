@@ -6,12 +6,12 @@ user_context:
   region:
     claim: region
     required: true
-    description: Região que o usuário pode ver
+    description: Region the user is allowed to see
 
 semantic_models:
   - name: customers
     table: public.customers
-    description: Clientes
+    description: Customers
     entities:
       - name: customer
         type: primary
@@ -23,7 +23,7 @@ semantic_models:
         type: categorical
       - name: segment
         type: categorical
-        description: Varejo, PME ou Corporativo
+        description: Varejo (retail), PME (SMB) or Corporativo (enterprise)
       - name: created_at
         type: time
       - name: last_order_at
@@ -37,13 +37,13 @@ semantic_models:
       - name: health_plan
         type: categorical
         sensitivity: sensitive
-        description: Plano de saúde contratado (dado pessoal sensível)
+        description: Health plan (sensitive personal data under LGPD)
     measures:
       - name: customer_count
         agg: count_distinct
         expr: customer_id
     row_filters:
-      - name: por_regiao
+      - name: by_region
         filter: "{region} = $user.region"
 
   - name: sellers

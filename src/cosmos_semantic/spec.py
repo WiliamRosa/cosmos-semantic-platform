@@ -1,7 +1,7 @@
-"""Formato de autoria do Cosmos Semantic, versão 1.
+"""Cosmos Semantic authoring format, version 1.
 
-Os modelos Pydantic deste módulo são a fonte da verdade do formato: o JSON Schema
-publicado em ``schema/`` é gerado a partir deles (``cosmos schema``).
+The Pydantic models in this module are the source of truth for the format: the JSON Schema
+published in ``schema/`` is generated from them (``cosmos schema``).
 """
 
 from __future__ import annotations
@@ -21,22 +21,22 @@ class _Base(BaseModel):
 
 
 class Entity(_Base):
-    """Chave que liga modelos entre si; os joins são inferidos a partir delas."""
+    """A key that links models together; joins are inferred from entities."""
 
     name: Name
     type: Literal["primary", "unique", "foreign"]
-    expr: str | None = Field(None, description="Expressão SQL; sem ela, usa a coluna `name`.")
+    expr: str | None = Field(None, description="SQL expression; defaults to the `name` column.")
     description: str | None = None
 
 
 class Dimension(_Base):
     name: Name
     type: Literal["categorical", "time", "number", "boolean"]
-    expr: str | None = Field(None, description="Expressão SQL; sem ela, usa a coluna `name`.")
+    expr: str | None = Field(None, description="SQL expression; defaults to the `name` column.")
     description: str | None = None
     sensitivity: Literal["personal", "sensitive"] | None = Field(
         None,
-        description="Classificação de LGPD. Agentes nunca recebem o valor bruto dessas colunas.",
+        description="LGPD (personal data) classification. AI agents never receive raw values.",
     )
 
 
@@ -45,7 +45,8 @@ class Measure(_Base):
     agg: Literal["count", "count_distinct", "sum", "avg", "min", "max"]
     expr: str | None = Field(
         None,
-        description="Expressão SQL agregada; sem ela, `count` conta linhas e os demais usam a coluna `name`.",
+        description="SQL expression to aggregate; without it `count` counts rows and the other "
+        "aggregations use the `name` column.",
     )
     description: str | None = None
 
@@ -53,7 +54,7 @@ class Measure(_Base):
 class RowFilter(_Base):
     name: Name
     filter: str = Field(
-        description="Expressão SQL com `{dimensao}` ou `{modelo.dimensao}` e `$user.<campo>`."
+        description="SQL expression with `{dimension}` or `{model.dimension}` and `$user.<field>`."
     )
 
 
@@ -89,21 +90,21 @@ class RatioMetric(_MetricBase):
 
 class DerivedMetric(_MetricBase):
     type: Literal["derived"]
-    expr: str = Field(
-        description="Expressão sobre medidas ou métricas, referenciadas como `{nome}`."
-    )
+    expr: str = Field(description="Expression over measures or metrics, referenced as `{name}`.")
 
 
 class CumulativeMetric(_MetricBase):
     type: Literal["cumulative"]
     measure: Name
     grain_to_date: Literal["day", "week", "month", "quarter", "year"] | None = None
-    window: str | None = Field(None, description="Janela móvel, como `7 days`. Fora do MVP.")
+    window: str | None = Field(
+        None, description="Rolling window, such as `7 days`. Not in the MVP."
+    )
 
     @model_validator(mode="after")
     def _one_of(self) -> CumulativeMetric:
         if self.grain_to_date and self.window:
-            raise ValueError("use `grain_to_date` ou `window`, não os dois")
+            raise ValueError("use `grain_to_date` or `window`, not both")
         return self
 
 
@@ -113,7 +114,7 @@ Metric = Annotated[
 
 
 class UserContextField(_Base):
-    claim: str = Field(description="Nome da declaração no token do provedor de identidade.")
+    claim: str = Field(description="Claim name in the identity provider's token.")
     required: bool = True
     description: str | None = None
 
@@ -122,7 +123,7 @@ LocalizedText = dict[str, str]
 
 
 class Concept(_Base):
-    """Conceito do glossário, no estilo SKOS."""
+    """A SKOS-style glossary concept."""
 
     concept: Name
     pref_label: LocalizedText
@@ -133,7 +134,7 @@ class Concept(_Base):
     maps_to: str | None = Field(
         None,
         pattern=r"^(entity|dimension|metric|measure|rule):[a-z_][a-z0-9_.]*$",
-        description="Membro ou regra que define o conceito: `metric:net_revenue`, `rule:cliente_ativo`.",
+        description="Member or rule that defines the concept: `metric:net_revenue`, `rule:active_customer`.",
     )
 
 
@@ -146,15 +147,15 @@ class DecisionRow(_Base):
     def _shape(self) -> DecisionRow:
         if self.otherwise is not None:
             if self.when is not None or self.then is not None:
-                raise ValueError("`otherwise` não combina com `when`/`then`")
+                raise ValueError("`otherwise` cannot be combined with `when`/`then`")
         elif self.when is None or self.then is None:
-            raise ValueError("cada linha precisa de `when` e `then`, ou só `otherwise`")
+            raise ValueError("each row needs `when` and `then`, or only `otherwise`")
         return self
 
 
 class RuleBinding(_Base):
     model: Name
-    bind: dict[str, str] = Field(description="Entrada da regra -> coluna ou dimensão do modelo.")
+    bind: dict[str, str] = Field(description="Rule input -> model column or dimension.")
 
 
 class RuleTest(_Base):
@@ -167,9 +168,11 @@ class BusinessRule(_Base):
     name: Name
     kind: Literal["predicate", "classification", "derived"]
     owner: str | None = Field(
-        None, description="Área ou pessoa responsável. Obrigatório na validação."
+        None, description="Team or person responsible. Validation warns when it is missing."
     )
-    effective_from: dt.date | None = Field(None, description="Desde quando a versão atual vale.")
+    effective_from: dt.date | None = Field(
+        None, description="Since when the current version applies."
+    )
     description: str | None = None
     inputs: dict[str, Literal["categorical", "time", "number", "boolean"]]
     logic: str | None = None
@@ -181,21 +184,21 @@ class BusinessRule(_Base):
     def _logic(self) -> BusinessRule:
         if self.kind == "classification":
             if (self.logic is None) == (self.decision_table is None):
-                raise ValueError("`classification` usa `logic` ou `decision_table`")
+                raise ValueError("`classification` uses either `logic` or `decision_table`")
         elif self.logic is None or self.decision_table is not None:
-            raise ValueError(f"`{self.kind}` usa `logic`")
+            raise ValueError(f"`{self.kind}` uses `logic`")
         return self
 
 
 class Project(_Base):
-    """Um arquivo (ou o conjunto de arquivos) do modelo semântico."""
+    """One file (or the merged set of files) of a semantic model."""
 
-    version: Literal[1] = Field(description="Versão do formato de autoria.")
+    version: Literal[1] = Field(description="Authoring format version.")
     timezone: str | None = Field(
         None,
         description=(
-            'Fuso do negócio, como `America/Sao_Paulo`. Define o "hoje" de regras e filtros com '
-            "CURRENT_DATE, igual em qualquer origem. Padrão: UTC."
+            'Business time zone, such as `America/Sao_Paulo`. Defines what "today" means for '
+            "rules and filters using CURRENT_DATE, identically on every data source. Default: UTC."
         ),
     )
     semantic_models: list[SemanticModel] = []
@@ -204,12 +207,12 @@ class Project(_Base):
     glossary: list[Concept] = []
     business_rules: list[BusinessRule] = []
     custom_extensions: dict[str, Any] = Field(
-        {}, description="Informação de outras ferramentas, preservada na importação."
+        {}, description="Information from other tools, preserved on import."
     )
 
 
 def json_schema() -> dict[str, Any]:
     schema = Project.model_json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-    schema["title"] = "Cosmos Semantic, formato de autoria v1"
+    schema["title"] = "Cosmos Semantic authoring format v1"
     return schema

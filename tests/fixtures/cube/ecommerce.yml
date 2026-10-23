@@ -40,7 +40,7 @@ cubes:
           type: to_date
           granularity: month
     segments:
-      - name: concluidos
+      - name: completed_orders
         sql: "{CUBE}.status = 'completed'"
     pre_aggregations:
       - name: by_month

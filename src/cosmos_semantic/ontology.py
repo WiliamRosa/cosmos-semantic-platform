@@ -1,8 +1,8 @@
-"""Ontologia: glossário SKOS e regras de negócio (ADR 0006).
+"""Ontology: SKOS glossary and business rules (ADR 0006).
 
-Cada regra vira uma dimensão virtual em cada modelo de ``applies_to`` (booleana para
-``predicate``, categórica para ``classification``, numérica para ``derived``). Assim ela pode
-ser usada como agrupamento (``customers.cliente_ativo``) ou como filtro (``{rule.cliente_ativo}``).
+Each rule becomes a virtual dimension on every model in ``applies_to`` (boolean for
+``predicate``, categorical for ``classification``, numeric for ``derived``), so it can be used
+as a grouping (``customers.active_customer``) or as a filter (``{rule.active_customer}``).
 """
 
 from __future__ import annotations
@@ -28,11 +28,11 @@ _SENSITIVITY_RANK = {None: 0, "personal": 1, "sensitive": 2}
 RULE_DIALECT = "postgres"
 
 
-# -- regras ----------------------------------------------------------------
+# -- rules -----------------------------------------------------------------
 
 
 def rule_logic(rule: BusinessRule) -> str:
-    """Lógica da regra em SQL com ``{entrada}``; tabela de decisão vira CASE WHEN."""
+    """The rule's SQL logic with ``{input}`` placeholders; decision tables become CASE WHEN."""
     if rule.decision_table is None:
         assert rule.logic is not None
         return rule.logic
@@ -53,48 +53,48 @@ def attach_rules(g: SemanticGraph, err, warn) -> None:
     for rule in g.project.business_rules:
         loc = f"business_rules.{rule.name}"
         if rule.name in g.rules:
-            err(loc, "regra duplicada")
+            err(loc, "duplicate rule")
             continue
         g.rules[rule.name] = rule
         g.rule_models[rule.name] = []
         if not rule.owner:
-            warn(loc, "sem `owner`: defina a área ou pessoa responsável pela regra")
+            warn(loc, "no `owner`: set the team or person responsible for the rule")
         if not rule.effective_from:
-            warn(loc, "sem `effective_from`: defina desde quando a regra vale")
+            warn(loc, "no `effective_from`: set since when the rule applies")
         if rule.decision_table is not None and not any(
             r.otherwise is not None for r in rule.decision_table
         ):
-            err(loc, "tabela de decisão sem `otherwise`")
+            err(loc, "decision table without `otherwise`")
         logic = rule_logic(rule)
         used = set(_INPUT_RE.findall(logic))
         for name in used - set(rule.inputs):
-            err(loc, f"a lógica usa `{{{name}}}`, que não está em `inputs`")
+            err(loc, f"the logic uses `{{{name}}}`, which is not in `inputs`")
         try:
             sqlglot.parse_one(_INPUT_RE.sub(lambda m: m.group(1), logic), read=RULE_DIALECT)
         except sqlglot.errors.ParseError as exc:
-            err(loc, f"lógica inválida: {exc}")
+            err(loc, f"invalid logic: {exc}")
             continue
         for binding in rule.applies_to:
             node = g.models.get(binding.model)
             if node is None:
-                err(loc, f"`applies_to` cita o modelo inexistente `{binding.model}`")
+                err(loc, f"`applies_to` names the unknown model `{binding.model}`")
                 continue
             missing = set(rule.inputs) - set(binding.bind)
             if missing:
                 err(
                     loc,
-                    f"entradas sem mapeamento em `{binding.model}`: {', '.join(sorted(missing))}",
+                    f"inputs without a binding in `{binding.model}`: {', '.join(sorted(missing))}",
                 )
                 continue
             if rule.name in node.dimensions:
-                err(loc, f"`{binding.model}` já tem uma dimensão chamada `{rule.name}`")
+                err(loc, f"`{binding.model}` already has a dimension named `{rule.name}`")
                 continue
             exprs, level = {}, None
             for name, target in binding.bind.items():
                 dim = node.dimensions.get(target)
                 if dim is not None:
                     if _type_mismatch(rule.inputs[name], dim.type):
-                        err(loc, f"`{name}` é {rule.inputs[name]}, mas `{target}` é {dim.type}")
+                        err(loc, f"`{name}` is {rule.inputs[name]}, but `{target}` is {dim.type}")
                     exprs[name] = dim.expr or dim.name
                     if _SENSITIVITY_RANK[dim.sensitivity] > _SENSITIVITY_RANK[level]:
                         level = dim.sensitivity
@@ -105,7 +105,7 @@ def attach_rules(g: SemanticGraph, err, warn) -> None:
                 name=rule.name,
                 type=_RESULT_TYPE[rule.kind],  # type: ignore[arg-type]
                 expr=expr,
-                description=rule.description or f"Regra de negócio `{rule.name}`",
+                description=rule.description or f"Business rule `{rule.name}`",
                 sensitivity=level,
             )
             g.rule_models[rule.name].append(binding.model)
@@ -124,7 +124,7 @@ class RuleTestResult:
 
 
 def run_rule_tests(project: Project) -> list[RuleTestResult]:
-    """Executa os exemplos das regras no DuckDB, sem acessar nenhuma origem."""
+    """Runs the rules' examples on DuckDB, without touching any data source."""
     import duckdb
 
     con = duckdb.connect()
@@ -136,7 +136,7 @@ def run_rule_tests(project: Project) -> list[RuleTestResult]:
             if missing:
                 results.append(
                     RuleTestResult(
-                        rule.name, i, False, f"faltam entradas: {', '.join(sorted(missing))}"
+                        rule.name, i, False, f"missing inputs: {', '.join(sorted(missing))}"
                     )
                 )
                 continue
@@ -160,7 +160,7 @@ def run_rule_tests(project: Project) -> list[RuleTestResult]:
             ok = _same(got, test.expect)
             results.append(
                 RuleTestResult(
-                    rule.name, i, ok, "" if ok else f"esperado {test.expect!r}, obtido {got!r}"
+                    rule.name, i, ok, "" if ok else f"expected {test.expect!r}, got {got!r}"
                 )
             )
     con.close()
@@ -185,37 +185,37 @@ def _same(got: Any, expected: Any) -> bool:
     return got == expected
 
 
-# -- glossário -------------------------------------------------------------
+# -- glossary --------------------------------------------------------------
 
 
 def check_glossary(g: SemanticGraph, err, warn) -> None:
     concepts = {c.concept: c for c in g.project.glossary}
     if len(concepts) != len(g.project.glossary):
-        err("glossary", "conceito duplicado")
+        err("glossary", "duplicate concept")
     labels: dict[str, str] = {}
     for concept in g.project.glossary:
         loc = f"glossary.{concept.concept}"
         if concept.maps_to and not resolve_maps_to(g, concept.maps_to):
-            err(loc, f"`maps_to` aponta para `{concept.maps_to}`, que não existe")
+            err(loc, f"`maps_to` points to `{concept.maps_to}`, which does not exist")
         if concept.broader and concept.broader not in concepts:
-            err(loc, f"`broader` cita o conceito inexistente `{concept.broader}`")
+            err(loc, f"`broader` names the unknown concept `{concept.broader}`")
         for related in concept.related:
             if related not in concepts:
-                err(loc, f"`related` cita o conceito inexistente `{related}`")
+                err(loc, f"`related` names the unknown concept `{related}`")
         for label in _labels(concept):
             key = " ".join(_tokens(label))
             other = labels.get(key)
             if other and other != concept.concept:
                 warn(
                     loc,
-                    f"o termo `{label}` também está em `{other}`; o agente não saberá qual escolher",
+                    f"the term `{label}` is also in `{other}`; an agent cannot tell which one to pick",
                 )
             labels[key] = concept.concept
     for name in concepts:
         seen, current = {name}, concepts[name].broader
         while current:
             if current in seen:
-                err(f"glossary.{name}", "ciclo na hierarquia `broader`")
+                err(f"glossary.{name}", "cycle in the `broader` hierarchy")
                 break
             seen.add(current)
             current = concepts[current].broader if current in concepts else None
@@ -247,6 +247,7 @@ def _labels(concept: Concept) -> list[str]:
 
 
 def _stem(word: str) -> str:
+    """Light plural stemming for Portuguese and English labels."""
     if len(word) > 4 and word.endswith(("res", "zes", "ses")):
         return word[:-2]
     if len(word) > 4 and word.endswith("oes"):

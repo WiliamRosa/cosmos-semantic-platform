@@ -1,7 +1,7 @@
 [project]
 name = "cosmos-semantic"
 version = "0.1.0.dev0"
-description = "Cosmos Semantic: camada semântica com motor próprio para agentes de IA e aplicações"
+description = "Cosmos Semantic: a semantic layer with its own engine for AI agents and applications"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

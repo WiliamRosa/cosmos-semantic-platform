@@ -1,4 +1,4 @@
-"""Importadores: o modelo importado dá os mesmos números que o modelo nativo nos mesmos dados."""
+"""Importers: the imported model returns the same numbers as the native model on the same data."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def same(a, b):
 
 def imported(kind: str, path: Path, **options):
     result = import_model(kind, path, **options)
-    # O YAML gerado precisa ser um modelo v1 válido por si só.
+    # The generated YAML must be a valid v1 model on its own.
     text = dump_project(result.project)
     project = Project.model_validate(yaml.safe_load(text))
     return compile_project(project), result.warnings
@@ -97,9 +97,11 @@ def test_cube_joins_and_row_level_equivalence(graph, duckdb_connector):
     same(native, cube)
     paid = QueryRequest(metrics=["paid_value"], dimensions=["orders.status"])
     same(rows(graph, duckdb_connector, paid), rows(other, duckdb_connector, paid))
-    # O segmento virou regra de negócio e funciona como filtro
+    # The segment became a business rule and works as a filter
     seg = rows(
-        other, duckdb_connector, QueryRequest(metrics=["revenue"], filters=["{rule.concluidos}"])
+        other,
+        duckdb_connector,
+        QueryRequest(metrics=["revenue"], filters=["{rule.completed_orders}"]),
     )
     done = rows(graph, duckdb_connector, QueryRequest(metrics=["completed_revenue"]))
     same(seg, done)

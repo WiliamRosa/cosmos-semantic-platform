@@ -1,5 +1,5 @@
-# Ambiente local: Postgres de demonstração.
-#   docker compose -f deploy/docker-compose.yml up -d
+# Local environment: demo Postgres.
+#   docker compose -p cosmos-semantic -f deploy/docker-compose.yml up -d
 #   uv run cosmos demo-data --target postgres -c examples/ecommerce/connections.yml
 services:
   postgres:
@@ -17,7 +17,7 @@ services:
     volumes:
       - cosmos-pg:/var/lib/postgresql/data
 
-  # Opcional: docker compose -f deploy/docker-compose.yml --profile sqlserver up -d
+  # Optional: docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile sqlserver up -d
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
     profiles: [sqlserver]

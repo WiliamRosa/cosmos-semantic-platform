@@ -53,11 +53,11 @@ business_rules:
 def test_rule_becomes_dimension_and_filter(graph):
     planner = Planner(graph)
     by_band = planner.plan(
-        QueryRequest(metrics=["order_count"], dimensions=["orders.faixa_pedido"])
+        QueryRequest(metrics=["order_count"], dimensions=["orders.order_size_band"])
     )
     assert "CASE" in by_band.sql and "Grande" in by_band.sql
     active = planner.plan(
-        QueryRequest(metrics=["customer_count"], filters=["{rule.cliente_ativo}"]),
+        QueryRequest(metrics=["customer_count"], filters=["{rule.active_customer}"]),
         Principal(user={"region": "Sul"}),
     )
     assert "last_order_at" in active.sql
@@ -105,8 +105,8 @@ business_rules:
     graph = compile_project(Project.model_validate(data), strict=False)
     messages = " | ".join(str(i) for i in graph.issues)
     assert "otherwise" in messages
-    assert "sem mapeamento" in messages
-    assert "owner" in messages  # aviso, não erro
+    assert "without a binding" in messages
+    assert "owner" in messages  # a warning, not an error
 
 
 def test_glossary_validation():
@@ -122,21 +122,21 @@ glossary:
     )
     graph = compile_project(Project.model_validate(data), strict=False)
     messages = " | ".join(str(i) for i in graph.issues)
-    assert "ciclo" in messages
-    assert "inexistente" in messages
-    assert "também está em" in messages
+    assert "cycle" in messages
+    assert "does not exist" in messages
+    assert "is also in" in messages
     with pytest.raises(ModelError):
         compile_project(Project.model_validate(data))
 
 
 def test_catalog_explains_rules_and_concepts(graph):
     catalog = Catalog(graph)
-    rule = catalog.explain("cliente_ativo")
+    rule = catalog.explain("active_customer")
     assert rule["kind"] == "concept"
     assert rule["defined_by"]["kind"] == "rule"
-    assert rule["defined_by"]["owner"] == "diretoria-comercial"
+    assert rule["defined_by"]["owner"] == "sales-leadership"
     hits = catalog.search_concepts("comprador ativo")
-    assert hits[0]["how_to_use"] == 'filters: ["{rule.cliente_ativo}"]'
+    assert hits[0]["how_to_use"] == 'filters: ["{rule.active_customer}"]'
     members = catalog.members()
     assert any(
         d["name"] == "customers.health_plan" and d["sensitivity"] for d in members["dimensions"]

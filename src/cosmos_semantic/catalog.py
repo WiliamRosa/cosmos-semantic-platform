@@ -1,4 +1,4 @@
-"""Metadados para pessoas e agentes: membros, conceitos e explicações (API REST e MCP)."""
+"""Metadata for people and agents: members, concepts and explanations (REST API and MCP)."""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ class Catalog:
         if kind == "dimension":
             return f'dimensions: ["{name}"]'
         if kind == "entity":
-            return f"entidade `{name}`: use as dimensões e medidas dos modelos ligados a ela"
+            return f"entity `{name}`: use the dimensions and measures of the models linked to it"
         return None
 
     def explain(self, name: str) -> dict[str, Any]:
@@ -146,14 +146,14 @@ class Catalog:
                 "name": name,
                 "model": owner,
                 "description": measure.description,
-                "definition": f"{measure.agg}({measure.expr or ('*' if measure.agg == 'count' else measure.name)}) em `{owner}`",
+                "definition": f"{measure.agg}({measure.expr or ('*' if measure.agg == 'count' else measure.name)}) in `{owner}`",
                 "concepts": self._concepts(f"metric:{name}") + self._concepts(f"measure:{name}"),
             }
         try:
             ref = g.resolve_dimension(name)
         except QueryError as exc:
             raise QueryError(
-                f"`{name}` não é métrica, medida, dimensão, regra nem conceito"
+                f"`{name}` is not a metric, measure, dimension, rule or concept"
             ) from exc
         dim = g.dimension(ref)
         return {
@@ -171,33 +171,33 @@ class Catalog:
 
 def _metric_text(metric) -> str:
     if isinstance(metric, SimpleMetric):
-        text = f"a medida `{metric.measure}`"
-        return f"{text}, só onde {metric.filter}" if metric.filter else text
+        text = f"the measure `{metric.measure}`"
+        return f"{text}, only where {metric.filter}" if metric.filter else text
     if isinstance(metric, RatioMetric):
-        return f"`{metric.numerator}` dividido por `{metric.denominator}`"
+        return f"`{metric.numerator}` divided by `{metric.denominator}`"
     if isinstance(metric, DerivedMetric):
-        return f"a expressão {metric.expr}"
+        return f"the expression {metric.expr}"
     if isinstance(metric, CumulativeMetric):
         period = (
-            f"desde o início de cada {metric.grain_to_date}"
+            f"since the start of each {metric.grain_to_date}"
             if metric.grain_to_date
-            else "acumulado"
+            else "running total"
         )
         return f"`{metric.measure}` {period}"
     return ""
 
 
 def _rule_text(rule) -> str:
-    owner = f", definida por {rule.owner}" if rule.owner else ""
-    since = f", vigente desde {rule.effective_from.isoformat()}" if rule.effective_from else ""
+    owner = f", owned by {rule.owner}" if rule.owner else ""
+    since = f", effective since {rule.effective_from.isoformat()}" if rule.effective_from else ""
     if rule.kind == "predicate":
-        what = f"verdadeiro quando {rule.logic}"
+        what = f"true when {rule.logic}"
     elif rule.decision_table:
         rows = [
-            f"{r.then} se {r.when}" if r.otherwise is None else f"{r.otherwise} nos demais casos"
+            f"{r.then} if {r.when}" if r.otherwise is None else f"{r.otherwise} otherwise"
             for r in rule.decision_table
         ]
-        what = "classifica como " + "; ".join(rows)
+        what = "classifies as " + "; ".join(rows)
     else:
-        what = f"calcula {rule.logic}"
+        what = f"computes {rule.logic}"
     return f"{rule.description or rule.name}: {what}{owner}{since}."

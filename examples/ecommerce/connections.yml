@@ -1,4 +1,4 @@
-# Credenciais vêm de variáveis de ambiente; nunca escreva segredos neste arquivo.
+# Credentials come from environment variables; never write secrets in this file.
 default: ${COSMOS_DATA_SOURCE:-local}
 
 data_sources:
@@ -10,11 +10,17 @@ data_sources:
     type: postgres
     uri: ${COSMOS_PG_URI:-postgresql://cosmos:cosmos@localhost:55432/cosmos}
 
+  sqlserver:
+    type: sqlserver
+    uri: ${COSMOS_MSSQL_URI:-mssql+pymssql://sa:Cosmos!Passw0rd@localhost:14330/master}
+    schema_map:
+      public: cosmos   # `public` is a reserved word in T-SQL
+
   databricks:
     type: databricks
     options:
       server_hostname: ${DATABRICKS_SERVER_HOSTNAME:-}
       http_path: ${DATABRICKS_HTTP_PATH:-}
       access_token: ${DATABRICKS_TOKEN:-}
-      profile: ${DATABRICKS_CONFIG_PROFILE:-}   # alternativa ao token: perfil do Databricks CLI
+      profile: ${DATABRICKS_CONFIG_PROFILE:-}   # alternative to the token: a Databricks CLI profile
       catalog: ${DATABRICKS_CATALOG:-cosmos_demo}

@@ -108,5 +108,5 @@ def test_concepts_and_explain(client):
     headers = {"X-API-Key": "dev-sul"}
     hits = client.get("/v1/concepts", params={"q": "faturamento líquido"}, headers=headers).json()
     assert hits[0]["maps_to"] == "metric:net_revenue"
-    rule = client.get("/v1/explain/rule:faixa_pedido", headers=headers).json()
+    rule = client.get("/v1/explain/rule:order_size_band", headers=headers).json()
     assert rule["kind"] == "rule" and "Grande" in rule["text"]

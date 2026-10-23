@@ -1,17 +1,17 @@
-# Bateria avançada: casos onde os bancos costumam divergir.
+# Advanced suite: cases where databases tend to disagree.
 #
-# O SQL escrito à mão define a semântica que o motor promete em qualquer origem:
-# - divisão sempre real (nunca inteira) e protegida contra zero;
-# - média de coluna inteira é média real;
-# - semana começa na segunda-feira (ISO);
-# - nulos vêm por último na ordenação, e dimensões nulas formam um grupo próprio;
-# - booleanos chegam como verdadeiro/falso (1/0 no SQL Server).
+# The hand-written SQL defines the semantics the engine promises on every data source:
+# - division is always real (never integer division) and safe against zero;
+# - the average of an integer column is a real average;
+# - weeks start on Monday (ISO);
+# - nulls sort last, and null dimension values form their own group;
+# - booleans arrive as true/false (1/0 in SQL Server).
 
 cases:
   - id: A01
     category: tipos
     phase: 1
-    title: Dimensão booleana (pedido com desconto)
+    title: Boolean dimension (order had a discount)
     request:
       metrics: [order_count, revenue]
       dimensions: [orders.has_discount]
@@ -27,7 +27,7 @@ cases:
   - id: A02
     category: tipos
     phase: 1
-    title: Média de coluna inteira por categoria (com categoria nula e acentos)
+    title: Average of an integer column by category (null category and accents)
     request:
       metrics: [avg_quantity, line_count]
       dimensions: [products.category]
@@ -46,7 +46,7 @@ cases:
   - id: A03
     category: tipos
     phase: 1
-    title: Divisão entre contagens inteiras (pedidos por comprador) por segmento nulo ou não
+    title: Division between integer counts (orders per buyer) by segment, null included
     request:
       metrics: [orders_per_buyer]
       dimensions: [customers.segment]
@@ -68,7 +68,7 @@ cases:
   - id: A04
     category: tipos
     phase: 1
-    title: Derivada entre modelos com divisão (unidades por pedido)
+    title: Derived metric across models with division (units per order)
     request:
       metrics: [items_per_order]
       dimensions: [orders.status]
@@ -91,7 +91,7 @@ cases:
   - id: A05
     category: tempo
     phase: 1
-    title: Razão por trimestre
+    title: Ratio by quarter
     request:
       metrics: [discount_rate]
       dimensions: [orders.ordered_at__quarter]
@@ -108,7 +108,7 @@ cases:
   - id: A06
     category: tempo
     phase: 1
-    title: Semana começa na segunda-feira em todos os bancos
+    title: Weeks start on Monday on every database
     request:
       metrics: [order_count]
       dimensions: [orders.ordered_at__week]
@@ -125,7 +125,7 @@ cases:
   - id: A07
     category: tempo
     phase: 1
-    title: Granularidade de hora nos últimos 60 dias
+    title: Hour grain over the last 60 days
     request:
       metrics: [order_count]
       dimensions: [orders.ordered_at__hour]
@@ -142,7 +142,7 @@ cases:
   - id: A08
     category: tempo
     phase: 1
-    title: Acumulado no ano por mês
+    title: Year-to-date by month
     request:
       metrics: [revenue_year_to_date]
       dimensions: [orders.ordered_at__month]
@@ -161,7 +161,7 @@ cases:
   - id: A09
     category: tempo
     phase: 1
-    title: Acumulado no mês por status e dia (janela com partição extra)
+    title: Month-to-date by status and day (window with an extra partition)
     request:
       metrics: [revenue_month_to_date]
       dimensions: [orders.status, orders.ordered_at__day]
@@ -188,13 +188,13 @@ cases:
   - id: A10
     category: regras
     phase: 1
-    title: Regra de classificação (tabela de decisão) como agrupamento, a partir de pagamentos
+    title: Classification rule (decision table) as a grouping, starting from payments
     request:
       metrics: [paid_value, payment_count]
-      dimensions: [orders.faixa_pedido]
+      dimensions: [orders.order_size_band]
     sql: |
       SELECT CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
-               AS orders__faixa_pedido,
+               AS orders__order_size_band,
              SUM(p.value) AS paid_value, COUNT(*) AS payment_count
       FROM public.payments p JOIN public.orders o ON o.order_id = p.order_id
       GROUP BY CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
@@ -202,15 +202,15 @@ cases:
   - id: A11
     category: regras
     phase: 1
-    title: Regra de outro modelo como filtro, mais classificação e filtro por linha
+    title: Rule from another model as a filter, plus classification and a row filter
     request:
       metrics: [revenue, order_count]
-      dimensions: [orders.faixa_pedido]
-      filters: ["{rule.cliente_ativo}"]
+      dimensions: [orders.order_size_band]
+      filters: ["{rule.active_customer}"]
     user: { region: Sudeste }
     sql: |
       SELECT CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
-               AS orders__faixa_pedido,
+               AS orders__order_size_band,
              SUM(o.amount) AS revenue, COUNT(*) AS order_count
       FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
       WHERE c.last_order_at >= CURRENT_DATE - INTERVAL '90' DAY AND c.region = 'Sudeste'
@@ -218,7 +218,7 @@ cases:
     sql_by_dialect:
       tsql: |
         SELECT CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
-                 AS orders__faixa_pedido,
+                 AS orders__order_size_band,
                SUM(o.amount) AS revenue, COUNT(*) AS order_count
         FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
         WHERE c.last_order_at >= DATEADD(day, -90, CAST(GETDATE() AS DATE)) AND c.region = 'Sudeste'
@@ -227,11 +227,11 @@ cases:
   - id: A12
     category: regras
     phase: 1
-    title: Regra derivada (valor líquido) usada em filtro numérico
+    title: Derived rule (net value) used in a numeric filter
     request:
       metrics: [order_count]
       dimensions: [orders.status]
-      filters: ["{orders.valor_liquido_pedido} > 3000"]
+      filters: ["{orders.order_net_value} > 3000"]
     sql: |
       SELECT status AS orders__status, COUNT(*) AS order_count
       FROM public.orders WHERE amount - discount > 3000 GROUP BY status
@@ -239,7 +239,7 @@ cases:
   - id: A13
     category: filtros
     phase: 1
-    title: Filtro BETWEEN em dimensão numérica
+    title: BETWEEN filter on a numeric dimension
     request:
       metrics: [paid_value, payment_count]
       dimensions: [payments.method]
@@ -251,7 +251,7 @@ cases:
   - id: A14
     category: filtros
     phase: 1
-    title: LIKE, OR com IS NULL e NOT, atravessando dois modelos
+    title: LIKE, OR with IS NULL and NOT, across two models
     request:
       metrics: [item_revenue]
       dimensions: [products.category]
@@ -268,7 +268,7 @@ cases:
   - id: A15
     category: filtros
     phase: 1
-    title: Grupo de dimensão nula com IN e IS NULL
+    title: Null dimension group with IN and IS NULL
     request:
       metrics: [customer_count, revenue]
       dimensions: [customers.segment]
@@ -289,7 +289,7 @@ cases:
   - id: A16
     category: ordenacao
     phase: 1
-    title: Top 3 por ordem alfabética com categoria nula (nulos por último)
+    title: Top 3 alphabetically with a null category (nulls last)
     request:
       metrics: [item_revenue]
       dimensions: [products.category]
@@ -308,7 +308,7 @@ cases:
   - id: A17
     category: ordenacao
     phase: 1
-    title: Top 4 em ordem decrescente de dimensão numérica com nulos por último
+    title: Top 4 by a numeric dimension, descending, nulls last
     request:
       metrics: [paid_value]
       dimensions: [payments.installments]
@@ -326,7 +326,7 @@ cases:
   - id: A18
     category: vazio
     phase: 1
-    title: Usuário de região sem clientes recebe resultado vazio, sem erro
+    title: A user from a region without customers gets an empty result, not an error
     request:
       metrics: [revenue]
       dimensions: [customers.region]
@@ -340,7 +340,7 @@ cases:
   - id: A19
     category: vazio
     phase: 1
-    title: Total de dois modelos sem dimensões e sem linhas vira uma linha de nulos
+    title: Totals from two models with no dimensions and no rows become one row of nulls
     request:
       metrics: [revenue, paid_value]
       filters: ["{orders.status} = 'inexistente'"]
@@ -352,7 +352,7 @@ cases:
   - id: A20
     category: fan-out
     phase: 1
-    title: Três contagens distintas em três grãos, dimensão de dois saltos
+    title: Three distinct counts at three grains, two-hop dimension
     request:
       metrics: [buyers, customer_count, line_count]
       dimensions: [customers.region]
@@ -378,7 +378,7 @@ cases:
   - id: A21
     category: fan-out
     phase: 1
-    title: Filtro booleano mais métrica filtrada por ano
+    title: Boolean filter plus a filtered metric by year
     request:
       metrics: [completed_revenue, revenue]
       dimensions: [orders.ordered_at__year]
@@ -398,7 +398,7 @@ cases:
   - id: A22
     category: politicas
     phase: 1
-    title: Aplicação (não agente) pode agrupar por dado sensível, com acentos
+    title: An application (not an agent) may group by sensitive data, with accents
     request:
       metrics: [customer_count]
       dimensions: [customers.health_plan]
@@ -411,7 +411,7 @@ cases:
   - id: A23
     category: joins
     phase: 1
-    title: Duas dimensões de ramos diferentes (cliente e vendedor) a partir do item
+    title: Two dimensions from different branches (customer and seller) starting from items
     request:
       metrics: [line_count, item_revenue]
       dimensions: [customers.region, sellers.region]
@@ -429,7 +429,7 @@ cases:
   - id: A24
     category: politicas
     phase: 1
-    title: Agente não filtra por regra que usa dado sensível nem por e-mail
+    title: An agent cannot filter by personal data such as e-mail
     request:
       metrics: [customer_count]
       filters: ["{customers.email} LIKE '%@gmail.com'"]

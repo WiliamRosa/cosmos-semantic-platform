@@ -1,4 +1,4 @@
-"""API REST para aplicações (FastAPI)."""
+"""REST API for applications (FastAPI)."""
 
 from typing import Annotated, Any
 
@@ -45,7 +45,7 @@ def create_app(
     app = FastAPI(
         title="Cosmos Semantic",
         version="0.1.0",
-        description="Camada semântica com motor próprio: métricas, regras de negócio e glossário.",
+        description="Semantic layer with its own engine: metrics, business rules and glossary.",
         lifespan=lifespan,
     )
     if mcp_app is not None:
@@ -66,7 +66,7 @@ def create_app(
         if authenticator is None or not authenticator.settings.enabled:
             if allow_anonymous:
                 return Principal(channel="api", subject="anonymous")
-            raise AuthError("autenticação não configurada no servidor")
+            raise AuthError("authentication is not configured on the server")
         bearer = None
         if authorization:
             scheme, _, value = authorization.partition(" ")
@@ -81,23 +81,23 @@ def create_app(
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/v1/members", summary="Métricas, dimensões e regras disponíveis")
+    @app.get("/v1/members", summary="Available metrics, dimensions and rules")
     def members(_user: User) -> dict[str, Any]:
         return service.catalog.members()
 
-    @app.get("/v1/concepts", summary="Busca conceitos do glossário por termo ou sinônimo")
+    @app.get("/v1/concepts", summary="Search glossary concepts by term or synonym")
     def concepts(q: str, _user: User, limit: int = 5) -> list[dict[str, Any]]:
         return service.catalog.search_concepts(q, limit)
 
-    @app.get("/v1/explain/{name}", summary="Explica uma métrica, regra, dimensão ou conceito")
+    @app.get("/v1/explain/{name}", summary="Explain a metric, rule, dimension or concept")
     def explain(name: str, _user: User) -> dict[str, Any]:
         return service.catalog.explain(name)
 
-    @app.post("/v1/query", summary="Executa um pedido de métricas na origem")
+    @app.post("/v1/query", summary="Run a metrics request on the data source")
     def query(request: QueryRequest, user: User) -> dict[str, Any]:
         return service.query(request, user)
 
-    @app.post("/v1/sql", summary="Mostra o SQL que o motor gera, sem executar")
+    @app.post("/v1/sql", summary="Show the SQL the engine generates, without running it")
     def sql(request: QueryRequest, user: User) -> dict[str, Any]:
         compiled = service.compile(request, user)
         return {

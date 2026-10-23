@@ -1,7 +1,7 @@
-"""Conectores: executam SQL somente leitura e devolvem sempre uma tabela Arrow.
+"""Connectors: run read-only SQL and always return an Arrow table.
 
-ADBC é o caminho padrão; SQLAlchemy é a reserva para origens sem driver ADBC maduro
-(ADR 0007). O DuckDB serve para desenvolvimento e testes sem servidor.
+ADBC is the default path; SQLAlchemy is the fallback for sources without a mature ADBC driver
+(ADR 0007). DuckDB serves development and tests without a server.
 """
 
 from __future__ import annotations
@@ -36,13 +36,14 @@ class DataSourceConfig(BaseModel):
     type: Literal["postgres", "duckdb", "databricks", "sqlserver"]
     driver: Literal["adbc", "sqlalchemy", "native"] | None = Field(
         None,
-        description="Padrão: adbc para postgres, native para duckdb e databricks, sqlalchemy para sqlserver.",
+        description="Default: adbc for postgres, native for duckdb and databricks, sqlalchemy for sqlserver.",
     )
     uri: str | None = None
-    path: str | None = Field(None, description="Arquivo do DuckDB.")
+    path: str | None = Field(None, description="DuckDB database file.")
     options: dict[str, Any] = {}
     schema_map: dict[str, str] = Field(
-        {}, description="Troca de esquema por origem, como `public: dbo`, sem mudar o modelo."
+        {},
+        description="Per-source schema renames, such as `public: dbo`, without changing the model.",
     )
     max_rows: int = Field(10_000, ge=1)
     timeout_seconds: int = Field(30, ge=1)
@@ -68,7 +69,7 @@ def _expand_env(value: Any) -> Any:
                 return os.environ[name]
             if default is not None:
                 return default
-            raise ModelError(f"variável de ambiente `{name}` não definida")
+            raise ModelError(f"environment variable `{name}` is not set")
 
         return _ENV_RE.sub(sub, value)
     if isinstance(value, dict):
@@ -88,14 +89,14 @@ def ensure_read_only(sql: str, dialect: str) -> None:
     try:
         statements = sqlglot.parse(sql, read=dialect)
     except sqlglot.errors.ParseError as exc:
-        raise ConnectorError(f"SQL inválido: {exc}") from exc
+        raise ConnectorError(f"invalid SQL: {exc}") from exc
     if len(statements) != 1 or not isinstance(statements[0], exp.Query):
-        raise ConnectorError("só uma consulta SELECT é permitida")
+        raise ConnectorError("only a single SELECT query is allowed")
     for node in statements[0].walk():
         if isinstance(
             node, exp.Insert | exp.Update | exp.Delete | exp.Merge | exp.Create | exp.Drop
         ):
-            raise ConnectorError("só leitura é permitida")
+            raise ConnectorError("only read access is allowed")
 
 
 class Connector(ABC):
@@ -113,17 +114,17 @@ class Connector(ABC):
             table = self._run(sql, limit + 1)
         except ConnectorError:
             raise
-        except Exception as exc:  # erros de driver variam por origem
+        except Exception as exc:  # driver errors vary per source
             raise ConnectorError(f"{type(exc).__name__}: {exc}") from exc
         if table.num_rows > limit:
             raise ConnectorError(
-                f"o resultado passou do limite de {limit} linhas; use filtros, menos dimensões ou `limit`"
+                f"the result exceeded the {limit}-row limit; use filters, fewer dimensions or `limit`"
             )
         return table
 
     def run_script(self, sql: str) -> None:
-        """Executa DDL/DML de preparação (dados de demonstração). Nunca usado em consultas."""
-        raise ConnectorError(f"{type(self).__name__} não executa scripts")
+        """Runs setup DDL/DML (demo data). Never used for queries."""
+        raise ConnectorError(f"{type(self).__name__} does not run scripts")
 
     @abstractmethod
     def _run(self, sql: str, fetch_limit: int) -> pa.Table: ...
@@ -166,7 +167,7 @@ class ADBCPostgresConnector(Connector):
         import adbc_driver_postgresql
 
         if not config.uri:
-            raise ModelError("origem postgres precisa de `uri`")
+            raise ModelError("a postgres source needs `uri`")
         driver = _loadable_path(adbc_driver_postgresql._driver_path())
         self._con = dbapi.connect(driver=driver, db_kwargs={"uri": config.uri})
 
@@ -196,7 +197,7 @@ class ADBCPostgresConnector(Connector):
 
 
 class DatabricksConnector(Connector):
-    """Databricks SQL warehouse; o conector oficial busca resultados em Arrow (CloudFetch)."""
+    """Databricks SQL warehouse; the official connector fetches results as Arrow (CloudFetch)."""
 
     def __init__(self, config: DataSourceConfig) -> None:
         super().__init__(config)
@@ -207,17 +208,17 @@ class DatabricksConnector(Connector):
         if opts.get("access_token"):
             auth["access_token"] = opts["access_token"]
         elif opts.get("profile"):
-            # Perfil do Databricks CLI (OAuth): `databricks auth login --profile <nome>`.
+            # Databricks CLI profile (OAuth): `databricks auth login --profile <name>`.
             from databricks.sdk.core import Config
 
             sdk_config = Config(profile=opts["profile"])
             opts.setdefault("server_hostname", sdk_config.hostname)
             auth["credentials_provider"] = lambda: sdk_config.authenticate
         else:
-            raise ModelError("origem databricks precisa de options.access_token ou options.profile")
+            raise ModelError("a databricks source needs options.access_token or options.profile")
         missing = [k for k in ("server_hostname", "http_path") if not opts.get(k)]
         if missing:
-            raise ModelError(f"origem databricks precisa de options: {', '.join(missing)}")
+            raise ModelError(f"a databricks source needs options: {', '.join(missing)}")
         self._con = dbsql.connect(
             server_hostname=opts["server_hostname"],
             http_path=opts["http_path"],
@@ -246,7 +247,7 @@ class SQLAlchemyConnector(Connector):
         import sqlalchemy as sa
 
         if not config.uri:
-            raise ModelError(f"origem {config.type} via sqlalchemy precisa de `uri`")
+            raise ModelError(f"a {config.type} source using sqlalchemy needs `uri`")
         self._engine = sa.create_engine(config.uri)
 
     def _run(self, sql: str, fetch_limit: int) -> pa.Table:
@@ -269,8 +270,8 @@ class SQLAlchemyConnector(Connector):
 
 
 def _postgres_numeric(table: pa.Table) -> pa.Table:
-    """O driver ADBC entrega NUMERIC do Postgres como texto (tipo opaco). Converte para decimal
-    exato, com a escala dos próprios valores; se não couber em 38 dígitos, usa float64."""
+    """The ADBC driver returns Postgres NUMERIC as text (an opaque type). Converts it to an exact
+    decimal using the values' own scale; falls back to float64 if 38 digits are not enough."""
     import decimal
 
     for i, field in enumerate(table.schema):
@@ -296,8 +297,8 @@ def _postgres_numeric(table: pa.Table) -> pa.Table:
 
 
 def _loadable_path(path: str) -> str:
-    """O gerenciador de drivers ADBC não carrega DLLs de caminhos com acentos no Windows;
-    o nome curto (8.3) do mesmo arquivo é só ASCII."""
+    """The ADBC driver manager cannot load DLLs from non-ASCII paths on Windows; the short
+    (8.3) name of the same file is ASCII-only."""
     if os.name != "nt" or path.isascii():
         return path
     import ctypes
@@ -309,8 +310,8 @@ def _loadable_path(path: str) -> str:
     ):
         return buffer.value
     raise ConnectorError(
-        f"o driver ADBC está num caminho com acentos ({path}) e o Windows não tem nome curto para "
-        "ele; instale o ambiente Python num caminho sem acentos"
+        f"the ADBC driver is in a non-ASCII path ({path}) and Windows has no short name for it; "
+        "install the Python environment in an ASCII-only path"
     )
 
 
@@ -344,4 +345,4 @@ def connect(config: DataSourceConfig) -> Connector:
         return DatabricksConnector(config)
     if driver == "sqlalchemy":
         return SQLAlchemyConnector(config)
-    raise ModelError(f"combinação não suportada: {config.type} com {driver}")
+    raise ModelError(f"unsupported combination: {config.type} with {driver}")

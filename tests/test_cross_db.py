@@ -1,8 +1,8 @@
-"""Mesmo pedido, mesmo número em todas as origens.
+"""Same request, same number on every data source.
 
-Gera pedidos aleatórios (semente fixa) combinando métricas, dimensões, granularidades,
-regras de negócio e usuários, e exige que DuckDB, Postgres e SQL Server devolvam exatamente o
-mesmo resultado. Também confere que um pedido recusado é recusado em todas as origens.
+Generates random requests (fixed seed) combining metrics, dimensions, grains, business rules
+and users, and requires DuckDB, Postgres and SQL Server to return exactly the same result.
+Also checks that a refused request is refused on every data source.
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ FILTERS = [
     "{orders.status} = 'completed'",
     "{orders.has_discount}",
     "NOT {orders.has_discount}",
-    "{rule.cliente_ativo}",
-    "{orders.faixa_pedido} IN ('Grande', 'Médio')",
+    "{rule.active_customer}",
+    "{orders.order_size_band} IN ('Grande', 'Médio')",
     "{products.category} IS NULL OR {products.category} LIKE 'C%'",
     "{payments.installments} >= 3",
     "{customers.segment} IS NOT NULL",
@@ -41,7 +41,7 @@ def connectors(request):
         except pytest.skip.Exception:
             continue
     if len(found) < 2:
-        pytest.skip("precisa de pelo menos duas origens (defina COSMOS_PG_URI ou COSMOS_MSSQL_URI)")
+        pytest.skip("needs at least two data sources (set COSMOS_PG_URI or COSMOS_MSSQL_URI)")
     return found
 
 
@@ -129,7 +129,7 @@ def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
             try:
                 results[name] = _rows(connector.execute(compiled.sql, max_rows=50_000), columns)
             except CosmosError as exc:
-                results[name] = f"erro: {exc}"
+                results[name] = f"error: {exc}"
         first_name, first = next(iter(results.items()))
         for name, rows in results.items():
             if isinstance(rows, str) or isinstance(first, str) or not _equal(first, rows):
@@ -156,7 +156,7 @@ def test_refusals_are_the_same_everywhere(graph, connectors):
         for connector in connectors.values():
             try:
                 Planner(graph, connector.dialect).plan(request, principal)
-                errors.add("aceito")
+                errors.add("accepted")
             except CosmosError as exc:
                 errors.add(type(exc).__name__)
-        assert len(errors) == 1 and "aceito" not in errors, (request, errors)
+        assert len(errors) == 1 and "accepted" not in errors, (request, errors)

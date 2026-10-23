@@ -1,4 +1,4 @@
-"""Serviço compartilhado pela API REST e pelo servidor MCP: consulta, auditoria e serialização."""
+"""Service shared by the REST API and the MCP server: querying, auditing and serialization."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class SemanticService:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         self.catalog = Catalog(engine.graph)
-        # As conexões não são compartilháveis entre threads; uma consulta por vez por processo.
+        # Connections cannot be shared across threads; one query at a time per process.
         self._lock = threading.Lock()
 
     def compile(self, request: QueryRequest, principal: Principal) -> CompiledQuery:
@@ -89,7 +89,7 @@ class SemanticService:
         ms: float | None = None,
         error: Exception | None = None,
     ) -> None:
-        """Toda consulta é registrada: quem pediu, quais métricas, o SQL gerado e a origem."""
+        """Every query is logged: who asked, which metrics, the generated SQL and the data source."""
         record = {
             "event": "query",
             "at": dt.datetime.now(dt.UTC).isoformat(),

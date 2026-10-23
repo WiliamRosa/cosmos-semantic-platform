@@ -1,12 +1,12 @@
-"""Importação do Apache Ossie (antigo Open Semantic Interchange), versões 0.1.x e 0.2.
+"""Importing Apache Ossie (formerly Open Semantic Interchange), versions 0.1.x and 0.2.
 
-- ``datasets`` viram modelos; ``fields`` com ``dimension`` viram dimensões.
-- ``relationships`` viram entidades (primária no destino, estrangeira na origem).
-- Métricas: agregações simples viram medidas; expressões compostas viram uma medida por
-  agregação mais uma métrica derivada, inclusive entre datasets.
-- ``ai_context.synonyms`` vira glossário, para que agentes encontrem o membro por sinônimo.
-- ``custom_extensions`` do próprio Cosmos restauram o modelo sem perdas; as de outros
-  fornecedores ficam em ``custom_extensions``.
+- ``datasets`` become models; ``fields`` with ``dimension`` become dimensions.
+- ``relationships`` become entities (primary on the target, foreign on the source).
+- Metrics: simple aggregations become measures; compound expressions become one measure per
+  aggregation plus a derived metric, across datasets too.
+- ``ai_context.synonyms`` becomes glossary entries, so agents find the member by synonym.
+- Cosmos's own ``custom_extensions`` restore the model without loss; other vendors'
+  extensions are kept in ``custom_extensions``.
 """
 
 from __future__ import annotations
@@ -44,11 +44,11 @@ def _expression(obj: dict | None, where: str, warnings: list[str]) -> str | None
     for name in _DIALECT_ORDER:
         if dialects.get(name):
             if name not in ("OSSIE_SQL_2026", "ANSI_SQL"):
-                warnings.append(f"{where}: expressão só no dialeto {name}; revise a portabilidade")
+                warnings.append(f"{where}: expression only in dialect {name}; review portability")
             return dialects[name]
     if dialects:
         name, text = next(iter(dialects.items()))
-        warnings.append(f"{where}: dialeto {name} é opaco no Ossie; expressão usada como está")
+        warnings.append(f"{where}: dialect {name} is opaque in Ossie; expression used as is")
         return text
     return None
 
@@ -60,7 +60,7 @@ def _ident(name: str) -> str:
 def import_ossie(path: str | Path) -> ImportResult:
     files = read_yaml_files(path)
     if len(files) != 1:
-        raise ValueError("informe um único documento Ossie (YAML ou JSON)")
+        raise ValueError("pass a single Ossie document (YAML or JSON)")
     _, text = files[0]
     doc = yaml.safe_load(text)
     if isinstance(doc.get("semantic_model"), list):
@@ -114,10 +114,10 @@ def import_ossie(path: str | Path) -> ImportResult:
         source, target = rel["from"], rel["to"]
         where = f"relationships.{rel.get('name')}"
         if source not in models or target not in models:
-            warnings.append(f"{where}: dataset inexistente; ignorado")
+            warnings.append(f"{where}: unknown dataset; skipped")
             continue
         if len(rel["from_columns"]) != 1:
-            warnings.append(f"{where}: chaves compostas não são suportadas; relação ignorada")
+            warnings.append(f"{where}: composite keys are not supported; relationship skipped")
             continue
         to_col, from_col = rel["to_columns"][0], rel["from_columns"][0]
         target_model = models[target]
@@ -172,7 +172,7 @@ def import_ossie(path: str | Path) -> ImportResult:
 
 def _key(model, entity_name, columns, exprs, kind, where, warnings) -> None:
     if len(columns) != 1:
-        warnings.append(f"{where}: chave composta {columns} não é suportada; ignorada")
+        warnings.append(f"{where}: composite key {columns} is not supported; skipped")
         return
     model.setdefault("entities", []).append(
         {"name": entity_name, "type": kind, "expr": exprs.get(columns[0], columns[0])}
@@ -201,12 +201,12 @@ def _metric(metric, models, model_names, field_exprs, metrics, glossary, warning
     where = f"metrics.{metric['name']}"
     text = _expression(metric.get("expression"), where, warnings)
     if not text:
-        warnings.append(f"{where}: sem expressão; ignorada")
+        warnings.append(f"{where}: no expression; skipped")
         return
     try:
         tree = sqlglot.parse_one(text)
     except sqlglot.errors.ParseError as exc:
-        warnings.append(f"{where}: expressão inválida ({exc}); ignorada")
+        warnings.append(f"{where}: invalid expression ({exc}); skipped")
         return
 
     def dataset_of(column: exp.Column) -> str | None:
@@ -216,7 +216,7 @@ def _metric(metric, models, model_names, field_exprs, metrics, glossary, warning
 
     aggregates = [n for n in tree.find_all(*_AGGS) if not n.find_ancestor(*_AGGS)]
     if not aggregates:
-        warnings.append(f"{where}: a expressão não tem agregação; ignorada")
+        warnings.append(f"{where}: the expression has no aggregation; skipped")
         return
     simple = len(aggregates) == 1 and tree is aggregates[0]
     replacements: dict[int, str] = {}
@@ -224,7 +224,9 @@ def _metric(metric, models, model_names, field_exprs, metrics, glossary, warning
         columns = list(agg.find_all(exp.Column))
         owners = {dataset_of(c) for c in columns} or {scope}
         if None in owners or len(owners) != 1:
-            warnings.append(f"{where}: agregação `{agg.sql()}` sem dataset único; métrica ignorada")
+            warnings.append(
+                f"{where}: aggregation `{agg.sql()}` has no single dataset; metric skipped"
+            )
             return
         owner = owners.pop()
         exprs = field_exprs[owner]

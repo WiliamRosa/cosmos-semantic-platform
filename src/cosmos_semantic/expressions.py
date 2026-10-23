@@ -1,4 +1,4 @@
-"""Expressões SQL do modelo: referências ``{membro}``, ``$user.<campo>`` e qualificação de colunas."""
+"""Model SQL expressions: ``{member}`` references, ``$user.<field>`` and column qualification."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ _FORBIDDEN_IN_REQUESTS = (exp.Query, exp.Subquery, exp.Table, exp.Star, exp.Comm
 
 @dataclass
 class Template:
-    """Expressão com referências substituídas por marcadores, já analisada pelo SQLGlot."""
+    """An expression whose references were replaced by placeholders, parsed by SQLGlot."""
 
     text: str
     tree: exp.Expression
@@ -46,15 +46,15 @@ def parse_template(text: str, dialect: str, *, error: type[Exception] = ModelErr
     try:
         tree = sqlglot.parse_one(masked, read=dialect)
     except ParseError as exc:
-        raise error(f"expressão inválida `{text}`: {exc}") from exc
+        raise error(f"invalid expression `{text}`: {exc}") from exc
     if isinstance(tree, exp.Query):
-        raise error(f"expressão inválida `{text}`: consultas não são permitidas")
+        raise error(f"invalid expression `{text}`: queries are not allowed")
     return Template(text=text, tree=portable(tree), refs=refs, user_fields=users)
 
 
 def portable(tree: exp.Expression) -> exp.Expression:
-    """``data ± INTERVAL 'n' UNIDADE`` vira soma de datas, que o SQLGlot traduz para todos os
-    dialetos (o SQL Server não tem INTERVAL)."""
+    """``date ± INTERVAL 'n' UNIT`` becomes a date addition, which SQLGlot translates to every
+    dialect (SQL Server has no INTERVAL)."""
 
     def fix(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Sub | exp.Add) and isinstance(node.expression, exp.Interval):
@@ -72,23 +72,25 @@ def portable(tree: exp.Expression) -> exp.Expression:
 
 
 def check_request_expression(template: Template) -> None:
-    """Filtros vindos de quem consulta só podem acessar dados por referências ``{membro}``.
+    """Filters sent by callers may only reach data through ``{member}`` references.
 
-    Sem essa regra, uma subconsulta ou coluna solta no filtro poderia ler dados que os
-    filtros por linha escondem.
+    Without this rule, a subquery or a bare column in a filter could read data that row
+    filters hide.
     """
     for node in template.tree.walk():
         if isinstance(node, _FORBIDDEN_IN_REQUESTS):
             raise QueryError(
-                f"filtro não permitido `{template.text}`: use apenas referências {{membro}}"
+                f"filter not allowed `{template.text}`: use only {{member}} references"
             )
         if isinstance(node, exp.Column) and not node.name.startswith(_REF_PREFIX):
             raise QueryError(
-                f"filtro não permitido `{template.text}`: a coluna `{node.sql()}` precisa ser "
-                "uma referência {membro}"
+                f"filter not allowed `{template.text}`: column `{node.sql()}` must be "
+                "a {member} reference"
             )
     if template.user_fields:
-        raise QueryError(f"filtro não permitido `{template.text}`: `$user` só vale no modelo")
+        raise QueryError(
+            f"filter not allowed `{template.text}`: `$user` is only valid in the model"
+        )
 
 
 def substitute(
@@ -98,11 +100,11 @@ def substitute(
     *,
     resolve_condition: Callable[[str], exp.Expression] | None = None,
 ) -> exp.Expression:
-    """Troca os marcadores pelas expressões resolvidas.
+    """Replaces placeholders with the resolved expressions.
 
-    ``resolve_condition`` resolve referências usadas como condição (sozinhas, ou sob AND, OR e
-    NOT). No SQL Server um booleano não é valor: como condição ele é um predicado, como valor
-    vira CASE. Nos outros dialetos as duas formas coincidem.
+    ``resolve_condition`` resolves references used as conditions (alone, or under AND, OR and
+    NOT). In SQL Server a boolean is not a value: as a condition it is a predicate, as a value
+    it becomes a CASE. In the other dialects both forms are the same.
     """
     tree = template.tree.copy()
     users = [resolve_user(u) for u in template.user_fields] if resolve_user else []
@@ -130,13 +132,13 @@ def _in_condition(node: exp.Expression) -> bool:
 
 
 def qualify(text: str, alias: str, dialect: str) -> exp.Expression:
-    """Analisa uma expressão de coluna do modelo e prefixa colunas soltas com o alias do modelo."""
+    """Parses a model column expression and prefixes bare columns with the model alias."""
     try:
         tree = sqlglot.parse_one(text, read=dialect)
     except ParseError as exc:
-        raise ModelError(f"expressão inválida `{text}`: {exc}") from exc
+        raise ModelError(f"invalid expression `{text}`: {exc}") from exc
     if isinstance(tree, exp.Query):
-        raise ModelError(f"expressão inválida `{text}`: consultas não são permitidas")
+        raise ModelError(f"invalid expression `{text}`: queries are not allowed")
 
     def add_table(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Column) and not node.table:
@@ -147,8 +149,8 @@ def qualify(text: str, alias: str, dialect: str) -> exp.Expression:
 
 
 def table_ref(name: str, dialect: str, schema_map: dict[str, str] | None = None) -> exp.Table:
-    """Tabela do modelo na origem: aplica o ``schema_map`` da origem e, no SQL Server, põe
-    colchetes em cada parte (``public`` é palavra reservada no T-SQL)."""
+    """The model's table on the data source: applies the source's ``schema_map`` and, in SQL
+    Server, brackets every part (``public`` is a reserved word in T-SQL)."""
     table = exp.to_table(name)
     if schema_map and table.db and table.db in schema_map:
         table.set("db", exp.to_identifier(schema_map[table.db]))
@@ -161,7 +163,7 @@ def table_ref(name: str, dialect: str, schema_map: dict[str, str] | None = None)
 
 
 def remap_sql(sql: str, dialect: str, schema_map: dict[str, str] | None) -> str:
-    """Aplica ``table_ref`` às tabelas físicas de um SQL (sem tocar nas CTEs)."""
+    """Applies ``table_ref`` to the physical tables of a SQL statement (CTEs are untouched)."""
     if not schema_map and dialect != "tsql":
         return sql
     tree = sqlglot.parse_one(sql, read=dialect)
@@ -187,5 +189,5 @@ def literal(value: object) -> exp.Expression:
     if isinstance(value, int | float):
         return exp.Literal.number(value)
     if isinstance(value, list | tuple):
-        raise QueryError("valores em lista não são suportados em $user")
+        raise QueryError("list values are not supported in $user")
     return exp.Literal.string(str(value))

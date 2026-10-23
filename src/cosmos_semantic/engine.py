@@ -1,4 +1,4 @@
-"""Ponto de entrada do motor: modelo + conexões -> consultas executadas."""
+"""Engine entry point: model + connections -> executed queries."""
 
 from __future__ import annotations
 
@@ -38,9 +38,9 @@ class Engine:
         if name is None:
             if len(self.connections.data_sources) == 1:
                 return next(iter(self.connections.data_sources))
-            raise ModelError("defina `default` em connections.yml ou `data_source` nos modelos")
+            raise ModelError("set `default` in connections.yml or `data_source` in the models")
         if name not in self.connections.data_sources:
-            raise ModelError(f"origem `{name}` não está em connections.yml")
+            raise ModelError(f"data source `{name}` is not in connections.yml")
         return name
 
     def config(self, name: str | None = None) -> DataSourceConfig:

@@ -4,7 +4,7 @@ version: 1
 semantic_models:
   - name: orders
     table: public.orders
-    description: Pedidos de venda, um registro por pedido
+    description: Sales orders, one row per order
     entities:
       - name: order
         type: primary
@@ -15,33 +15,33 @@ semantic_models:
     dimensions:
       - name: ordered_at
         type: time
-        description: Data e hora do pedido
+        description: Order date and time
       - name: status
         type: categorical
-        description: completed, canceled ou pending
+        description: completed, canceled or pending
       - name: has_discount
         type: boolean
         expr: discount > 0
-        description: O pedido teve desconto
+        description: The order had a discount
     measures:
       - name: order_count
         agg: count
-        description: Número de pedidos
+        description: Number of orders
       - name: revenue
         agg: sum
         expr: amount
-        description: Valor bruto dos pedidos
+        description: Gross order value
       - name: discounts
         agg: sum
         expr: discount
       - name: buyers
         agg: count_distinct
         expr: customer_id
-        description: Clientes distintos que compraram
+        description: Distinct customers who bought
 
   - name: order_items
     table: public.order_items
-    description: Itens dos pedidos, um registro por item
+    description: Order items, one row per item
     entities:
       - name: order_item
         type: primary
@@ -59,22 +59,22 @@ semantic_models:
       - name: items_sold
         agg: sum
         expr: quantity
-        description: Unidades vendidas
+        description: Units sold
       - name: item_revenue
         agg: sum
         expr: quantity * unit_price
-        description: Valor dos itens antes de desconto
+        description: Item value before discounts
       - name: avg_quantity
         agg: avg
         expr: quantity
-        description: Unidades médias por item (média de coluna inteira)
+        description: Average units per item (average of an integer column)
       - name: line_count
         agg: count
-        description: Número de itens
+        description: Number of items
 
   - name: payments
     table: public.payments
-    description: Pagamentos, um ou mais por pedido
+    description: Payments, one or more per order
     entities:
       - name: payment
         type: primary
@@ -85,7 +85,7 @@ semantic_models:
     dimensions:
       - name: method
         type: categorical
-        description: pix, cartao ou boleto
+        description: pix, cartao (card) or boleto (bank slip)
       - name: installments
         type: number
       - name: paid_at
@@ -94,7 +94,7 @@ semantic_models:
       - name: paid_value
         agg: sum
         expr: value
-        description: Valor efetivamente pago
+        description: Amount actually paid
       - name: payment_count
         agg: count
 
@@ -103,40 +103,40 @@ metrics:
     type: simple
     measure: revenue
     filter: "{status} = 'completed'"
-    description: Receita bruta só de pedidos concluídos
+    description: Gross revenue of completed orders only
   - name: average_order_value
     type: ratio
     numerator: revenue
     denominator: order_count
-    description: Ticket médio
+    description: Average order value
   - name: net_revenue
     type: derived
     expr: "{revenue} - {discounts}"
-    description: Receita bruta menos descontos
+    description: Gross revenue minus discounts
   - name: collection_gap
     type: derived
     expr: "{net_revenue} - {paid_value}"
-    description: Receita líquida ainda não paga (cruza pedidos e pagamentos)
+    description: Net revenue not yet paid (spans orders and payments)
   - name: discount_rate
     type: ratio
     numerator: discounts
     denominator: revenue
-    description: Desconto sobre a receita bruta
+    description: Discounts over gross revenue
   - name: orders_per_buyer
     type: derived
     expr: "{order_count} / {buyers}"
-    description: Pedidos por comprador (divisão entre contagens inteiras)
+    description: Orders per buyer (division between integer counts)
   - name: items_per_order
     type: derived
     expr: "{items_sold} / {order_count}"
-    description: Unidades por pedido (cruza itens e pedidos)
+    description: Units per order (spans items and orders)
   - name: revenue_year_to_date
     type: cumulative
     measure: revenue
     grain_to_date: year
-    description: Receita acumulada no ano
+    description: Year-to-date revenue
   - name: revenue_month_to_date
     type: cumulative
     measure: revenue
     grain_to_date: month
-    description: Receita acumulada no mês
+    description: Month-to-date revenue

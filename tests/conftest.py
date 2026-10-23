@@ -38,7 +38,7 @@ def duckdb_connector(tables):
 def postgres_connector(tables):
     uri = os.environ.get("COSMOS_PG_URI")
     if not uri:
-        pytest.skip("defina COSMOS_PG_URI para rodar contra o Postgres")
+        pytest.skip("set COSMOS_PG_URI to run against Postgres")
     connector = connect(DataSourceConfig(type="postgres", uri=uri))
     demo_data.load(connector, tables)
     yield connector
@@ -49,7 +49,7 @@ def postgres_connector(tables):
 def sqlserver_connector(tables):
     uri = os.environ.get("COSMOS_MSSQL_URI")
     if not uri:
-        pytest.skip("defina COSMOS_MSSQL_URI para rodar contra o SQL Server")
+        pytest.skip("set COSMOS_MSSQL_URI to run against SQL Server")
     connector = connect(
         DataSourceConfig(type="sqlserver", uri=uri, schema_map={"public": "cosmos"})
     )
@@ -65,8 +65,8 @@ def databricks_connector(tables):
         env("DATABRICKS_TOKEN") or env("DATABRICKS_CONFIG_PROFILE")
     ):
         pytest.skip(
-            "defina DATABRICKS_HTTP_PATH e DATABRICKS_TOKEN (com DATABRICKS_SERVER_HOSTNAME) "
-            "ou DATABRICKS_CONFIG_PROFILE"
+            "set DATABRICKS_HTTP_PATH and DATABRICKS_TOKEN (with DATABRICKS_SERVER_HOSTNAME) "
+            "or DATABRICKS_CONFIG_PROFILE"
         )
     connector = connect(
         DataSourceConfig(

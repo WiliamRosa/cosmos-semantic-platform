@@ -1,8 +1,8 @@
-"""Importação do dbt Semantic Layer: formato atual (``semantic_model`` dentro de ``models``)
-e formato legado (``semantic_models`` e ``metrics`` com ``type_params``).
+"""Importing the dbt Semantic Layer: the latest spec (``semantic_model`` inside ``models``)
+and the legacy spec (``semantic_models`` and ``metrics`` with ``type_params``).
 
-Lê só o YAML, sem executar o projeto dbt. ``ref('x')`` vira a tabela ``x`` (com o esquema
-de ``schema=``, se informado).
+Only the YAML is read; the dbt project is never executed. ``ref('x')`` becomes table ``x``
+(prefixed with ``schema=`` when given).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class _Builder:
         self.warnings: list[str] = []
         self.measure_names: set[str] = set()
 
-    # -- utilitários ---------------------------------------------------------
+    # -- helpers ---------------------------------------------------------
 
     def table(self, model_ref: str | None, fallback: str) -> str:
         name = fallback
@@ -54,7 +54,7 @@ class _Builder:
             agg, expr = "sum", f"CASE WHEN {expr or name} THEN 1 ELSE 0 END"
         if agg not in _AGG:
             self.warnings.append(
-                f"{where}: agregação `{agg}` não suportada; medida `{name}` ignorada"
+                f"{where}: aggregation `{agg}` is not supported; measure `{name}` skipped"
             )
             return False
         item: dict[str, Any] = {"name": name, "agg": _AGG[agg]}
@@ -95,7 +95,7 @@ class _Builder:
     def entity(self, model: dict, entity: dict, where: str, column: str | None = None) -> None:
         kind = entity.get("type")
         if kind == "natural":
-            self.warnings.append(f"{where}: entidade `natural` (SCD) não é suportada; ignorada")
+            self.warnings.append(f"{where}: `natural` entities (SCD) are not supported; skipped")
             return
         name = entity.get("name") or column
         item = {"name": name, "type": kind}
@@ -116,12 +116,12 @@ class _Builder:
             if measure_name == name:
                 if flt:
                     self.warnings.append(
-                        f"{where}: métrica e medida têm o mesmo nome e há filtro; a métrica foi "
-                        f"importada como `{name}_filtrada`"
+                        f"{where}: metric and measure share a name and there is a filter; the metric was "
+                        f"imported as `{name}_filtered`"
                     )
                     self.metrics.append(
                         {
-                            "name": f"{name}_filtrada",
+                            "name": f"{name}_filtered",
                             "type": "simple",
                             "measure": name,
                             "filter": flt,
@@ -160,7 +160,7 @@ class _Builder:
                 base,
             )
         else:
-            self.warnings.append(f"{where}: métricas do tipo `{kind}` não são suportadas; ignorada")
+            self.warnings.append(f"{where}: metrics of type `{kind}` are not supported; skipped")
 
     # -- formato atual -------------------------------------------------------
 
@@ -192,7 +192,7 @@ class _Builder:
             e["type"] == "primary" for e in model.get("entities", [])
         ):
             self.warnings.append(
-                f"{where}: `primary_entity` sem coluna primária; joins para `{name}` não serão inferidos"
+                f"{where}: `primary_entity` without a primary column; joins to `{name}` will not be inferred"
             )
         derived = model_yml.get("derived_semantics") or {}
         for dim in derived.get("dimensions") or []:
@@ -260,7 +260,7 @@ class _Builder:
         elif kind == "simple" or "type_params" in metric:
             self.legacy_metric(metric)
         else:
-            self.warnings.append(f"{where}: métricas do tipo `{kind}` não são suportadas; ignorada")
+            self.warnings.append(f"{where}: metrics of type `{kind}` are not supported; skipped")
 
     # -- comuns ----------------------------------------------------------------
 
@@ -271,7 +271,7 @@ class _Builder:
             if isinstance(item, dict) and (
                 item.get("offset_window") or item.get("offset_to_grain")
             ):
-                self.warnings.append(f"{where}: `offset_window` não é suportado; métrica ignorada")
+                self.warnings.append(f"{where}: `offset_window` is not supported; metric skipped")
                 return
             if isinstance(item, dict) and item.get("filter"):
                 helper = f"{name}__{item.get('alias') or ref}"
@@ -293,7 +293,7 @@ class _Builder:
             item["grain_to_date"] = grain_to_date
         elif window:
             item["window"] = str(window)
-            self.warnings.append(f"metrics.{name}: janela móvel `{window}` fica fora do MVP")
+            self.warnings.append(f"metrics.{name}: rolling window `{window}` is not in the MVP")
         self.metrics.append(item)
 
     # -- filtros Jinja do MetricFlow -----------------------------------------
@@ -313,14 +313,14 @@ class _Builder:
                     model = entity_owner.get(entity)
                     if model:
                         return "{" + f"{model}.{dim_name}" + "}"
-                    self.warnings.append(f"{where}: entidade `{entity}` do filtro não encontrada")
+                    self.warnings.append(f"{where}: filter entity `{entity}` not found")
                     return "{" + dim_name + "}"
                 return "{" + ref + "}"
 
             out = _JINJA_DIM_RE.sub(dim, text)
             if _JINJA_ANY_RE.search(out):
                 self.warnings.append(
-                    f"{where}: o filtro `{text}` usa Jinja que não é Dimension(...); revise"
+                    f"{where}: filter `{text}` uses Jinja other than Dimension(...); review it"
                 )
             return out
 
@@ -338,7 +338,7 @@ def import_dbt(path: str | Path, *, schema: str | None = None) -> ImportResult:
         try:
             data = yaml.safe_load(text) or {}
         except yaml.YAMLError as exc:
-            builder.warnings.append(f"{file}: YAML inválido ({exc}); ignorado")
+            builder.warnings.append(f"{file}: invalid YAML ({exc}); skipped")
             continue
         if not isinstance(data, dict):
             continue
@@ -354,9 +354,9 @@ def import_dbt(path: str | Path, *, schema: str | None = None) -> ImportResult:
                 builder.top_metric(metric)
     builder.convert_filters()
     if not builder.models:
-        builder.warnings.append("nenhum semantic model encontrado")
+        builder.warnings.append("no semantic model found")
     if not schema:
-        builder.warnings.append("as tabelas vieram de ref(); confira `table` ou use --schema")
+        builder.warnings.append("tables come from ref(); check `table` or use --schema")
     project = Project.model_validate(
         {"version": 1, "semantic_models": builder.models, "metrics": builder.metrics}
     )

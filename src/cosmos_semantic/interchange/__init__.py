@@ -1,7 +1,7 @@
-"""Importação de modelos de outras ferramentas (fase 1): dbt, Apache Ossie e Cube.
+"""Importing models from other tools (phase 1): dbt, Apache Ossie and Cube.
 
-Nenhuma conversão perde informação em silêncio: o que não tem equivalente vira aviso no
-relatório ou fica em ``custom_extensions``.
+No conversion loses information silently: whatever has no equivalent becomes a warning in the
+report or is kept in ``custom_extensions``.
 """
 
 from __future__ import annotations
@@ -54,4 +54,4 @@ def import_model(kind: str, path: str | Path, **options: Any) -> ImportResult:
         from cosmos_semantic.interchange.cube import import_cube
 
         return import_cube(path, **options)
-    raise ValueError(f"formato desconhecido: {kind} (use dbt, ossie ou cube)")
+    raise ValueError(f"unknown format: {kind} (use dbt, ossie or cube)")

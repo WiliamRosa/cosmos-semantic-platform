@@ -1,37 +1,37 @@
-# ADR 0005: Nome Cosmos Semantic e licenciamento open core
+# ADR 0005: The Cosmos Semantic name and open core licensing
 
-- **Status:** aceita
-- **Data:** 16/10/2026
+- **Status:** accepted
+- **Date:** 2026-10-16
 
-## Contexto
+## Context
 
-O produto precisava de nome e de um modelo de licença. Para a licença, as opções eram Apache 2.0 em tudo, uma licença source-available (BSL ou Elastic License), ou open core. O objetivo declarado é que a comunidade tenha o máximo de acesso para usar e alterar o núcleo, mantendo espaço para um produto pago.
+The product needed a name and a licensing model. For the license, the options were Apache 2.0 for everything, a source-available license (BSL or Elastic License), or open core. The stated goal is to give the community as much access as possible to use and change the core, while leaving room for a paid product.
 
-## Decisão
+## Decision
 
-**Nome:** Cosmos Semantic. O repositório se chama `cosmos-semantic-platform`.
+**Name:** Cosmos Semantic. The repository is `cosmos-semantic-platform`.
 
-**Licença:** open core.
+**License:** open core.
 
-| Parte | Licença | Conteúdo |
+| Part | License | Contents |
 | --- | --- | --- |
-| Núcleo | Apache 2.0 | Formato de autoria, compilador, planejador, gerador de SQL, conectores, API REST, servidor MCP, regras de LGPD, importação e exportação Ossie, Cube e dbt |
-| Recursos comerciais | Proprietária | SSO e SCIM, auditoria corporativa, controle de acesso por perfil no plano de controle, multi-tenancy gerenciado, hospedagem e suporte |
+| Core | Apache 2.0 | Authoring format, compiler, planner, SQL generator, connectors, REST API, MCP server, LGPD (personal data) rules, Ossie, Cube and dbt import and export |
+| Commercial features | Proprietary | SSO and SCIM, enterprise auditing, role-based access in the control plane, managed multi-tenancy, hosting and support |
 
-Princípios para decidir onde cada recurso fica:
+Principles for deciding where each feature belongs:
 
-1. **Tudo o que define ou calcula um número fica no núcleo.** Se a comunidade não puder auditar e alterar como uma métrica é calculada, o produto perde confiança.
-2. **Recursos comerciais são organizacionais, não analíticos:** identidade corporativa, auditoria, operação gerenciada, suporte.
-3. **Nada sai do núcleo depois de entrar.** Mover um recurso aberto para a parte paga quebra a confiança da comunidade.
+1. **Everything that defines or computes a number stays in the core.** If the community cannot audit and change how a metric is computed, the product loses trust.
+2. **Commercial features are organizational, not analytical:** enterprise identity, auditing, managed operations, support.
+3. **Nothing leaves the core once it is in.** Moving an open feature to the paid part breaks the community's trust.
 
-## Contribuições
+## Contributions
 
-- Contribuições externas ao núcleo usam o Developer Certificate of Origin (DCO), assinatura em cada commit, sem exigir cessão de direitos.
-- O código comercial fica em repositório separado, que depende do núcleo como qualquer outro usuário.
+- External contributions to the core use the Developer Certificate of Origin (DCO), signed off on each commit, with no copyright assignment.
+- Commercial code lives in a separate repository that depends on the core like any other user.
 
-## Consequências
+## Consequences
 
-- A versão gratuita auto-hospedada é o próprio núcleo, sem limites artificiais de origens ou uso.
-- Limites de uso só existem na versão hospedada gratuita, que roda na infraestrutura do produto.
-- Qualquer empresa pode oferecer o núcleo como serviço; esse risco é aceito em troca de adoção. A defesa está na qualidade do produto hospedado e nos recursos comerciais.
-- Antes de registrar domínio e logo, verificar conflito de marca com o Azure Cosmos DB, da Microsoft.
+- The free self-hosted version is the core itself, with no artificial limits on data sources or usage.
+- Usage limits only exist in the free hosted version, which runs on the product's infrastructure.
+- Any company can offer the core as a service; this risk is accepted in exchange for adoption. The defense is the quality of the hosted product and the commercial features.
+- Before registering a domain and logo, check for a trademark conflict with Microsoft's Azure Cosmos DB. (2026-10-22: the name was kept.)

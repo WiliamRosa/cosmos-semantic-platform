@@ -69,10 +69,10 @@ def test_ambiguous_join_path_is_an_error():
     )
     data = yaml.safe_load(text)
     data["semantic_models"][0]["entities"].append({"name": "c", "type": "foreign"})
-    # a -> b direto e a -> c -> b têm tamanhos diferentes: o menor vence, sem ambiguidade
+    # a -> b directly and a -> c -> b have different lengths: the shortest wins, no ambiguity
     graph = compile_project(Project.model_validate(data))
     assert len(graph.join_path("a", "b")) == 1
-    # e com dois caminhos de mesmo tamanho, o compilador recusa
+    # with two paths of the same length, the compiler refuses
     data["semantic_models"].append(
         {
             "name": "e",
@@ -89,14 +89,14 @@ def test_ambiguous_join_path_is_an_error():
         {"name": "x", "table": "t_x", "entities": [{"name": "x", "type": "primary"}]}
     )
     data["semantic_models"][1]["entities"].append({"name": "x", "type": "foreign"})
-    with pytest.raises(ModelError, match="ambíguo"):
+    with pytest.raises(ModelError, match="ambiguous"):
         compile_project(Project.model_validate(data))
 
 
 def test_duplicate_primary_entity_is_an_error():
     data = yaml.safe_load(BASE)
     data["semantic_models"][1]["entities"].append({"name": "a", "type": "unique"})
-    with pytest.raises(ModelError, match="já é chave"):
+    with pytest.raises(ModelError, match="already a key"):
         compile_project(Project.model_validate(data))
 
 
@@ -128,13 +128,13 @@ def test_agent_cannot_filter_by_personal_data(graph):
     request = QueryRequest(metrics=["customer_count"], filters=["{customers.cpf} = '123'"])
     with pytest.raises(PolicyError, match="LGPD"):
         Planner(graph).plan(request, Principal(user={"region": "Sul"}, channel="mcp"))
-    # Aplicações (não agentes) podem filtrar por dado pessoal
+    # Applications (not agents) may filter by personal data
     Planner(graph).plan(request, Principal(user={"region": "Sul"}, channel="api"))
 
 
 def test_unreachable_dimension_is_explained(graph):
     request = QueryRequest(metrics=["revenue"], dimensions=["products.category"])
-    with pytest.raises(QueryError, match="muitos-para-um"):
+    with pytest.raises(QueryError, match="many-to-one"):
         Planner(graph).plan(request)
 
 

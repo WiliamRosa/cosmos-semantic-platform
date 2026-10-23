@@ -1,16 +1,16 @@
-# Consultas de referência do gate 2 (ADR 0007).
+# Gate 2 reference queries (ADR 0007).
 #
-# Cada caso compara o resultado do motor com SQL escrito à mão, sem passar pelo motor.
-# O SQL está no dialeto do Postgres, que também roda no DuckDB e no Databricks; `sql_by_dialect`
-# substitui o texto onde o dialeto diverge. `phase` diz em que fase o caso passa a valer.
-# Os dados vêm de `cosmos demo-data` (examples/ecommerce).
+# Each case compares the engine's result with hand-written SQL that never goes through the
+# engine. The SQL is in the Postgres dialect, which also runs on DuckDB and Databricks;
+# `sql_by_dialect` overrides it where a dialect differs. `phase` is the phase the case belongs to.
+# Data comes from `cosmos demo-data` (examples/ecommerce).
 
 cases:
-  # -- Fan-out: medidas em grãos diferentes ---------------------------------
+  # -- Fan-out: measures at different grains -------------------------------
   - id: R01
     category: fan-out
     phase: 0
-    title: Receita (pedido) e valor pago (pagamento) por região do cliente
+    title: Revenue (order grain) and paid value (payment grain) by customer region
     request:
       metrics: [revenue, paid_value]
       dimensions: [customers.region]
@@ -33,7 +33,7 @@ cases:
   - id: R02
     category: fan-out
     phase: 0
-    title: Receita do pedido e receita dos itens por status
+    title: Order revenue and item revenue by status
     request:
       metrics: [revenue, item_revenue]
       dimensions: [orders.status]
@@ -50,7 +50,7 @@ cases:
   - id: R03
     category: fan-out
     phase: 0
-    title: Pedidos, pagamentos e unidades por mês do pedido (três grãos)
+    title: Orders, payments and units by order month (three grains)
     request:
       metrics: [order_count, payment_count, items_sold]
       dimensions: [orders.ordered_at__month]
@@ -87,7 +87,7 @@ cases:
   - id: R04
     category: fan-out
     phase: 0
-    title: Receita e clientes distintos por segmento
+    title: Revenue and distinct customers by segment
     request:
       metrics: [revenue, customer_count]
       dimensions: [customers.segment]
@@ -104,11 +104,11 @@ cases:
       SELECT c.segment AS customers__segment, o.revenue, c.customer_count
       FROM c LEFT JOIN o ON o.segment IS NOT DISTINCT FROM c.segment
 
-  # -- Métrica simples e granularidade de tempo -------------------------------
+  # -- Simple metrics and time grains ---------------------------------------
   - id: R05
     category: simple
     phase: 0
-    title: Receita total
+    title: Total revenue
     request:
       metrics: [revenue]
     sql: SELECT SUM(amount) AS revenue FROM public.orders
@@ -116,7 +116,7 @@ cases:
   - id: R06
     category: simple
     phase: 0
-    title: Pedidos por mês
+    title: Orders by month
     request:
       metrics: [order_count]
       dimensions: [orders.ordered_at__month]
@@ -131,7 +131,7 @@ cases:
   - id: R07
     category: simple
     phase: 0
-    title: Valor pago por forma de pagamento e trimestre
+    title: Paid value by payment method and quarter
     request:
       metrics: [paid_value]
       dimensions: [payments.method, payments.paid_at__quarter]
@@ -147,11 +147,11 @@ cases:
                SUM(value) AS paid_value
         FROM public.payments GROUP BY method, DATETRUNC(quarter, paid_at)
 
-  # -- Joins inferidos pelas entidades ---------------------------------------
+  # -- Joins inferred from entities -----------------------------------------
   - id: R08
     category: joins
     phase: 0
-    title: Unidades vendidas por região do vendedor
+    title: Units sold by seller region
     request:
       metrics: [items_sold]
       dimensions: [sellers.region]
@@ -163,7 +163,7 @@ cases:
   - id: R09
     category: joins
     phase: 0
-    title: Receita dos itens por estado do cliente (dois saltos)
+    title: Item revenue by customer state (two hops)
     request:
       metrics: [item_revenue]
       dimensions: [customers.state]
@@ -179,7 +179,7 @@ cases:
   - id: R10
     category: joins
     phase: 0
-    title: Valor pago por segmento do cliente (dois saltos)
+    title: Paid value by customer segment (two hops)
     request:
       metrics: [paid_value]
       dimensions: [customers.segment]
@@ -192,11 +192,11 @@ cases:
       WHERE c.region = 'Sul'
       GROUP BY c.segment
 
-  # -- Razão e derivadas -----------------------------------------------------
+  # -- Ratio and derived metrics --------------------------------------------
   - id: R11
     category: ratio-derived
     phase: 0
-    title: Ticket médio por status
+    title: Average order value by status
     request:
       metrics: [average_order_value]
       dimensions: [orders.status]
@@ -207,7 +207,7 @@ cases:
   - id: R12
     category: ratio-derived
     phase: 0
-    title: Receita líquida por mês
+    title: Net revenue by month
     request:
       metrics: [net_revenue]
       dimensions: [orders.ordered_at__month]
@@ -224,7 +224,7 @@ cases:
   - id: R13
     category: ratio-derived
     phase: 0
-    title: Receita líquida ainda não paga por status (derivada entre modelos)
+    title: Unpaid net revenue by status (derived metric across models)
     request:
       metrics: [collection_gap]
       dimensions: [orders.status]
@@ -238,11 +238,11 @@ cases:
       SELECT o.status AS orders__status, o.net - p.paid AS collection_gap
       FROM o LEFT JOIN p ON p.status = o.status
 
-  # -- Filtros por dimensão e por regra de negócio ---------------------------
+  # -- Dimension and business rule filters ----------------------------------
   - id: R14
     category: filters
     phase: 0
-    title: Receita de pedidos concluídos por mês (filtro da métrica)
+    title: Completed-order revenue by month (metric filter)
     request:
       metrics: [completed_revenue]
       dimensions: [orders.ordered_at__month]
@@ -259,7 +259,7 @@ cases:
   - id: R15
     category: filters
     phase: 0
-    title: Receita concluída dos últimos 180 dias por estado (filtro do pedido)
+    title: Completed revenue of the last 180 days by state (request filter)
     request:
       metrics: [revenue]
       dimensions: [customers.state]
@@ -286,11 +286,11 @@ cases:
   - id: R16
     category: filters
     phase: 1
-    title: Clientes ativos (regra de negócio) por segmento
+    title: Active customers (business rule) by segment
     request:
       metrics: [customer_count]
       dimensions: [customers.segment]
-      filters: ["{rule.cliente_ativo}"]
+      filters: ["{rule.active_customer}"]
     user: { region: Sudeste }
     sql: |
       SELECT segment AS customers__segment, COUNT(DISTINCT customer_id) AS customer_count
@@ -304,11 +304,11 @@ cases:
         WHERE last_order_at >= DATEADD(day, -90, CAST(GETDATE() AS DATE)) AND region = 'Sudeste'
         GROUP BY segment
 
-  # -- Filtro por linha e LGPD -----------------------------------------------
+  # -- Row filters and LGPD ------------------------------------------------
   - id: R17
     category: policies
     phase: 0
-    title: Usuário do Norte só vê clientes do Norte
+    title: A user from the North region only sees North customers
     request:
       metrics: [customer_count]
       dimensions: [customers.region]
@@ -320,7 +320,7 @@ cases:
   - id: R18
     category: policies
     phase: 0
-    title: Agente não agrupa por plano de saúde (dado pessoal sensível)
+    title: An agent cannot group by health plan (sensitive personal data)
     request:
       metrics: [customer_count]
       dimensions: [customers.health_plan]
@@ -328,17 +328,17 @@ cases:
     channel: mcp
     expect_error: PolicyError
 
-  # -- Perguntas só com sinônimos do glossário -------------------------------
+  # -- Questions using only glossary synonyms -------------------------------
   - id: R19
     category: glossary
     phase: 1
-    title: "\"Quantos compradores ativos temos?\""
+    title: "Question in Portuguese: \"Quantos compradores ativos temos?\" (how many active buyers?)"
     question: compradores ativos
-    expect_maps_to: rule:cliente_ativo
+    expect_maps_to: rule:active_customer
 
   - id: R20
     category: glossary
     phase: 1
-    title: "\"Qual o faturamento líquido?\""
+    title: "Question in Portuguese: \"Qual o faturamento líquido?\" (what is the net revenue?)"
     question: faturamento líquido
     expect_maps_to: metric:net_revenue
