@@ -60,6 +60,8 @@ def test_agent_answers_with_synonyms_only(server, monkeypatch):
         filters=["{rule.active_customer}"],
     )
     assert result["row_count"] == 1 and result["rows"][0]["customer_count"] >= 0
+    assert [r["name"] for r in result["evidence"]["rules"]] == ["active_customer"]
+    assert result["evidence"]["principal"]["channel"] == "mcp"
 
 
 def test_agent_is_blocked_from_sensitive_data(server, monkeypatch):

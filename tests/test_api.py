@@ -78,6 +78,8 @@ def test_oidc_token_claims_feed_row_filters(client, signing_key):
     )
     assert response.status_code == 200, response.text
     assert [r["customers__region"] for r in response.json()["rows"]] == ["Norte"]
+    evidence = response.json()["evidence"]
+    assert evidence["policies"]["row_filters"][0]["user_fields"] == {"region": "Norte"}
 
 
 def test_token_without_required_claim_is_forbidden(client, signing_key):

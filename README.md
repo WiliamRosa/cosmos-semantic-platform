@@ -4,7 +4,7 @@
 
 A semantic layer for AI agents and applications, with **its own engine**: its own versioned YAML format with the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and a JSON Schema, SQL generation for each data source, and native interoperability with [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (formerly Open Semantic Interchange, OSI). [Cube](https://github.com/cube-js/cube) and dbt are **import sources and export targets**, not dependencies.
 
-**Status:** phases 0 and 1 are implemented. The engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity and dbt, Ossie and Cube import are ready. Reference queries and a randomized cross-database test pass on DuckDB, Postgres and SQL Server; Databricks validation depends on a configured SQL warehouse. See the [roadmap](docs/roadmap.md).
+**Status:** phases 0 and 1 are implemented; phase 2 (verifiable numbers) is in progress, with the evidence envelope and replay done. The engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity and dbt, Ossie and Cube import are ready. Reference queries and a randomized cross-database test pass on DuckDB, Postgres and SQL Server; Databricks validation depends on a configured SQL warehouse. See the [roadmap](docs/roadmap.md).
 
 ## In one sentence
 
@@ -34,6 +34,11 @@ uv run cosmos query revenue paid_value customer_count --by customers.region -u r
 # Business rules as a filter and as a grouping; --as-of pins "today"
 uv run cosmos query customer_count --where "{rule.active_customer}" --by customers.segment \
   -u region=Sudeste --as-of 2026-10-22 -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+
+# Evidence envelope: formulas, rules, policies, as_of and hashes; then replay the audited query
+export COSMOS_AUDIT_LOG=data/audit.jsonl
+uv run cosmos query average_order_value --by customers.segment --where "{rule.active_customer}"   -u region=Sudeste --evidence -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+uv run cosmos replay <query_id> -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
 # Business rule examples (on DuckDB, without touching the data sources) and reference queries
 uv run cosmos test -m examples/ecommerce/semantic
@@ -107,7 +112,8 @@ src/cosmos_semantic/
   ontology.py        business rules (virtual dimensions and tests) and SKOS glossary
   catalog.py         members, concept search and explanations
   auth.py            OIDC token validation and development keys
-  service.py         querying with auditing, shared by REST and MCP
+  evidence.py        evidence envelope: formulas, rules, policies, hashes
+  service.py         querying with evidence, auditing and replay, shared by REST, MCP and CLI
   api.py             REST API (FastAPI)
   mcp_server.py      MCP server
   interchange/       dbt, Ossie and Cube import

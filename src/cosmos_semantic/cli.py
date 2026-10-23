@@ -149,30 +149,104 @@ def query(
     user: UserOpt = None,
     agent: AgentOpt = False,
     show_sql: Annotated[bool, typer.Option("--show-sql")] = False,
-    as_json: Annotated[bool, typer.Option("--json")] = False,
+    evidence: Annotated[
+        bool, typer.Option("--evidence", help="Print the evidence envelope after the result.")
+    ] = False,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print rows and evidence as JSON.")
+    ] = False,
 ) -> None:
-    """Runs a metrics request on the data source."""
+    """Runs a metrics request on the data source.
+
+    Set COSMOS_AUDIT_LOG to a .jsonl file to record the query for `cosmos replay`.
+    """
+    from cosmos_semantic.service import SemanticService
+
     try:
         engine = Engine.from_paths(model, load_connections(connections))
-        result = engine.query(
+        result = SemanticService(engine).query(
             _request(metrics, dimension, filter, order_by, limit, as_of),
             _principal(user, "mcp" if agent else "cli"),
         )
     except errors.CosmosError as exc:
         _fail(exc)
-    if show_sql:
-        typer.secho(result.compiled.sql, fg=typer.colors.BRIGHT_BLACK, err=True)
-    rows = result.to_pylist()
     if as_json:
-        typer.echo(json.dumps(rows, default=str, ensure_ascii=False, indent=2))
+        typer.echo(json.dumps(result, default=str, ensure_ascii=False, indent=2))
         return
-    names = [c.name for c in result.compiled.columns]
+    if show_sql:
+        typer.secho(result["evidence"]["sql"]["text"], fg=typer.colors.BRIGHT_BLACK, err=True)
+    rows = result["rows"]
+    names = [c["name"] for c in result["columns"]]
     widths = [max([len(n)] + [len(_fmt(r[n])) for r in rows]) for n in names]
     typer.echo("  ".join(n.ljust(w) for n, w in zip(names, widths, strict=True)))
     typer.echo("  ".join("-" * w for w in widths))
     for row in rows:
         typer.echo("  ".join(_fmt(row[n]).ljust(w) for n, w in zip(names, widths, strict=True)))
-    typer.secho(f"{len(rows)} rows", fg=typer.colors.BRIGHT_BLACK, err=True)
+    typer.secho(
+        f"{len(rows)} rows  query_id={result['evidence']['query_id']}",
+        fg=typer.colors.BRIGHT_BLACK,
+        err=True,
+    )
+    if evidence:
+        _print_evidence(result["evidence"])
+
+
+def _print_evidence(ev: dict) -> None:
+    out = typer.echo
+    out("")
+    out(f"evidence  {ev['query_id']}")
+    out(f"  model   {ev['model_hash'][:16]}  engine {ev['engine_version']}")
+    out(
+        f"  as of   {ev['as_of']} ({ev['timezone']})  source {ev['data_source']['name']} "
+        f"({ev['data_source']['dialect']})"
+    )
+    out(
+        f"  who     {ev['principal']['subject'] or '-'} via {ev['principal']['channel']} "
+        f"{ev['principal']['user_context'] or ''}"
+    )
+    for m in ev["metrics"]:
+        out(f"  metric  {m['name']} = {m['formula']}")
+    for r in ev["rules"]:
+        out(
+            f"  rule    {r['name']} ({r['kind']}, {', '.join(r['used_as'])}) owner={r['owner']} "
+            f"since={r['effective_from']} tests={r['tests']['status']} "
+            f"{r['tests']['passed']}/{r['tests']['total']}"
+        )
+    for f in ev["policies"]["row_filters"]:
+        out(f"  policy  {f['model']}.{f['name']}: {f['filter']} {f['user_fields']}")
+    out(f"  lineage {', '.join(ev['lineage']['models'])}")
+    out(
+        f"  sql     {ev['sql']['hash'][:16]}  result {ev['result']['hash'][:16]} "
+        f"({ev['result']['row_count']} rows)"
+    )
+    for c in ev["caveats"]:
+        out(f"  note    {c}")
+
+
+@app.command()
+def replay(
+    query_id: Annotated[str, typer.Argument(help="query_id from the audit log.")],
+    model: ModelOpt = Path("semantic"),
+    connections: ConnOpt = Path("connections.yml"),
+    audit: Annotated[
+        Path | None, typer.Option("--audit", help="Audit log (.jsonl); default: COSMOS_AUDIT_LOG.")
+    ] = None,
+) -> None:
+    """Re-runs an audited query and tells whether the model, the SQL or the data changed."""
+    from cosmos_semantic.service import SemanticService
+
+    try:
+        engine = Engine.from_paths(model, load_connections(connections))
+        report = SemanticService(engine, audit_path=audit).replay(query_id)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    color = typer.colors.GREEN if report["verdict"] == "identical" else typer.colors.YELLOW
+    typer.secho(f"{report['verdict']}: {report['explanation']}", fg=color)
+    for key, same in report["matches"].items():
+        typer.echo(
+            f"  {key:12} {'same' if same else 'differs'}  "
+            f"{str(report['original'][key])[:16]} -> {str(report['replayed'][key])[:16]}"
+        )
 
 
 def _fmt(value) -> str:

@@ -27,8 +27,9 @@ Cosmos semantic layer. Before querying:
    `__week`, `__month`, `__quarter`, `__year`. Predicate business rules are used as the
    filter `{rule.name}`; filters compare `{model.dimension}` references with values.
 Personal data (LGPD) never reaches agents: grouping or filtering by it is denied.
-Always answer with the number the tool returned and explain the definition used (`explain`)
-when the question involves a business term."""
+Always answer with the number the tool returned. Every `query` result has an `evidence`
+envelope: cite the metric formula, the business rules applied (with owner and test status),
+the reference date (`as_of`) and the `query_id`, so the answer can be audited and replayed."""
 
 MAX_ROWS_FOR_AGENTS = 200
 

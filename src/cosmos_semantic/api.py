@@ -97,6 +97,13 @@ def create_app(
     def query(request: QueryRequest, user: User) -> dict[str, Any]:
         return service.query(request, user)
 
+    @app.post(
+        "/v1/replay/{query_id}",
+        summary="Replay one of your audited queries and tell whether model, SQL or data changed",
+    )
+    def replay(query_id: str, user: User) -> dict[str, Any]:
+        return service.replay(query_id, requester=user)
+
     @app.post("/v1/sql", summary="Show the SQL the engine generates, without running it")
     def sql(request: QueryRequest, user: User) -> dict[str, Any]:
         compiled = service.compile(request, user)

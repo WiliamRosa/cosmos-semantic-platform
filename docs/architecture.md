@@ -89,6 +89,27 @@ The advanced reference suite and a randomized cross-database test (80 random req
 | Postgres `NUMERIC` arrives as an exact decimal | The ADBC driver returns it as text |
 | SQL Server identifiers are bracketed and grouping uses expressions | `public` is a reserved word and `GROUP BY 1` is not accepted |
 
+## Evidence envelope
+
+Every answer (REST, MCP and `cosmos query --evidence`) carries an `evidence` envelope ([ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md)):
+
+| Field | Contents |
+| --- | --- |
+| `query_id` | Identifier of the audited query |
+| `model_hash`, `engine_version` | Exact version of the semantic model and of the engine |
+| `as_of`, `timezone` | The business date used for `CURRENT_DATE` |
+| `data_source`, `principal` | Where the query ran, and who asked through which channel, with the user context |
+| `metrics` | Each metric expanded down to aggregations over model columns, its measures and glossary concepts |
+| `rules` | Business rules used (as filter or value), with owner, effective date, logic and test status |
+| `policies` | Row filters applied, the user context values they used and the CTEs they applied to |
+| `lineage` | Models and joins involved |
+| `sql`, `result` | Generated SQL and its hash; row count and an order-independent result hash |
+| `caveats` | What the evidence does not prove, such as untested rules or the reproducibility limit |
+
+With `COSMOS_AUDIT_LOG` pointing to a `.jsonl` file, every query is recorded with its hashes, and `cosmos replay <query_id>` (or `POST /v1/replay/{query_id}`, only for the user who ran it) re-runs it with the same request, user context and `as_of`. The verdict is `identical`, `data_changed` (same model and SQL, different result), `model_changed` or `engine_changed`. Replaying only returns the same number if the source data has not changed; the envelope says so instead of promising more.
+
+The result hash is the same on DuckDB, Postgres and SQL Server for the same request, which the tests check.
+
 ## MCP server tools
 
 | Tool | What it returns |

@@ -81,6 +81,17 @@ class CompiledQuery:
     data_source: str | None
     models: list[str]
     as_of: dt.date | None = None
+    trace: QueryTrace = field(default_factory=lambda: QueryTrace())
+
+
+@dataclass
+class QueryTrace:
+    """What the planner used to build a query: the raw material of the evidence envelope."""
+
+    measures: dict[str, list[str | None]] = field(default_factory=dict)
+    rules: dict[str, set[str]] = field(default_factory=dict)
+    row_filters: list[dict[str, Any]] = field(default_factory=list)
+    joins: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -135,6 +146,7 @@ class Planner:
     def plan(self, request: QueryRequest, principal: Principal | None = None) -> CompiledQuery:
         principal = principal or Principal()
         g = self.graph
+        self._trace = QueryTrace()
 
         dims = [g.resolve_dimension(d) for d in request.dimensions]
         if len({d.alias for d in dims}) != len(dims):
@@ -183,6 +195,7 @@ class Planner:
             data_source=next(iter(data_sources)) if data_sources else None,
             models=sorted(used_models),
             as_of=as_of,
+            trace=self._trace,
         )
 
     def _check_sensitivity(self, ref: DimensionRef, principal: Principal) -> None:
@@ -267,6 +280,10 @@ class Planner:
                 )
             need(ref.model)
             dim = g.dimension(ref)
+            if ref.model in g.rule_models.get(ref.name, ()):
+                self._trace.rules.setdefault(ref.name, set()).add(
+                    "filter" if condition else "value"
+                )
             read = RULE_DIALECT if ref.model in g.rule_models.get(ref.name, ()) else self.dialect
             column = qualify(dim.expr or dim.name, ref.model, read)
             if ref.grain:
@@ -296,6 +313,9 @@ class Planner:
         conditions = [fill(t, request_ref) for t in filters]
 
         for item, alias in group.inputs.items():
+            self._trace.measures.setdefault(item.measure, [])
+            if item.filter not in self._trace.measures[item.measure]:
+                self._trace.measures[item.measure].append(item.filter)
             measure = g.models[base].measures[item.measure]
             condition = (
                 fill(parse_template(item.filter, self.dialect), model_ref(base))
@@ -315,12 +335,24 @@ class Planner:
                 applied.add(model)
                 for row_filter in g.models[model].spec.row_filters:
                     template = parse_template(row_filter.filter, self.dialect)
+                    self._trace.row_filters.append(
+                        {
+                            "model": model,
+                            "name": row_filter.name,
+                            "filter": row_filter.filter,
+                            "user_fields": {f: principal.user.get(f) for f in template.user_fields},
+                            "applied_in": f"{base}_agg",
+                        }
+                    )
                     conditions.append(
                         fill(template, model_ref(model), self._user_resolver(principal))
                     )
 
         select = exp.select(*projections).from_(self._table(g.models[base].spec.table, base))
         for target, edge in _ordered(joins, base):
+            self._trace.joins.append(
+                {"from": edge.source, "to": target, "entity": edge.entity, "in": f"{base}_agg"}
+            )
             on = exp.EQ(
                 this=qualify(edge.source_expr, edge.source, self.dialect),
                 expression=qualify(edge.target_expr, edge.target, self.dialect),
