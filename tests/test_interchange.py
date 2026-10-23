@@ -20,7 +20,9 @@ SUL = Principal(user={"region": "Sul"})
 
 
 def rows(graph, connector, request: QueryRequest, principal=None):
-    sql = Planner(graph, connector.dialect).plan(request, principal).sql
+    sql = (
+        Planner(graph, connector.dialect, connector.config.schema_map).plan(request, principal).sql
+    )
     out = connector.execute(sql).to_pylist()
     return sorted(
         (
@@ -63,15 +65,16 @@ CASES = [
         ("dbt", FIXTURES / "dbt_legacy", {"schema": "public"}),
         ("dbt", FIXTURES / "dbt_latest", {"schema": "public"}),
     ],
-    ids=["cube", "dbt-legado", "dbt-atual"],
+    ids=["cube", "dbt-legacy", "dbt-latest"],
 )
-def test_imported_model_matches_native(kind, path, options, graph, duckdb_connector):
+@pytest.mark.parametrize(
+    "source", ["duckdb_connector", "postgres_connector", "sqlserver_connector"]
+)
+def test_imported_model_matches_native(kind, path, options, source, graph, request):
+    connector = request.getfixturevalue(source)
     other, _ = imported(kind, path, **options)
-    for request, principal in CASES:
-        same(
-            rows(graph, duckdb_connector, request, principal),
-            rows(other, duckdb_connector, request),
-        )
+    for query, principal in CASES:
+        same(rows(graph, connector, query, principal), rows(other, connector, query))
 
 
 def test_cube_joins_and_row_level_equivalence(graph, duckdb_connector):

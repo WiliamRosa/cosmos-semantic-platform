@@ -9,7 +9,8 @@ from cosmos_semantic.reference import load_cases, run_case
 from .conftest import CASES
 
 ALL = load_cases(CASES)
-SQL_CASES = [c for c in ALL if c.question is None]
+ADVANCED = load_cases(CASES.with_name("queries_advanced.yml"))
+SQL_CASES = [c for c in ALL + ADVANCED if c.question is None]
 
 
 def _check(case, graph, connector):

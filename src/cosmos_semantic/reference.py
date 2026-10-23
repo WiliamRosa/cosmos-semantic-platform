@@ -32,6 +32,7 @@ class ReferenceCase(BaseModel):
     sql: str | None = None
     sql_by_dialect: dict[str, str] = {}
     expect_error: str | None = None
+    expect_empty: bool = False
     question: str | None = None
     expect_maps_to: str | None = None
 
@@ -84,6 +85,16 @@ def _close(a: tuple, b: tuple) -> bool:
     return True
 
 
+def server_today(connector: Connector) -> dt.date:
+    sql = (
+        "SELECT CAST(GETDATE() AS DATE) AS d"
+        if connector.dialect == "tsql"
+        else "SELECT CURRENT_DATE AS d"
+    )
+    value = connector.execute(sql).to_pylist()[0]["d"]
+    return value.date() if isinstance(value, dt.datetime) else value
+
+
 def run_case(
     case: ReferenceCase,
     graph: SemanticGraph,
@@ -103,8 +114,10 @@ def run_case(
     assert case.request is not None
     principal = Principal(user=case.user, channel=case.channel)
     planner = Planner(graph, connector.dialect, connector.config.schema_map)
+    # The hand-written SQL uses the server's clock, so the engine must use the same "today".
+    request = case.request.model_copy(update={"as_of": server_today(connector)})
     try:
-        compiled = planner.plan(case.request, principal)
+        compiled = planner.plan(request, principal)
     except errors.CosmosError as exc:
         if case.expect_error and type(exc).__name__ == case.expect_error:
             return CaseResult(case, "pass", str(exc))
@@ -130,6 +143,8 @@ def run_case(
     for g_row, w_row in zip(got_rows, want_rows, strict=True):
         if not _close(g_row, w_row):
             return CaseResult(case, "fail", f"motor {g_row} != referência {w_row}")
-    if not got_rows:
+    if not got_rows and not case.expect_empty:
         return CaseResult(case, "fail", "as duas consultas vieram vazias; o caso não prova nada")
+    if got_rows and case.expect_empty:
+        return CaseResult(case, "fail", f"esperava vazio, veio {len(got_rows)} linhas")
     return CaseResult(case, "pass", f"{len(got_rows)} linhas")

@@ -7,8 +7,10 @@ nenhuma linha se repete antes da agregação. As CTEs são unidas pelas dimensõ
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlglot import exp
@@ -44,6 +46,10 @@ class QueryRequest(BaseModel):
         [], description="Membros pedidos; prefixo `-` para ordem decrescente."
     )
     limit: int | None = Field(None, ge=1)
+    as_of: dt.date | None = Field(
+        None,
+        description="Data de referência para CURRENT_DATE; padrão: hoje no fuso do modelo.",
+    )
 
 
 @dataclass
@@ -73,6 +79,7 @@ class CompiledQuery:
     columns: list[OutputColumn]
     data_source: str | None
     models: list[str]
+    as_of: dt.date | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +114,17 @@ class Planner:
         self.graph = graph
         self.dialect = dialect
         self.schema_map = schema_map or {}
+
+    def now(self) -> dt.datetime:
+        """Agora no fuso do negócio, sem fuso explícito (as colunas do modelo são locais)."""
+        zone = ZoneInfo(self.graph.project.timezone or "UTC")
+        return dt.datetime.now(zone).replace(tzinfo=None, microsecond=0)
+
+    def _trunc(self, value: exp.Expression, grain: str) -> exp.Expression:
+        unit = grain.upper()
+        if unit == "WEEK" and self.dialect == "tsql":
+            unit = "ISO_WEEK"  # a semana do SQL Server depende de DATEFIRST; ISO começa na segunda
+        return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit))
 
     def _table(self, name: str, alias: str) -> exp.Table:
         return table_ref(name, self.dialect, self.schema_map).as_(alias)
@@ -150,6 +168,10 @@ class Planner:
             used_models |= joined
 
         final = self._final_select(ctes, groups, dims, metric_exprs, cumulative, request)
+        now = self.now()
+        as_of = request.as_of or now.date()
+        clock = now if request.as_of is None else dt.datetime.combine(request.as_of, dt.time())
+        final = _pin_clock(final, as_of, clock)
         columns = [OutputColumn(d.alias, "dimension", _dim_member(d)) for d in dims] + [
             OutputColumn(m, "metric", m) for m in request.metrics
         ]
@@ -159,6 +181,7 @@ class Planner:
             columns=columns,
             data_source=next(iter(data_sources)) if data_sources else None,
             models=sorted(used_models),
+            as_of=as_of,
         )
 
     def _check_sensitivity(self, ref: DimensionRef, principal: Principal) -> None:
@@ -196,6 +219,7 @@ class Planner:
             )
         if isinstance(metric, DerivedMetric):
             template = parse_template(metric.expr, self.dialect)
+            template.tree = template.tree.transform(_safe_division)
             return exp.Paren(
                 this=substitute(
                     template, lambda r: self._metric_expr(r, groups, stack, extra_filter)
@@ -234,7 +258,7 @@ class Planner:
             for edge in g.join_path(base, model):
                 joins.setdefault(edge.target, edge)
 
-        def dim_sql(ref: DimensionRef) -> exp.Expression:
+        def dim_sql(ref: DimensionRef, condition: bool = False) -> exp.Expression:
             if ref.model != base and ref.model not in g.reachable(base):
                 raise QueryError(
                     f"`{ref.model}.{ref.name}` não é alcançável a partir de `{base}` "
@@ -245,25 +269,38 @@ class Planner:
             read = RULE_DIALECT if ref.model in g.rule_models.get(ref.name, ()) else self.dialect
             column = qualify(dim.expr or dim.name, ref.model, read)
             if ref.grain:
-                column = exp.TimestampTrunc(this=column, unit=exp.Var(this=ref.grain.upper()))
+                column = self._trunc(column, ref.grain)
+            if dim.type == "boolean" and self.dialect == "tsql":
+                column = _tsql_boolean(column, condition)
             return column
 
-        def ref_resolver(context: str | None):
-            return lambda r: dim_sql(g.resolve_dimension(r, context=context))
+        def ref_resolver(context: str | None, condition: bool = False):
+            return lambda r: dim_sql(g.resolve_dimension(r, context=context), condition)
 
-        def request_ref(r: str) -> exp.Expression:
+        def request_ref(r: str, condition: bool = False) -> exp.Expression:
             ref = g.resolve_dimension(r, context=base if r.startswith("rule.") else None)
             self._check_sensitivity(ref, principal)
-            return dim_sql(ref)
+            return dim_sql(ref, condition)
+
+        def fill(template: Template, resolver, user=None) -> exp.Expression:
+            return substitute(
+                template,
+                lambda r: resolver(r, False),
+                user,
+                resolve_condition=lambda r: resolver(r, True),
+            )
+
+        def model_ref(context: str):
+            return lambda r, condition: dim_sql(g.resolve_dimension(r, context=context), condition)
 
         dim_exprs = [dim_sql(d) for d in dims]
         projections = [e.copy().as_(d.alias) for e, d in zip(dim_exprs, dims, strict=True)]
-        conditions = [substitute(t, request_ref) for t in filters]
+        conditions = [fill(t, request_ref) for t in filters]
 
         for item, alias in group.inputs.items():
             measure = g.models[base].measures[item.measure]
             condition = (
-                substitute(parse_template(item.filter, self.dialect), ref_resolver(base))
+                fill(parse_template(item.filter, self.dialect), model_ref(base))
                 if item.filter
                 else None
             )
@@ -281,7 +318,7 @@ class Planner:
                 for row_filter in g.models[model].spec.row_filters:
                     template = parse_template(row_filter.filter, self.dialect)
                     conditions.append(
-                        substitute(template, ref_resolver(model), self._user_resolver(principal))
+                        fill(template, model_ref(model), self._user_resolver(principal))
                     )
 
         select = exp.select(*projections).from_(self._table(g.models[base].spec.table, base))
@@ -315,6 +352,9 @@ class Planner:
             return exp.Count(this=value)
         if measure.agg == "count_distinct":
             return exp.Count(this=exp.Distinct(expressions=[value]))
+        if measure.agg == "avg":
+            # AVG de coluna inteira trunca no SQL Server e no Postgres devolve NUMERIC.
+            value = exp.Cast(this=value, to=exp.DataType.build("double"))
         return _SAFE_AGGS[measure.agg](this=value)
 
     def _user_resolver(self, principal: Principal):
@@ -414,11 +454,7 @@ class Planner:
         time = time_dims[0]
         partition = [dim_out(d) for d in dims if d != time]
         if metric.grain_to_date:
-            partition.append(
-                exp.TimestampTrunc(
-                    this=dim_out(time), unit=exp.Var(this=metric.grain_to_date.upper())
-                )
-            )
+            partition.append(self._trunc(dim_out(time), metric.grain_to_date))
         spec = exp.WindowSpec(
             kind="ROWS", start="UNBOUNDED", start_side="PRECEDING", end="CURRENT ROW"
         )
@@ -431,6 +467,53 @@ class Planner:
 
 
 _LEVEL = {"personal": "pessoal", "sensitive": "pessoal sensível"}
+
+
+def _pin_clock(tree: exp.Expression, as_of: dt.date, clock: dt.datetime) -> exp.Expression:
+    """Troca CURRENT_DATE e CURRENT_TIMESTAMP pela data e hora de referência: o "hoje" passa
+    a ser o do negócio, não o relógio (e o fuso) de cada servidor, e a consulta fica
+    reproduzível e auditável."""
+    day = exp.cast(exp.Literal.string(as_of.isoformat()), "DATE")
+    moment = exp.cast(exp.Literal.string(clock.isoformat(sep=" ")), "TIMESTAMP")
+    timestamps = tuple(
+        getattr(exp, name)
+        for name in ("CurrentTimestamp", "CurrentDatetime", "Localtimestamp")
+        if hasattr(exp, name)
+    )
+
+    def pin(node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.CurrentDate):
+            return day.copy()
+        if isinstance(node, timestamps):
+            return moment.copy()
+        return node
+
+    return tree.transform(pin)
+
+
+def _safe_division(node: exp.Expression) -> exp.Expression:
+    """Divisão em métrica derivada é sempre real e protegida contra zero, em qualquer banco."""
+    if isinstance(node, exp.Div):
+        return exp.Div(
+            this=exp.Cast(this=node.this, to=exp.DataType.build("double")),
+            expression=exp.Nullif(this=node.expression, expression=exp.Literal.number(0)),
+        )
+    return node
+
+
+def _tsql_boolean(value: exp.Expression, condition: bool) -> exp.Expression:
+    """No SQL Server, coluna BIT vira predicado em condição e predicado vira 1/0 como valor."""
+    is_predicate = not isinstance(value, exp.Column | exp.Literal | exp.Case | exp.Cast)
+    if condition:
+        return value if is_predicate else exp.EQ(this=value, expression=exp.Literal.number(1))
+    if not is_predicate:
+        return value
+    return exp.Case(
+        ifs=[
+            exp.If(this=value.copy(), true=exp.Literal.number(1)),
+            exp.If(this=exp.Not(this=exp.Paren(this=value.copy())), true=exp.Literal.number(0)),
+        ]
+    )
 
 
 def _and(a: str | None, b: str | None) -> str | None:

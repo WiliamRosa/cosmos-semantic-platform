@@ -55,7 +55,8 @@ def generate(
             {
                 "product_id": i,
                 "name": f"{fake.word().capitalize()} {fake.word()}",
-                "category": rng.choice(CATEGORIES),
+                # ~5% sem categoria: testa dimensões nulas
+                "category": None if rng.random() < 0.05 else rng.choice(CATEGORIES),
                 "list_price": round(rng.uniform(15, 2_500), 2),
             }
         )
@@ -71,7 +72,9 @@ def generate(
                 "email": f"cliente{i}@{fake.free_email_domain()}",
                 "state": state,
                 "region": region,
-                "segment": rng.choices(["Varejo", "PME", "Corporativo"], weights=[70, 22, 8])[0],
+                "segment": rng.choices(
+                    ["Varejo", "PME", "Corporativo", None], weights=[68, 22, 7, 3]
+                )[0],
                 "health_plan": rng.choices(["Nenhum", "Básico", "Premium"], weights=[55, 30, 15])[
                     0
                 ],

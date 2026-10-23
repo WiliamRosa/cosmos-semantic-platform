@@ -95,20 +95,38 @@ def substitute(
     template: Template,
     resolve_ref: Callable[[str], exp.Expression],
     resolve_user: Callable[[str], exp.Expression] | None = None,
+    *,
+    resolve_condition: Callable[[str], exp.Expression] | None = None,
 ) -> exp.Expression:
-    refs = [resolve_ref(r) for r in template.refs]
+    """Troca os marcadores pelas expressões resolvidas.
+
+    ``resolve_condition`` resolve referências usadas como condição (sozinhas, ou sob AND, OR e
+    NOT). No SQL Server um booleano não é valor: como condição ele é um predicado, como valor
+    vira CASE. Nos outros dialetos as duas formas coincidem.
+    """
+    tree = template.tree.copy()
     users = [resolve_user(u) for u in template.user_fields] if resolve_user else []
 
     def swap(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Column) and not node.table:
             name = node.name
             if name.startswith(_REF_PREFIX):
-                return refs[int(name[len(_REF_PREFIX) :])].copy()
+                ref = template.refs[int(name[len(_REF_PREFIX) :])]
+                if resolve_condition and _in_condition(node):
+                    return resolve_condition(ref)
+                return resolve_ref(ref)
             if name.startswith(_USER_PREFIX):
                 return users[int(name[len(_USER_PREFIX) :])].copy()
         return node
 
-    return template.tree.copy().transform(swap)
+    return tree.transform(swap, copy=False)
+
+
+def _in_condition(node: exp.Expression) -> bool:
+    parent = node.parent
+    while isinstance(parent, exp.Paren):
+        node, parent = parent, parent.parent
+    return parent is None or isinstance(parent, exp.And | exp.Or | exp.Not | exp.Where | exp.If)
 
 
 def qualify(text: str, alias: str, dialect: str) -> exp.Expression:

@@ -898,6 +898,19 @@
       "title": "Version",
       "type": "integer"
     },
+    "timezone": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Fuso do negócio, como `America/Sao_Paulo`. Define o \"hoje\" de regras e filtros com CURRENT_DATE, igual em qualquer origem. Padrão: UTC.",
+      "title": "Timezone"
+    },
     "semantic_models": {
       "default": [],
       "items": {

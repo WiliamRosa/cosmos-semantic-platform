@@ -191,6 +191,13 @@ class Project(_Base):
     """Um arquivo (ou o conjunto de arquivos) do modelo semântico."""
 
     version: Literal[1] = Field(description="Versão do formato de autoria.")
+    timezone: str | None = Field(
+        None,
+        description=(
+            'Fuso do negócio, como `America/Sao_Paulo`. Define o "hoje" de regras e filtros com '
+            "CURRENT_DATE, igual em qualquer origem. Padrão: UTC."
+        ),
+    )
     semantic_models: list[SemanticModel] = []
     metrics: list[Metric] = []
     user_context: dict[Name, UserContextField] = {}

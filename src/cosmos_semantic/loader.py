@@ -26,7 +26,7 @@ def load_file(path: Path) -> Project:
 
 def merge(projects: list[Project]) -> Project:
     """Junta vários arquivos num único projeto; nomes duplicados são checados no compilador."""
-    merged: dict = {"version": 1, "user_context": {}, "custom_extensions": {}}
+    merged: dict = {"version": 1, "user_context": {}, "custom_extensions": {}, "timezone": None}
     for key in _LIST_KEYS:
         merged[key] = []
     for project in projects:
@@ -37,6 +37,10 @@ def merge(projects: list[Project]) -> Project:
                 raise ModelError(f"user_context.{name} declarado de formas diferentes")
             merged["user_context"][name] = field
         merged["custom_extensions"].update(project.custom_extensions)
+        if project.timezone:
+            if merged["timezone"] and merged["timezone"] != project.timezone:
+                raise ModelError("arquivos do modelo declaram fusos diferentes em `timezone`")
+            merged["timezone"] = project.timezone
     return Project.model_construct(**merged)
 
 

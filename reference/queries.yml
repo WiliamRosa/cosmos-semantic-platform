@@ -102,7 +102,7 @@ cases:
         FROM public.customers WHERE region = 'Sul' GROUP BY segment
       )
       SELECT c.segment AS customers__segment, o.revenue, c.customer_count
-      FROM c LEFT JOIN o ON o.segment = c.segment
+      FROM c LEFT JOIN o ON o.segment IS NOT DISTINCT FROM c.segment
 
   # -- Métrica simples e granularidade de tempo -------------------------------
   - id: R05
@@ -301,7 +301,7 @@ cases:
       tsql: |
         SELECT segment AS customers__segment, COUNT(DISTINCT customer_id) AS customer_count
         FROM public.customers
-        WHERE last_order_at >= DATEADD(day, -90, GETDATE()) AND region = 'Sudeste'
+        WHERE last_order_at >= DATEADD(day, -90, CAST(GETDATE() AS DATE)) AND region = 'Sudeste'
         GROUP BY segment
 
   # -- Filtro por linha e LGPD -----------------------------------------------

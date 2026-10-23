@@ -254,6 +254,14 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
                 )
             )
 
+    if project.timezone:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(project.timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            err("timezone", f"fuso `{project.timezone}` desconhecido; use um nome IANA")
+
     data_sources = {m.data_source for m in project.semantic_models}
     if len(data_sources) > 1:
         warn("semantic_models", "há mais de uma origem; consultas não cruzam origens")

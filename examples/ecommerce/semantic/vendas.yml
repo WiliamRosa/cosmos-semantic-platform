@@ -19,6 +19,10 @@ semantic_models:
       - name: status
         type: categorical
         description: completed, canceled ou pending
+      - name: has_discount
+        type: boolean
+        expr: discount > 0
+        description: O pedido teve desconto
     measures:
       - name: order_count
         agg: count
@@ -60,6 +64,13 @@ semantic_models:
         agg: sum
         expr: quantity * unit_price
         description: Valor dos itens antes de desconto
+      - name: avg_quantity
+        agg: avg
+        expr: quantity
+        description: Unidades médias por item (média de coluna inteira)
+      - name: line_count
+        agg: count
+        description: Número de itens
 
   - name: payments
     table: public.payments
@@ -106,6 +117,24 @@ metrics:
     type: derived
     expr: "{net_revenue} - {paid_value}"
     description: Receita líquida ainda não paga (cruza pedidos e pagamentos)
+  - name: discount_rate
+    type: ratio
+    numerator: discounts
+    denominator: revenue
+    description: Desconto sobre a receita bruta
+  - name: orders_per_buyer
+    type: derived
+    expr: "{order_count} / {buyers}"
+    description: Pedidos por comprador (divisão entre contagens inteiras)
+  - name: items_per_order
+    type: derived
+    expr: "{items_sold} / {order_count}"
+    description: Unidades por pedido (cruza itens e pedidos)
+  - name: revenue_year_to_date
+    type: cumulative
+    measure: revenue
+    grain_to_date: year
+    description: Receita acumulada no ano
   - name: revenue_month_to_date
     type: cumulative
     measure: revenue

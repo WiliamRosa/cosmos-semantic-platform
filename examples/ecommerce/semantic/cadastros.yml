@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=../../../schema/cosmos-semantic.v1.schema.json
 version: 1
+timezone: America/Sao_Paulo
 
 user_context:
   region:

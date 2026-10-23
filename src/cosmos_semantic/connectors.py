@@ -182,7 +182,7 @@ class ADBCPostgresConnector(Connector):
                     f"SET LOCAL statement_timeout = {int(self.config.timeout_seconds) * 1000}"
                 )
                 cur.execute(sql)
-                return _read_limited(cur.fetch_record_batch(), fetch_limit)
+                return _postgres_numeric(_read_limited(cur.fetch_record_batch(), fetch_limit))
         finally:
             self._con.rollback()
 
@@ -266,6 +266,33 @@ class SQLAlchemyConnector(Connector):
 
     def close(self) -> None:
         self._engine.dispose()
+
+
+def _postgres_numeric(table: pa.Table) -> pa.Table:
+    """O driver ADBC entrega NUMERIC do Postgres como texto (tipo opaco). Converte para decimal
+    exato, com a escala dos próprios valores; se não couber em 38 dígitos, usa float64."""
+    import decimal
+
+    for i, field in enumerate(table.schema):
+        if (field.metadata or {}).get(b"ADBC:postgresql:typname") != b"numeric":
+            continue
+        column = table.column(i)
+        if isinstance(column.type, pa.ExtensionType):
+            column = pa.chunked_array(
+                [chunk.storage for chunk in column.chunks], type=column.type.storage_type
+            )
+        values = [
+            None if t is None or t == "NaN" else decimal.Decimal(t) for t in column.to_pylist()
+        ]
+        known = [v.as_tuple() for v in values if v is not None]
+        scale = max((max(-t.exponent, 0) for t in known), default=0)
+        whole = max((max(len(t.digits) + t.exponent, 1) for t in known), default=1)
+        if scale <= 18 and whole + scale <= 38:
+            array = pa.array(values, type=pa.decimal128(38, scale))
+        else:
+            array = pa.array([None if v is None else float(v) for v in values], type=pa.float64())
+        table = table.set_column(i, pa.field(field.name, array.type), array)
+    return table
 
 
 def _loadable_path(path: str) -> str:

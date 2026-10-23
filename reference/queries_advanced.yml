@@ -1,0 +1,438 @@
+# Bateria avançada: casos onde os bancos costumam divergir.
+#
+# O SQL escrito à mão define a semântica que o motor promete em qualquer origem:
+# - divisão sempre real (nunca inteira) e protegida contra zero;
+# - média de coluna inteira é média real;
+# - semana começa na segunda-feira (ISO);
+# - nulos vêm por último na ordenação, e dimensões nulas formam um grupo próprio;
+# - booleanos chegam como verdadeiro/falso (1/0 no SQL Server).
+
+cases:
+  - id: A01
+    category: tipos
+    phase: 1
+    title: Dimensão booleana (pedido com desconto)
+    request:
+      metrics: [order_count, revenue]
+      dimensions: [orders.has_discount]
+    sql: |
+      SELECT discount > 0 AS orders__has_discount, COUNT(*) AS order_count, SUM(amount) AS revenue
+      FROM public.orders GROUP BY discount > 0
+    sql_by_dialect:
+      tsql: |
+        SELECT CASE WHEN discount > 0 THEN 1 ELSE 0 END AS orders__has_discount,
+               COUNT(*) AS order_count, SUM(amount) AS revenue
+        FROM public.orders GROUP BY CASE WHEN discount > 0 THEN 1 ELSE 0 END
+
+  - id: A02
+    category: tipos
+    phase: 1
+    title: Média de coluna inteira por categoria (com categoria nula e acentos)
+    request:
+      metrics: [avg_quantity, line_count]
+      dimensions: [products.category]
+    sql: |
+      SELECT p.category AS products__category,
+             AVG(CAST(i.quantity AS DOUBLE PRECISION)) AS avg_quantity, COUNT(*) AS line_count
+      FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+      GROUP BY p.category
+    sql_by_dialect:
+      tsql: |
+        SELECT p.category AS products__category,
+               AVG(CAST(i.quantity AS FLOAT)) AS avg_quantity, COUNT(*) AS line_count
+        FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+        GROUP BY p.category
+
+  - id: A03
+    category: tipos
+    phase: 1
+    title: Divisão entre contagens inteiras (pedidos por comprador) por segmento nulo ou não
+    request:
+      metrics: [orders_per_buyer]
+      dimensions: [customers.segment]
+    user: { region: Sul }
+    sql: |
+      SELECT c.segment AS customers__segment,
+             CAST(COUNT(*) AS DOUBLE PRECISION) / NULLIF(COUNT(DISTINCT o.customer_id), 0) AS orders_per_buyer
+      FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+      WHERE c.region = 'Sul'
+      GROUP BY c.segment
+    sql_by_dialect:
+      tsql: |
+        SELECT c.segment AS customers__segment,
+               CAST(COUNT(*) AS FLOAT) / NULLIF(COUNT(DISTINCT o.customer_id), 0) AS orders_per_buyer
+        FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE c.region = 'Sul'
+        GROUP BY c.segment
+
+  - id: A04
+    category: tipos
+    phase: 1
+    title: Derivada entre modelos com divisão (unidades por pedido)
+    request:
+      metrics: [items_per_order]
+      dimensions: [orders.status]
+    sql: |
+      WITH i AS (
+        SELECT o.status, SUM(i.quantity) AS items
+        FROM public.order_items i JOIN public.orders o ON o.order_id = i.order_id GROUP BY o.status
+      ), o AS (SELECT status, COUNT(*) AS n FROM public.orders GROUP BY status)
+      SELECT o.status AS orders__status, CAST(i.items AS DOUBLE PRECISION) / NULLIF(o.n, 0) AS items_per_order
+      FROM o LEFT JOIN i ON i.status = o.status
+    sql_by_dialect:
+      tsql: |
+        WITH i AS (
+          SELECT o.status, SUM(i.quantity) AS items
+          FROM public.order_items i JOIN public.orders o ON o.order_id = i.order_id GROUP BY o.status
+        ), o AS (SELECT status, COUNT(*) AS n FROM public.orders GROUP BY status)
+        SELECT o.status AS orders__status, CAST(i.items AS FLOAT) / NULLIF(o.n, 0) AS items_per_order
+        FROM o LEFT JOIN i ON i.status = o.status
+
+  - id: A05
+    category: tempo
+    phase: 1
+    title: Razão por trimestre
+    request:
+      metrics: [discount_rate]
+      dimensions: [orders.ordered_at__quarter]
+    sql: |
+      SELECT DATE_TRUNC('quarter', ordered_at) AS orders__ordered_at__quarter,
+             CAST(SUM(discount) AS DOUBLE PRECISION) / NULLIF(SUM(amount), 0) AS discount_rate
+      FROM public.orders GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT DATETRUNC(quarter, ordered_at) AS orders__ordered_at__quarter,
+               CAST(SUM(discount) AS FLOAT) / NULLIF(SUM(amount), 0) AS discount_rate
+        FROM public.orders GROUP BY DATETRUNC(quarter, ordered_at)
+
+  - id: A06
+    category: tempo
+    phase: 1
+    title: Semana começa na segunda-feira em todos os bancos
+    request:
+      metrics: [order_count]
+      dimensions: [orders.ordered_at__week]
+    sql: |
+      SELECT DATE_TRUNC('week', ordered_at) AS orders__ordered_at__week, COUNT(*) AS order_count
+      FROM public.orders GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT CAST(DATEADD(day, -((DATEPART(weekday, ordered_at) + @@DATEFIRST - 2) % 7), CAST(ordered_at AS DATE)) AS DATETIME2) AS orders__ordered_at__week,
+               COUNT(*) AS order_count
+        FROM public.orders
+        GROUP BY CAST(DATEADD(day, -((DATEPART(weekday, ordered_at) + @@DATEFIRST - 2) % 7), CAST(ordered_at AS DATE)) AS DATETIME2)
+
+  - id: A07
+    category: tempo
+    phase: 1
+    title: Granularidade de hora nos últimos 60 dias
+    request:
+      metrics: [order_count]
+      dimensions: [orders.ordered_at__hour]
+      filters: ["{orders.ordered_at} >= CURRENT_DATE - INTERVAL '60' DAY"]
+    sql: |
+      SELECT DATE_TRUNC('hour', ordered_at) AS orders__ordered_at__hour, COUNT(*) AS order_count
+      FROM public.orders WHERE ordered_at >= CURRENT_DATE - INTERVAL '60' DAY GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT DATETRUNC(hour, ordered_at) AS orders__ordered_at__hour, COUNT(*) AS order_count
+        FROM public.orders WHERE ordered_at >= DATEADD(day, -60, CAST(GETDATE() AS DATE))
+        GROUP BY DATETRUNC(hour, ordered_at)
+
+  - id: A08
+    category: tempo
+    phase: 1
+    title: Acumulado no ano por mês
+    request:
+      metrics: [revenue_year_to_date]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      WITH m AS (SELECT DATE_TRUNC('month', ordered_at) AS m, SUM(amount) AS r FROM public.orders GROUP BY 1)
+      SELECT m AS orders__ordered_at__month,
+             SUM(r) OVER (PARTITION BY DATE_TRUNC('year', m) ORDER BY m) AS revenue_year_to_date
+      FROM m
+    sql_by_dialect:
+      tsql: |
+        WITH m AS (SELECT DATETRUNC(month, ordered_at) AS m, SUM(amount) AS r FROM public.orders GROUP BY DATETRUNC(month, ordered_at))
+        SELECT m AS orders__ordered_at__month,
+               SUM(r) OVER (PARTITION BY DATETRUNC(year, m) ORDER BY m ROWS UNBOUNDED PRECEDING) AS revenue_year_to_date
+        FROM m
+
+  - id: A09
+    category: tempo
+    phase: 1
+    title: Acumulado no mês por status e dia (janela com partição extra)
+    request:
+      metrics: [revenue_month_to_date]
+      dimensions: [orders.status, orders.ordered_at__day]
+      filters: ["{orders.ordered_at} >= CURRENT_DATE - INTERVAL '45' DAY"]
+    sql: |
+      WITH d AS (
+        SELECT status, DATE_TRUNC('day', ordered_at) AS d, SUM(amount) AS r
+        FROM public.orders WHERE ordered_at >= CURRENT_DATE - INTERVAL '45' DAY GROUP BY 1, 2
+      )
+      SELECT status AS orders__status, d AS orders__ordered_at__day,
+             SUM(r) OVER (PARTITION BY status, DATE_TRUNC('month', d) ORDER BY d) AS revenue_month_to_date
+      FROM d
+    sql_by_dialect:
+      tsql: |
+        WITH d AS (
+          SELECT status, DATETRUNC(day, ordered_at) AS d, SUM(amount) AS r
+          FROM public.orders WHERE ordered_at >= DATEADD(day, -45, CAST(GETDATE() AS DATE))
+          GROUP BY status, DATETRUNC(day, ordered_at)
+        )
+        SELECT status AS orders__status, d AS orders__ordered_at__day,
+               SUM(r) OVER (PARTITION BY status, DATETRUNC(month, d) ORDER BY d ROWS UNBOUNDED PRECEDING) AS revenue_month_to_date
+        FROM d
+
+  - id: A10
+    category: regras
+    phase: 1
+    title: Regra de classificação (tabela de decisão) como agrupamento, a partir de pagamentos
+    request:
+      metrics: [paid_value, payment_count]
+      dimensions: [orders.faixa_pedido]
+    sql: |
+      SELECT CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+               AS orders__faixa_pedido,
+             SUM(p.value) AS paid_value, COUNT(*) AS payment_count
+      FROM public.payments p JOIN public.orders o ON o.order_id = p.order_id
+      GROUP BY CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+
+  - id: A11
+    category: regras
+    phase: 1
+    title: Regra de outro modelo como filtro, mais classificação e filtro por linha
+    request:
+      metrics: [revenue, order_count]
+      dimensions: [orders.faixa_pedido]
+      filters: ["{rule.cliente_ativo}"]
+    user: { region: Sudeste }
+    sql: |
+      SELECT CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+               AS orders__faixa_pedido,
+             SUM(o.amount) AS revenue, COUNT(*) AS order_count
+      FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
+      WHERE c.last_order_at >= CURRENT_DATE - INTERVAL '90' DAY AND c.region = 'Sudeste'
+      GROUP BY CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+    sql_by_dialect:
+      tsql: |
+        SELECT CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+                 AS orders__faixa_pedido,
+               SUM(o.amount) AS revenue, COUNT(*) AS order_count
+        FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE c.last_order_at >= DATEADD(day, -90, CAST(GETDATE() AS DATE)) AND c.region = 'Sudeste'
+        GROUP BY CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+
+  - id: A12
+    category: regras
+    phase: 1
+    title: Regra derivada (valor líquido) usada em filtro numérico
+    request:
+      metrics: [order_count]
+      dimensions: [orders.status]
+      filters: ["{orders.valor_liquido_pedido} > 3000"]
+    sql: |
+      SELECT status AS orders__status, COUNT(*) AS order_count
+      FROM public.orders WHERE amount - discount > 3000 GROUP BY status
+
+  - id: A13
+    category: filtros
+    phase: 1
+    title: Filtro BETWEEN em dimensão numérica
+    request:
+      metrics: [paid_value, payment_count]
+      dimensions: [payments.method]
+      filters: ["{payments.installments} BETWEEN 2 AND 6"]
+    sql: |
+      SELECT method AS payments__method, SUM(value) AS paid_value, COUNT(*) AS payment_count
+      FROM public.payments WHERE installments BETWEEN 2 AND 6 GROUP BY method
+
+  - id: A14
+    category: filtros
+    phase: 1
+    title: LIKE, OR com IS NULL e NOT, atravessando dois modelos
+    request:
+      metrics: [item_revenue]
+      dimensions: [products.category]
+      filters:
+        - "({products.category} LIKE 'E%' OR {products.category} IS NULL) AND NOT {orders.status} = 'canceled'"
+    sql: |
+      SELECT p.category AS products__category, SUM(i.quantity * i.unit_price) AS item_revenue
+      FROM public.order_items i
+      LEFT JOIN public.products p ON p.product_id = i.product_id
+      LEFT JOIN public.orders o ON o.order_id = i.order_id
+      WHERE (p.category LIKE 'E%' OR p.category IS NULL) AND NOT o.status = 'canceled'
+      GROUP BY p.category
+
+  - id: A15
+    category: filtros
+    phase: 1
+    title: Grupo de dimensão nula com IN e IS NULL
+    request:
+      metrics: [customer_count, revenue]
+      dimensions: [customers.segment]
+      filters: ["{customers.segment} IN ('PME', 'Corporativo') OR {customers.segment} IS NULL"]
+    user: { region: Sul }
+    sql: |
+      WITH c AS (
+        SELECT segment, COUNT(DISTINCT customer_id) AS customer_count FROM public.customers
+        WHERE region = 'Sul' AND (segment IN ('PME', 'Corporativo') OR segment IS NULL) GROUP BY segment
+      ), o AS (
+        SELECT c.segment, SUM(o.amount) AS revenue
+        FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE c.region = 'Sul' AND (c.segment IN ('PME', 'Corporativo') OR c.segment IS NULL) GROUP BY c.segment
+      )
+      SELECT c.segment AS customers__segment, c.customer_count, o.revenue
+      FROM c LEFT JOIN o ON o.segment IS NOT DISTINCT FROM c.segment
+
+  - id: A16
+    category: ordenacao
+    phase: 1
+    title: Top 3 por ordem alfabética com categoria nula (nulos por último)
+    request:
+      metrics: [item_revenue]
+      dimensions: [products.category]
+      order_by: [products.category]
+      limit: 3
+    sql: |
+      SELECT p.category AS products__category, SUM(i.quantity * i.unit_price) AS item_revenue
+      FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+      GROUP BY p.category ORDER BY p.category ASC NULLS LAST LIMIT 3
+    sql_by_dialect:
+      tsql: |
+        SELECT TOP 3 p.category AS products__category, SUM(i.quantity * i.unit_price) AS item_revenue
+        FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+        GROUP BY p.category ORDER BY CASE WHEN p.category IS NULL THEN 1 ELSE 0 END, p.category
+
+  - id: A17
+    category: ordenacao
+    phase: 1
+    title: Top 4 em ordem decrescente de dimensão numérica com nulos por último
+    request:
+      metrics: [paid_value]
+      dimensions: [payments.installments]
+      order_by: [-payments.installments]
+      limit: 4
+    sql: |
+      SELECT installments AS payments__installments, SUM(value) AS paid_value
+      FROM public.payments GROUP BY installments ORDER BY installments DESC NULLS LAST LIMIT 4
+    sql_by_dialect:
+      tsql: |
+        SELECT TOP 4 installments AS payments__installments, SUM(value) AS paid_value
+        FROM public.payments GROUP BY installments
+        ORDER BY CASE WHEN installments IS NULL THEN 1 ELSE 0 END, installments DESC
+
+  - id: A18
+    category: vazio
+    phase: 1
+    title: Usuário de região sem clientes recebe resultado vazio, sem erro
+    request:
+      metrics: [revenue]
+      dimensions: [customers.region]
+    user: { region: Atlântida }
+    expect_empty: true
+    sql: |
+      SELECT c.region AS customers__region, SUM(o.amount) AS revenue
+      FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
+      WHERE c.region = 'Atlântida' GROUP BY c.region
+
+  - id: A19
+    category: vazio
+    phase: 1
+    title: Total de dois modelos sem dimensões e sem linhas vira uma linha de nulos
+    request:
+      metrics: [revenue, paid_value]
+      filters: ["{orders.status} = 'inexistente'"]
+    sql: |
+      SELECT (SELECT SUM(amount) FROM public.orders WHERE status = 'inexistente') AS revenue,
+             (SELECT SUM(p.value) FROM public.payments p JOIN public.orders o ON o.order_id = p.order_id
+              WHERE o.status = 'inexistente') AS paid_value
+
+  - id: A20
+    category: fan-out
+    phase: 1
+    title: Três contagens distintas em três grãos, dimensão de dois saltos
+    request:
+      metrics: [buyers, customer_count, line_count]
+      dimensions: [customers.region]
+    user: { region: Nordeste }
+    sql: |
+      WITH b AS (
+        SELECT c.region, COUNT(DISTINCT o.customer_id) AS buyers
+        FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE c.region = 'Nordeste' GROUP BY c.region
+      ), cc AS (
+        SELECT region, COUNT(DISTINCT customer_id) AS customer_count
+        FROM public.customers WHERE region = 'Nordeste' GROUP BY region
+      ), l AS (
+        SELECT c.region, COUNT(*) AS line_count
+        FROM public.order_items i
+        JOIN public.orders o ON o.order_id = i.order_id
+        JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE c.region = 'Nordeste' GROUP BY c.region
+      )
+      SELECT cc.region AS customers__region, b.buyers, cc.customer_count, l.line_count
+      FROM cc LEFT JOIN b ON b.region = cc.region LEFT JOIN l ON l.region = cc.region
+
+  - id: A21
+    category: fan-out
+    phase: 1
+    title: Filtro booleano mais métrica filtrada por ano
+    request:
+      metrics: [completed_revenue, revenue]
+      dimensions: [orders.ordered_at__year]
+      filters: ["{orders.has_discount}"]
+    sql: |
+      SELECT DATE_TRUNC('year', ordered_at) AS orders__ordered_at__year,
+             SUM(CASE WHEN status = 'completed' THEN amount END) AS completed_revenue,
+             SUM(amount) AS revenue
+      FROM public.orders WHERE discount > 0 GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT DATETRUNC(year, ordered_at) AS orders__ordered_at__year,
+               SUM(CASE WHEN status = 'completed' THEN amount END) AS completed_revenue,
+               SUM(amount) AS revenue
+        FROM public.orders WHERE discount > 0 GROUP BY DATETRUNC(year, ordered_at)
+
+  - id: A22
+    category: politicas
+    phase: 1
+    title: Aplicação (não agente) pode agrupar por dado sensível, com acentos
+    request:
+      metrics: [customer_count]
+      dimensions: [customers.health_plan]
+    user: { region: Sul }
+    channel: api
+    sql: |
+      SELECT health_plan AS customers__health_plan, COUNT(DISTINCT customer_id) AS customer_count
+      FROM public.customers WHERE region = 'Sul' GROUP BY health_plan
+
+  - id: A23
+    category: joins
+    phase: 1
+    title: Duas dimensões de ramos diferentes (cliente e vendedor) a partir do item
+    request:
+      metrics: [line_count, item_revenue]
+      dimensions: [customers.region, sellers.region]
+    user: { region: Centro-Oeste }
+    sql: |
+      SELECT c.region AS customers__region, s.region AS sellers__region,
+             COUNT(*) AS line_count, SUM(i.quantity * i.unit_price) AS item_revenue
+      FROM public.order_items i
+      JOIN public.orders o ON o.order_id = i.order_id
+      JOIN public.customers c ON c.customer_id = o.customer_id
+      JOIN public.sellers s ON s.seller_id = i.seller_id
+      WHERE c.region = 'Centro-Oeste'
+      GROUP BY c.region, s.region
+
+  - id: A24
+    category: politicas
+    phase: 1
+    title: Agente não filtra por regra que usa dado sensível nem por e-mail
+    request:
+      metrics: [customer_count]
+      filters: ["{customers.email} LIKE '%@gmail.com'"]
+    user: { region: Sul }
+    channel: mcp
+    expect_error: PolicyError
