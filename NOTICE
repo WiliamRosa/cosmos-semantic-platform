@@ -1,0 +1,9 @@
+Cosmos Semantic
+Copyright 2026 Wiliam Rosa
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product depends on third-party open source software, distributed under their own
+licenses, including SQLGlot (MIT), Apache Arrow (Apache 2.0), Pydantic (MIT), DuckDB (MIT),
+FastAPI (MIT) and the Model Context Protocol Python SDK (MIT). See each package's metadata for
+its license text.

@@ -142,3 +142,7 @@ tests/fixtures/      example models in dbt, Ossie and Cube
 deploy/              local docker compose
 docs/                documentation and ADRs
 ```
+
+## License and contributing
+
+The core is licensed under [Apache 2.0](LICENSE) ([ADR 0005](docs/decisions/0005-open-core.md)). Contributions are welcome under the Developer Certificate of Origin; see [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
