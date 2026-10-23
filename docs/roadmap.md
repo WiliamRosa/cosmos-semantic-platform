@@ -1,6 +1,6 @@
 # Roadmap
 
-**Status on 2026-10-22:** phases 0 and 1 are implemented. The 18 basic and 24 advanced reference queries return the same result as hand-written SQL on DuckDB, Postgres and SQL Server; 80 random requests return identical numbers across the three databases; and the 2 synonym-only questions resolve through the glossary. Databricks validation (gates 1 and 2) is deferred by decision ([ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md)); development continues on DuckDB, Postgres and SQL Server, and the gates stay formally open. Phase 2 is in progress. Cube import moved into phase 1, with an equivalence test: the imported model returns the same numbers as the native one.
+**Status on 2026-10-23:** phases 0, 1 and 2 are implemented; phase 3 is in progress. The 18 basic and 24 advanced reference queries return the same result as hand-written SQL on DuckDB, Postgres and SQL Server; 80 random requests return identical numbers across the three databases; and the 2 synonym-only questions resolve through the glossary. Databricks validation (gates 1 and 2) is deferred by decision ([ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md)); development continues on DuckDB, Postgres and SQL Server, and the gates stay formally open. Cube import moved into phase 1, with an equivalence test: the imported model returns the same numbers as the native one.
 
 Durations are estimates for one person and must be recalibrated at the end of each phase. Project rule: one differentiator per phase, beyond the core.
 
@@ -39,7 +39,7 @@ Durations are estimates for one person and must be recalibrated at the end of ea
 
 An advanced suite of 24 more cases covers where databases disagree (integer division, integer averages, ISO weeks, null ordering, booleans, empty results), and a randomized test compares 80 requests across databases. TPC-H at a larger scale will cover performance. The Olist dataset is excluded because its license is non-commercial.
 
-## Phase 2: verifiable numbers (6–8 weeks) — in progress
+## Phase 2: verifiable numbers (6–8 weeks) — done
 
 Redefined by [ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md). Every item is validated on DuckDB, Postgres and SQL Server.
 
@@ -52,20 +52,32 @@ Redefined by [ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentia
 
 **Exit criterion:** reconciliation finds and explains every planted divergence on the three databases; replaying an audited query returns the same result and hashes; first external users run the open core with their own models.
 
-## Phase 3: paid product (ongoing)
+## Phase 3: business context (8–10 weeks) — in progress
 
-- Ossie export with a round-trip test; Cube and dbt export, with a round-trip test for Cube (moved from phase 2).
+Redefined by [ADR 0009](decisions/0009-business-context-as-phase-3-differentiator.md): the connected BI and managed product phases are paused. Every item is validated on DuckDB, Postgres and SQL Server.
+
+- **Phase differentiator: business context.**
+    1. **Rule versions** (done): `history` on a rule; a query uses the version in effect on `rules_as_of` (default `as_of`); the evidence envelope names the version and its tests.
+    2. **Usage and cost report** (`cosmos usage`): per metric, principal and channel, from the audit log, with configurable rates per data source.
+    3. **Expanded knowledge graph:** teams, systems and processes linked to metrics, rules and models; impact grouped by owner; graph export.
+    4. **Power BI import** (`.bim` and TMDL): simple DAX measures become metrics; the rest becomes warnings.
+    5. **AI-assisted discovery:** suggestions validated by the engine and written as a reviewable YAML change.
+    6. **Retail pack:** the e-commerce example as an industry pack, mapped onto a customer's tables.
+
+**Exit criterion:** a past number can be recomputed under the rule that was in effect and under today's rule; every metric can be traced to an owner, a system and its usage cost; a Power BI model imports with an equivalence test.
+
+## Phase 4: connected BI and managed product — paused
+
+- Ossie export with a round-trip test; Cube and dbt export, with a round-trip test for Cube.
 - Result cache.
 - A Postgres-compatible SQL endpoint, for Power BI, Tableau and Excel.
 - Control plane: editor, playground, connections, users.
 - Managed hosting on Azure, SSO with Entra ID, auditing.
 
-## On the radar (phase after next)
+## On the radar
 
-- **AI-assisted semantic discovery:** synonym, rule and description suggestions, always approved by a person (a pull request with the generated YAML).
-- **Expanded knowledge graph:** processes, systems and owners beyond rules.
-- **Industry semantic packs:** starting from the e-commerce example as a retail seed, only with validated demand.
-- Other differentiator candidates, one at a time: importing Power BI models, cost per metric and per agent, querying with past versions of business rules, exporting the glossary as SKOS/RDF for data catalogs.
+- Exporting the glossary as SKOS/RDF for data catalogs.
+- More industry packs, only with validated demand.
 
 Not planned: governance of agent actions (it changes the product from reading to acting).
 
@@ -76,7 +88,8 @@ Not planned: governance of agent actions (it changes the product from reading to
 - [x] Trademark conflict with Azure Cosmos DB: name kept; repository `cosmos-semantic-platform`.
 - [x] Connectors, data source order, identity and authoring format ([ADR 0007](decisions/0007-connectors-sources-identity-and-import.md)).
 - [x] Phase 2 differentiator: verifiable numbers ([ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md)).
+- [x] Phase 3 differentiator: business context; connected BI and managed product paused ([ADR 0009](decisions/0009-business-context-as-phase-3-differentiator.md)).
 - [ ] Databricks validation (gates 1 and 2): deferred, formally open.
 - [ ] Free hosted edition limits and commercial pricing (to revisit later).
-- [ ] Result cache technology (phase 3).
+- [ ] Result cache technology (phase 4).
 - [ ] Build the SQL endpoint, or keep export to Cube as the official BI path.

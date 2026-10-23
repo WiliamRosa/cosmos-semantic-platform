@@ -45,6 +45,19 @@
           "description": "Since when the current version applies.",
           "title": "Effective From"
         },
+        "change_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What changed in the current version.",
+          "title": "Change Note"
+        },
         "description": {
           "anyOf": [
             {
@@ -110,6 +123,15 @@
             "$ref": "#/$defs/RuleTest"
           },
           "title": "Tests",
+          "type": "array"
+        },
+        "history": {
+          "default": [],
+          "description": "Earlier versions. A query uses the version in effect on its `rules_as_of` date (default: `as_of`); inputs and bindings are shared by all versions.",
+          "items": {
+            "$ref": "#/$defs/RuleVersion"
+          },
+          "title": "History",
           "type": "array"
         }
       },
@@ -712,6 +734,83 @@
         "expect"
       ],
       "title": "RuleTest",
+      "type": "object"
+    },
+    "RuleVersion": {
+      "additionalProperties": false,
+      "description": "An earlier version of a business rule, kept so past numbers can be recomputed.",
+      "properties": {
+        "effective_from": {
+          "description": "Since when this version applied.",
+          "format": "date",
+          "title": "Effective From",
+          "type": "string"
+        },
+        "change_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why the next version replaced it.",
+          "title": "Change Note"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "logic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Logic"
+        },
+        "decision_table": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/DecisionRow"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decision Table"
+        },
+        "tests": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RuleTest"
+          },
+          "title": "Tests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "effective_from"
+      ],
+      "title": "RuleVersion",
       "type": "object"
     },
     "SemanticModel": {

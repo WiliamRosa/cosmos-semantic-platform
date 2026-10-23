@@ -127,6 +127,15 @@ class Catalog:
                 "applies_to": [b.model for b in rule.applies_to],
                 "concepts": self._concepts(f"rule:{name}"),
                 "text": _rule_text(rule),
+                "history": [
+                    {
+                        "effective_from": old.effective_from.isoformat(),
+                        "logic": rule_logic(old),
+                        "change_note": old.change_note,
+                    }
+                    for old in reversed(rule.versions()[:-1])
+                ],
+                "change_note": rule.change_note,
             }
         if kind in ("", "metric") and name in g.metrics:
             metric = g.metrics[name]
@@ -200,4 +209,10 @@ def _rule_text(rule) -> str:
         what = "classifies as " + "; ".join(rows)
     else:
         what = f"computes {rule.logic}"
-    return f"{rule.description or rule.name}: {what}{owner}{since}."
+    changed = (
+        f" It has {len(rule.history)} earlier version(s); queries use the one in effect on "
+        "their `rules_as_of` date."
+        if rule.history
+        else ""
+    )
+    return f"{rule.description or rule.name}: {what}{owner}{since}.{changed}"

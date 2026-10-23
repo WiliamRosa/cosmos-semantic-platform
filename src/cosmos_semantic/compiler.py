@@ -79,6 +79,8 @@ class SemanticGraph:
         self.edges: dict[str, list[JoinEdge]] = defaultdict(list)
         self.rules: dict[str, BusinessRule] = {}
         self.rule_models: dict[str, list[str]] = {}
+        # (rule, model) -> rule input -> bound SQL expression, shared by every rule version
+        self.rule_bindings: dict[tuple[str, str], dict[str, str]] = {}
         self.issues: list[Issue] = []
 
     # -- graph lookups -------------------------------------------------------

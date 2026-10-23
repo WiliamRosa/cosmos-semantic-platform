@@ -27,7 +27,7 @@ from cosmos_semantic.expressions import (
     substitute,
     table_ref,
 )
-from cosmos_semantic.ontology import RULE_DIALECT
+from cosmos_semantic.ontology import RULE_DIALECT, bind_rule, rule_logic
 from cosmos_semantic.spec import (
     CumulativeMetric,
     DerivedMetric,
@@ -50,6 +50,13 @@ class QueryRequest(BaseModel):
     as_of: dt.date | None = Field(
         None,
         description="Reference date for CURRENT_DATE; default: today in the model's time zone.",
+    )
+    rules_as_of: dt.date | None = Field(
+        None,
+        description=(
+            "Business rule versions in effect on this date; default: `as_of`. Set it to today "
+            "to apply the current rules to a past date, or to a past date for the old rules."
+        ),
     )
 
 
@@ -81,6 +88,7 @@ class CompiledQuery:
     data_source: str | None
     models: list[str]
     as_of: dt.date | None = None
+    rules_as_of: dt.date | None = None
     trace: QueryTrace = field(default_factory=lambda: QueryTrace())
 
 
@@ -90,6 +98,8 @@ class QueryTrace:
 
     measures: dict[str, list[str | None]] = field(default_factory=dict)
     rules: dict[str, set[str]] = field(default_factory=dict)
+    # rule -> effective_from of the version used (None: an unversioned rule)
+    rule_versions: dict[str, dt.date | None] = field(default_factory=dict)
     row_filters: list[dict[str, Any]] = field(default_factory=list)
     joins: list[dict[str, str]] = field(default_factory=list)
     one_to_many: list[dict[str, Any]] = field(default_factory=list)
@@ -148,6 +158,9 @@ class Planner:
         principal = principal or Principal()
         g = self.graph
         self._trace = QueryTrace()
+        now = self.now()
+        as_of = request.as_of or now.date()
+        self._rules_as_of = request.rules_as_of or as_of
 
         dims = [g.resolve_dimension(d) for d in request.dimensions]
         if len({d.alias for d in dims}) != len(dims):
@@ -182,8 +195,6 @@ class Planner:
             used_models |= joined
 
         final = self._final_select(ctes, dims, metric_exprs, cumulative, request)
-        now = self.now()
-        as_of = request.as_of or now.date()
         clock = now if request.as_of is None else dt.datetime.combine(request.as_of, dt.time())
         final = _pin_clock(final, as_of, clock)
         columns = [OutputColumn(d.alias, "dimension", _dim_member(d)) for d in dims] + [
@@ -196,8 +207,16 @@ class Planner:
             data_source=next(iter(data_sources)) if data_sources else None,
             models=sorted(used_models),
             as_of=as_of,
+            rules_as_of=self._rules_as_of,
             trace=self._trace,
         )
+
+    def _rule_expr(self, ref: DimensionRef) -> str:
+        """The rule version in effect on ``rules_as_of``, bound to the model's columns."""
+        rule = self.graph.rules[ref.name]
+        version = rule.version_at(self._rules_as_of)
+        self._trace.rule_versions[ref.name] = version.effective_from
+        return bind_rule(rule_logic(version), self.graph.rule_bindings[(ref.name, ref.model)])
 
     def _check_sensitivity(self, ref: DimensionRef, principal: Principal) -> None:
         level = self.graph.dimension(ref).sensitivity
@@ -316,12 +335,13 @@ class Planner:
                 )
             need(ref.model)
             dim = g.dimension(ref)
+            expr, read = dim.expr or dim.name, self.dialect
             if ref.model in g.rule_models.get(ref.name, ()):
                 self._trace.rules.setdefault(ref.name, set()).add(
                     "filter" if condition else "value"
                 )
-            read = RULE_DIALECT if ref.model in g.rule_models.get(ref.name, ()) else self.dialect
-            column = qualify(dim.expr or dim.name, ref.model, read)
+                expr, read = self._rule_expr(ref), RULE_DIALECT
+            column = qualify(expr, ref.model, read)
             if ref.grain:
                 column = self._trunc(column, ref.grain)
             if dim.type == "boolean" and self.dialect == "tsql":

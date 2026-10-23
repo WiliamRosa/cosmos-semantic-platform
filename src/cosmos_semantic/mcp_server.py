@@ -93,6 +93,8 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
         filters: list[str] | None = None,
         order_by: list[str] | None = None,
         limit: int | None = None,
+        as_of: str | None = None,
+        rules_as_of: str | None = None,
     ) -> dict[str, Any]:
         def run():
             request = QueryRequest(
@@ -101,6 +103,8 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
                 filters=filters or [],
                 order_by=order_by or [],
                 limit=limit,
+                as_of=as_of,
+                rules_as_of=rules_as_of,
             )
             return service.query(request, principal(ctx), max_rows=MAX_ROWS_FOR_AGENTS)
 

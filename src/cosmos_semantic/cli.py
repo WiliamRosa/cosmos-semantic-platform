@@ -55,7 +55,9 @@ def _principal(user: list[str] | None, channel: str = "cli") -> Principal:
     return Principal(user=values, channel=channel)  # type: ignore[arg-type]
 
 
-def _request(metrics: list[str], dimensions, filters, order_by, limit, as_of) -> QueryRequest:
+def _request(
+    metrics: list[str], dimensions, filters, order_by, limit, as_of, rules_as_of=None
+) -> QueryRequest:
     return QueryRequest(
         metrics=metrics,
         dimensions=dimensions or [],
@@ -63,6 +65,7 @@ def _request(metrics: list[str], dimensions, filters, order_by, limit, as_of) ->
         order_by=order_by or [],
         limit=limit,
         as_of=dt.date.fromisoformat(as_of) if as_of else None,
+        rules_as_of=dt.date.fromisoformat(rules_as_of) if rules_as_of else None,
     )
 
 
@@ -73,6 +76,12 @@ OrderOpt = Annotated[
 ]
 LimitOpt = Annotated[int | None, typer.Option("--limit", "-l")]
 AsOfOpt = Annotated[str | None, typer.Option("--as-of", help="Reference date YYYY-MM-DD.")]
+RulesAsOfOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--rules-as-of", help="Use the business rule versions in effect on this date (YYYY-MM-DD)."
+    ),
+]
 AgentOpt = Annotated[bool, typer.Option(help="Query as an AI agent (MCP channel).")]
 
 
@@ -121,6 +130,7 @@ def sql(
     order_by: OrderOpt = None,
     limit: LimitOpt = None,
     as_of: AsOfOpt = None,
+    rules_as_of: RulesAsOfOpt = None,
     user: UserOpt = None,
     agent: AgentOpt = False,
 ) -> None:
@@ -128,7 +138,7 @@ def sql(
     try:
         engine = Engine.from_paths(model, load_connections(connections))
         compiled = engine.compile(
-            _request(metrics, dimension, filter, order_by, limit, as_of),
+            _request(metrics, dimension, filter, order_by, limit, as_of, rules_as_of),
             _principal(user, "mcp" if agent else "cli"),
         )
     except errors.CosmosError as exc:
@@ -146,6 +156,7 @@ def query(
     order_by: OrderOpt = None,
     limit: LimitOpt = None,
     as_of: AsOfOpt = None,
+    rules_as_of: RulesAsOfOpt = None,
     user: UserOpt = None,
     agent: AgentOpt = False,
     show_sql: Annotated[bool, typer.Option("--show-sql")] = False,
@@ -165,7 +176,7 @@ def query(
     try:
         engine = Engine.from_paths(model, load_connections(connections))
         result = SemanticService(engine).query(
-            _request(metrics, dimension, filter, order_by, limit, as_of),
+            _request(metrics, dimension, filter, order_by, limit, as_of, rules_as_of),
             _principal(user, "mcp" if agent else "cli"),
         )
     except errors.CosmosError as exc:
@@ -209,8 +220,8 @@ def _print_evidence(ev: dict) -> None:
     for r in ev["rules"]:
         out(
             f"  rule    {r['name']} ({r['kind']}, {', '.join(r['used_as'])}) owner={r['owner']} "
-            f"since={r['effective_from']} tests={r['tests']['status']} "
-            f"{r['tests']['passed']}/{r['tests']['total']}"
+            f"since={r['effective_from']}{'' if r['current_version'] else ' (earlier version)'} "
+            f"tests={r['tests']['status']} {r['tests']['passed']}/{r['tests']['total']}"
         )
     for f in ev["policies"]["row_filters"]:
         out(f"  policy  {f['model']}.{f['name']}: {f['filter']} {f['user_fields']}")

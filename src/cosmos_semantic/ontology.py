@@ -3,6 +3,9 @@
 Each rule becomes a virtual dimension on every model in ``applies_to`` (boolean for
 ``predicate``, categorical for ``classification``, numeric for ``derived``), so it can be used
 as a grouping (``customers.active_customer``) or as a filter (``{rule.active_customer}``).
+
+A rule may keep earlier versions in ``history``. The dimension holds the current version; the
+planner swaps in the version in effect on the query's ``rules_as_of`` date (``bind_rule``).
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 import sqlglot
 from sqlglot import exp
 
-from cosmos_semantic.spec import BusinessRule, Concept, Dimension, Project
+from cosmos_semantic.spec import BusinessRule, Concept, Dimension, Project, RuleVersion
 
 if TYPE_CHECKING:
     from cosmos_semantic.compiler import SemanticGraph
@@ -31,7 +34,7 @@ RULE_DIALECT = "postgres"
 # -- rules -----------------------------------------------------------------
 
 
-def rule_logic(rule: BusinessRule) -> str:
+def rule_logic(rule: BusinessRule | RuleVersion) -> str:
     """The rule's SQL logic with ``{input}`` placeholders; decision tables become CASE WHEN."""
     if rule.decision_table is None:
         assert rule.logic is not None
@@ -43,6 +46,11 @@ def rule_logic(rule: BusinessRule) -> str:
         else:
             parts.append(f"WHEN {row.when} THEN {_quote(row.then)}")
     return f"CASE {' '.join(parts)} ELSE {default} END"
+
+
+def bind_rule(logic: str, exprs: dict[str, str]) -> str:
+    """Replaces ``{input}`` placeholders with the bound column expressions."""
+    return _INPUT_RE.sub(lambda m: f"({exprs[m.group(1)]})", logic)
 
 
 def _quote(value: str | None) -> str:
@@ -61,19 +69,9 @@ def attach_rules(g: SemanticGraph, err, warn) -> None:
             warn(loc, "no `owner`: set the team or person responsible for the rule")
         if not rule.effective_from:
             warn(loc, "no `effective_from`: set since when the rule applies")
-        if rule.decision_table is not None and not any(
-            r.otherwise is not None for r in rule.decision_table
-        ):
-            err(loc, "decision table without `otherwise`")
-        logic = rule_logic(rule)
-        used = set(_INPUT_RE.findall(logic))
-        for name in used - set(rule.inputs):
-            err(loc, f"the logic uses `{{{name}}}`, which is not in `inputs`")
-        try:
-            sqlglot.parse_one(_INPUT_RE.sub(lambda m: m.group(1), logic), read=RULE_DIALECT)
-        except sqlglot.errors.ParseError as exc:
-            err(loc, f"invalid logic: {exc}")
+        if not all([_check_version(rule, v, loc, err) for v in rule.versions()]):
             continue
+        logic = rule_logic(rule)
         for binding in rule.applies_to:
             node = g.models.get(binding.model)
             if node is None:
@@ -100,15 +98,33 @@ def attach_rules(g: SemanticGraph, err, warn) -> None:
                         level = dim.sensitivity
                 else:
                     exprs[name] = target
-            expr = _INPUT_RE.sub(lambda m, e=exprs: f"({e[m.group(1)]})", logic)
+            g.rule_bindings[(rule.name, binding.model)] = exprs
             node.dimensions[rule.name] = Dimension(
                 name=rule.name,
                 type=_RESULT_TYPE[rule.kind],  # type: ignore[arg-type]
-                expr=expr,
+                expr=bind_rule(logic, exprs),
                 description=rule.description or f"Business rule `{rule.name}`",
                 sensitivity=level,
             )
             g.rule_models[rule.name].append(binding.model)
+
+
+def _check_version(rule: BusinessRule, version: RuleVersion, loc: str, err) -> bool:
+    if rule.history:
+        loc = f"{loc}@{version.effective_from}"
+    if version.decision_table is not None and not any(
+        r.otherwise is not None for r in version.decision_table
+    ):
+        err(loc, "decision table without `otherwise`")
+    logic = rule_logic(version)
+    for name in set(_INPUT_RE.findall(logic)) - set(rule.inputs):
+        err(loc, f"the logic uses `{{{name}}}`, which is not in `inputs`")
+    try:
+        sqlglot.parse_one(_INPUT_RE.sub(lambda m: m.group(1), logic), read=RULE_DIALECT)
+    except sqlglot.errors.ParseError as exc:
+        err(loc, f"invalid logic: {exc}")
+        return False
+    return True
 
 
 def _type_mismatch(declared: str, actual: str) -> bool:
@@ -121,6 +137,7 @@ class RuleTestResult:
     index: int
     passed: bool
     detail: str
+    version: dt.date | None = None
 
 
 def run_rule_tests(project: Project) -> list[RuleTestResult]:
@@ -130,40 +147,46 @@ def run_rule_tests(project: Project) -> list[RuleTestResult]:
     con = duckdb.connect()
     results = []
     for rule in project.business_rules:
-        logic = rule_logic(rule)
-        for i, test in enumerate(rule.tests):
-            missing = set(rule.inputs) - set(test.given)
-            if missing:
-                results.append(
-                    RuleTestResult(
-                        rule.name, i, False, f"missing inputs: {', '.join(sorted(missing))}"
-                    )
-                )
-                continue
-            text = _INPUT_RE.sub(
-                lambda m, t=test, r=rule: _literal(r.inputs[m.group(1)], t.given[m.group(1)]),
-                logic,
-            )
-            tree = sqlglot.parse_one(text, read=RULE_DIALECT)
-            if test.today:
-                today = exp.cast(exp.Literal.string(test.today.isoformat()), "DATE")
-                tree = tree.transform(
-                    lambda n, d=today: (
-                        d.copy() if isinstance(n, exp.CurrentDate | exp.CurrentTimestamp) else n
-                    )
-                )
-            try:
-                got = con.execute(f"SELECT {tree.sql(dialect='duckdb')}").fetchone()[0]
-            except duckdb.Error as exc:
-                results.append(RuleTestResult(rule.name, i, False, str(exc)))
-                continue
-            ok = _same(got, test.expect)
+        for version in rule.versions():
+            results += _run_version_tests(con, rule, version)
+    con.close()
+    return results
+
+
+def _run_version_tests(con, rule: BusinessRule, version: RuleVersion) -> list[RuleTestResult]:
+    import duckdb
+
+    results = []
+    logic = rule_logic(version)
+    on = version.effective_from
+    for i, test in enumerate(version.tests):
+        missing = set(rule.inputs) - set(test.given)
+        if missing:
             results.append(
                 RuleTestResult(
-                    rule.name, i, ok, "" if ok else f"expected {test.expect!r}, got {got!r}"
+                    rule.name, i, False, f"missing inputs: {', '.join(sorted(missing))}", on
                 )
             )
-    con.close()
+            continue
+        text = _INPUT_RE.sub(
+            lambda m, t=test: _literal(rule.inputs[m.group(1)], t.given[m.group(1)]), logic
+        )
+        tree = sqlglot.parse_one(text, read=RULE_DIALECT)
+        if test.today:
+            today = exp.cast(exp.Literal.string(test.today.isoformat()), "DATE")
+            tree = tree.transform(
+                lambda n, d=today: (
+                    d.copy() if isinstance(n, exp.CurrentDate | exp.CurrentTimestamp) else n
+                )
+            )
+        try:
+            got = con.execute(f"SELECT {tree.sql(dialect='duckdb')}").fetchone()[0]
+        except duckdb.Error as exc:
+            results.append(RuleTestResult(rule.name, i, False, str(exc), on))
+            continue
+        ok = _same(got, test.expect)
+        detail = "" if ok else f"expected {test.expect!r}, got {got!r}"
+        results.append(RuleTestResult(rule.name, i, ok, detail, on))
     return results
 
 

@@ -213,7 +213,8 @@ business_rules:
   - name: active_customer
     kind: predicate
     owner: sales-leadership
-    effective_from: 2026-01-01
+    effective_from: 2026-07-01
+    change_note: Window widened from 60 to 90 days to match the quarterly sales cycle
     description: Customer with a purchase in the last 90 days
     inputs:
       last_purchase: time
@@ -228,6 +229,14 @@ business_rules:
       - given: { last_purchase: 2026-05-01 }
         today: 2026-10-16
         expect: false
+    history:
+      - effective_from: 2026-01-01
+        description: Customer with a purchase in the last 60 days
+        logic: "{last_purchase} >= CURRENT_DATE - INTERVAL '60' DAY"
+        tests:
+          - given: { last_purchase: 2026-05-01 }
+            today: 2026-06-15
+            expect: true
 
   - name: order_size_band
     kind: classification
@@ -256,15 +265,21 @@ business_rules:
 | --- | --- | --- |
 | `name`, `kind` | Yes | Unique name and kind |
 | `owner` | Recommended (validation warns) | Team or person responsible for the rule |
-| `effective_from` | Recommended (validation warns) | Since when the current version applies |
+| `effective_from` | Recommended (validation warns); required with `history` | Since when the current version applies |
+| `change_note` | No | What changed in this version |
 | `inputs` | Yes | Named, typed inputs |
 | `logic` or `decision_table` | Yes | An expression, or a decision table (only for `classification`) |
 | `applies_to` | Yes | Models where the rule applies, with the mapping from inputs to columns or dimensions |
 | `tests` | Recommended | Input examples and expected outputs, run in CI by `cosmos test` |
+| `history` | No | Earlier versions, each with `effective_from`, its own `logic` or `decision_table`, `tests` and an optional `change_note`. Inputs and `applies_to` are shared by all versions |
+
+### Rule versions
+
+A query uses the version in effect on its `rules_as_of` date, which defaults to `as_of` (itself "today" in the model's time zone). So "active customers on 2026-06-30" counts with the 60-day rule that was in effect then, and `rules_as_of: 2026-10-23` recomputes that date with today's 90-day rule; the difference between the two is exactly the effect of the rule change. A date before the first version uses the first version. The evidence envelope names the version used, flags a non-current version as a caveat and reports the test status of that version; `cosmos explain rule:active_customer` lists the history. In the CLI: `cosmos query customer_count -w "{rule.active_customer}" --as-of 2026-06-30 --rules-as-of 2026-10-23`.
 
 A rule inherits the LGPD classification of the columns it reads: a rule over sensitive data is also denied to agents.
 
-**How a question goes through the ontology:** "quantos compradores ativos temos no Midwest?" (how many active buyers in the South?) → the synonym "comprador ativo" leads to the concept `active_customer` → defined by the rule `active_customer` → which becomes a filter on `customers`. `CURRENT_DATE` is replaced by the business date, so the result is the same on every database:
+**How a question goes through the ontology:** "how many active buyers do we have in the Midwest?" (or, in Portuguese, "quantos compradores ativos temos no Midwest?") → the synonym "active buyer" ("comprador ativo") leads to the concept `active_customer` → defined by the rule `active_customer` → which becomes a filter on `customers`. `CURRENT_DATE` is replaced by the business date, so the result is the same on every database:
 
 ```sql
 WITH customers_agg AS (
@@ -276,7 +291,7 @@ WITH customers_agg AS (
 SELECT customers_agg.customer_count AS customer_count FROM customers_agg
 ```
 
-**Limits:** rules only use columns of the row (classifications over aggregates need a summary model); queries always use the current version of a rule; the glossary does no logical inference.
+**Limits:** rules only use columns of the row (classifications over aggregates need a summary model); the glossary does no logical inference.
 
 ## The SQL the engine generates
 

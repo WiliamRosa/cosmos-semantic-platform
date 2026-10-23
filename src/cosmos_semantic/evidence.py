@@ -94,10 +94,13 @@ class EvidenceBuilder:
         return model_hash(self.graph)
 
     @cached_property
-    def rule_tests(self) -> dict[str, dict[str, Any]]:
-        status: dict[str, dict[str, Any]] = {}
+    def rule_tests(self) -> dict[tuple[str, dt.date | None], dict[str, Any]]:
+        """Test status per rule version."""
+        status: dict[tuple[str, dt.date | None], dict[str, Any]] = {}
         for result in run_rule_tests(self.graph.project):
-            entry = status.setdefault(result.rule, {"total": 0, "passed": 0, "failures": []})
+            entry = status.setdefault(
+                (result.rule, result.version), {"total": 0, "passed": 0, "failures": []}
+            )
             entry["total"] += 1
             entry["passed"] += result.passed
             if not result.passed:
@@ -128,7 +131,10 @@ class EvidenceBuilder:
         rules = []
         for name, uses in sorted(trace.rules.items()):
             rule = g.rules[name]
-            tests = self.rule_tests.get(name, {"total": 0, "passed": 0, "failures": []})
+            version = rule.version_at(compiled.rules_as_of or dt.date.today())
+            tests = self.rule_tests.get(
+                (name, version.effective_from), {"total": 0, "passed": 0, "failures": []}
+            )
             status = (
                 "untested"
                 if tests["total"] == 0
@@ -140,16 +146,24 @@ class EvidenceBuilder:
                 caveats.append(f"Rule `{name}` has {status} tests.")
             if not rule.owner or not rule.effective_from:
                 caveats.append(f"Rule `{name}` has no owner or effective date.")
+            current = version.effective_from == rule.effective_from
+            if not current:
+                caveats.append(
+                    f"Rule `{name}` used its version effective from {version.effective_from}, "
+                    f"not the current one (effective from {rule.effective_from})."
+                )
             rules.append(
                 {
                     "name": name,
                     "kind": rule.kind,
                     "used_as": sorted(uses),
                     "owner": rule.owner,
-                    "effective_from": rule.effective_from.isoformat()
-                    if rule.effective_from
+                    "effective_from": version.effective_from.isoformat()
+                    if version.effective_from
                     else None,
-                    "logic": rule_logic(rule),
+                    "current_version": current,
+                    "versions": len(rule.history) + 1,
+                    "logic": rule_logic(version),
                     "tests": {"status": status, "passed": tests["passed"], "total": tests["total"]},
                     "concepts": [c.concept for c in self.glossary.for_target(f"rule:{name}")],
                 }
@@ -175,6 +189,7 @@ class EvidenceBuilder:
             "engine_version": _engine_version(),
             "model_hash": self.model_hash,
             "as_of": compiled.as_of.isoformat() if compiled.as_of else None,
+            "rules_as_of": compiled.rules_as_of.isoformat() if compiled.rules_as_of else None,
             "timezone": g.project.timezone or "UTC",
             "data_source": {"name": data_source, "dialect": compiled.dialect},
             "request": request.model_dump(mode="json", exclude_defaults=True),

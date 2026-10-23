@@ -47,7 +47,8 @@ business_rules:
   - name: active_customer
     kind: predicate
     owner: sales-leadership
-    effective_from: 2026-01-01
+    effective_from: 2026-07-01
+    change_note: Window widened from 60 to 90 days to match the quarterly sales cycle
     description: Customer with a purchase in the last 90 days
     inputs:
       last_purchase: time
@@ -62,6 +63,17 @@ business_rules:
       - given: { last_purchase: 2026-05-01 }
         today: 2026-10-16
         expect: false
+    history:
+      - effective_from: 2026-01-01
+        description: Customer with a purchase in the last 60 days
+        logic: "{last_purchase} >= CURRENT_DATE - INTERVAL '60' DAY"
+        tests:
+          - given: { last_purchase: 2026-05-01 }
+            today: 2026-06-15
+            expect: true
+          - given: { last_purchase: 2026-04-01 }
+            today: 2026-06-15
+            expect: false
 
   - name: order_size_band
     kind: classification

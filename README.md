@@ -108,7 +108,7 @@ Editors validate and autocomplete model files through the JSON Schema in [schema
 | [Semantic model](docs/semantic-model.md) | The authoring format, the generated SQL and the exports |
 | [Interoperability](docs/interoperability.md) | Mapping to Apache Ossie, and dbt and Cube import |
 | [Roadmap](docs/roadmap.md) | Phases, MVP scope and exit criteria |
-| [Architecture decisions](docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator |
+| [Architecture decisions](docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product |
 
 ## Repository layout
 

@@ -164,6 +164,25 @@ class RuleTest(_Base):
     expect: Any
 
 
+class RuleVersion(_Base):
+    """An earlier version of a business rule, kept so past numbers can be recomputed."""
+
+    effective_from: dt.date = Field(description="Since when this version applied.")
+    change_note: str | None = Field(None, description="Why the next version replaced it.")
+    description: str | None = None
+    logic: str | None = None
+    decision_table: list[DecisionRow] | None = None
+    tests: list[RuleTest] = []
+
+
+def _check_logic(kind: str, logic: str | None, table: list[DecisionRow] | None, where: str) -> None:
+    if kind == "classification":
+        if (logic is None) == (table is None):
+            raise ValueError(f"{where}`classification` uses either `logic` or `decision_table`")
+    elif logic is None or table is not None:
+        raise ValueError(f"{where}`{kind}` uses `logic`")
+
+
 class BusinessRule(_Base):
     name: Name
     kind: Literal["predicate", "classification", "derived"]
@@ -173,21 +192,56 @@ class BusinessRule(_Base):
     effective_from: dt.date | None = Field(
         None, description="Since when the current version applies."
     )
+    change_note: str | None = Field(None, description="What changed in the current version.")
     description: str | None = None
     inputs: dict[str, Literal["categorical", "time", "number", "boolean"]]
     logic: str | None = None
     decision_table: list[DecisionRow] | None = None
     applies_to: list[RuleBinding]
     tests: list[RuleTest] = []
+    history: list[RuleVersion] = Field(
+        [],
+        description=(
+            "Earlier versions. A query uses the version in effect on its `rules_as_of` date "
+            "(default: `as_of`); inputs and bindings are shared by all versions."
+        ),
+    )
 
     @model_validator(mode="after")
     def _logic(self) -> BusinessRule:
-        if self.kind == "classification":
-            if (self.logic is None) == (self.decision_table is None):
-                raise ValueError("`classification` uses either `logic` or `decision_table`")
-        elif self.logic is None or self.decision_table is not None:
-            raise ValueError(f"`{self.kind}` uses `logic`")
+        _check_logic(self.kind, self.logic, self.decision_table, "")
+        for old in self.history:
+            where = f"history {old.effective_from}: "
+            _check_logic(self.kind, old.logic, old.decision_table, where)
+            if self.effective_from is None or old.effective_from >= self.effective_from:
+                raise ValueError(
+                    f"{where}earlier versions must start before the current `effective_from`"
+                )
+        dates = [old.effective_from for old in self.history]
+        if len(set(dates)) != len(dates):
+            raise ValueError("two versions in `history` share the same `effective_from`")
         return self
+
+    def versions(self) -> list[RuleVersion]:
+        """Every version, oldest first; the last one is the current version."""
+        current = RuleVersion.model_construct(
+            effective_from=self.effective_from,
+            change_note=self.change_note,
+            description=self.description,
+            logic=self.logic,
+            decision_table=self.decision_table,
+            tests=self.tests,
+        )
+        return [*sorted(self.history, key=lambda v: v.effective_from), current]
+
+    def version_at(self, day: dt.date) -> RuleVersion:
+        """The version in effect on ``day``; before the first version, the first one."""
+        versions = self.versions()
+        chosen = versions[0]
+        for version in versions:
+            if version.effective_from is not None and version.effective_from <= day:
+                chosen = version
+        return chosen if self.history else versions[-1]
 
 
 class Project(_Base):
