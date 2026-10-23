@@ -7,7 +7,7 @@ Durations are estimates for one person and must be recalibrated at the end of ea
 ## Phase 0: foundation (3–4 weeks) — done
 
 - v1 authoring format specification (`version: 1`), with a JSON Schema generated from the Pydantic models and the full [semantic model](semantic-model.md) example.
-- A pt_BR synthetic data generator (an e-commerce with customers, orders, items, payments and sellers, including CPF, e-mail and a sensitive field) and a set of 20 hand-written SQL reference queries.
+- A synthetic data generator (an e-commerce with customers, orders, items, payments and sellers, including a tax id, e-mail and a sensitive field; `en_US` by default, `pt_BR` with CPF for LGPD demos) and a set of 20 hand-written SQL reference queries.
 - An Arrow connector interface, with ADBC by default and SQLAlchemy as the fallback.
 - A planner prototype for simple single-model metrics, generating SQL for Postgres and Databricks.
 

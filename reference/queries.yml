@@ -14,18 +14,18 @@ cases:
     request:
       metrics: [revenue, paid_value]
       dimensions: [customers.region]
-    user: { region: Sudeste }
+    user: { region: Northeast }
     sql: |
       WITH o AS (
         SELECT c.region, SUM(o.amount) AS revenue
         FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
-        WHERE c.region = 'Sudeste' GROUP BY c.region
+        WHERE c.region = 'Northeast' GROUP BY c.region
       ), p AS (
         SELECT c.region, SUM(p.value) AS paid_value
         FROM public.payments p
         JOIN public.orders o ON o.order_id = p.order_id
         JOIN public.customers c ON c.customer_id = o.customer_id
-        WHERE c.region = 'Sudeste' GROUP BY c.region
+        WHERE c.region = 'Northeast' GROUP BY c.region
       )
       SELECT o.region AS customers__region, o.revenue, p.paid_value
       FROM o JOIN p ON p.region = o.region
@@ -91,15 +91,15 @@ cases:
     request:
       metrics: [revenue, customer_count]
       dimensions: [customers.segment]
-    user: { region: Sul }
+    user: { region: Midwest }
     sql: |
       WITH o AS (
         SELECT c.segment, SUM(o.amount) AS revenue
         FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
-        WHERE c.region = 'Sul' GROUP BY c.segment
+        WHERE c.region = 'Midwest' GROUP BY c.segment
       ), c AS (
         SELECT segment, COUNT(DISTINCT customer_id) AS customer_count
-        FROM public.customers WHERE region = 'Sul' GROUP BY segment
+        FROM public.customers WHERE region = 'Midwest' GROUP BY segment
       )
       SELECT c.segment AS customers__segment, o.revenue, c.customer_count
       FROM c LEFT JOIN o ON o.segment IS NOT DISTINCT FROM c.segment
@@ -167,13 +167,13 @@ cases:
     request:
       metrics: [item_revenue]
       dimensions: [customers.state]
-    user: { region: Nordeste }
+    user: { region: South }
     sql: |
       SELECT c.state AS customers__state, SUM(i.quantity * i.unit_price) AS item_revenue
       FROM public.order_items i
       JOIN public.orders o ON o.order_id = i.order_id
       JOIN public.customers c ON c.customer_id = o.customer_id
-      WHERE c.region = 'Nordeste'
+      WHERE c.region = 'South'
       GROUP BY c.state
 
   - id: R10
@@ -183,13 +183,13 @@ cases:
     request:
       metrics: [paid_value]
       dimensions: [customers.segment]
-    user: { region: Sul }
+    user: { region: Midwest }
     sql: |
       SELECT c.segment AS customers__segment, SUM(p.value) AS paid_value
       FROM public.payments p
       JOIN public.orders o ON o.order_id = p.order_id
       JOIN public.customers c ON c.customer_id = o.customer_id
-      WHERE c.region = 'Sul'
+      WHERE c.region = 'Midwest'
       GROUP BY c.segment
 
   # -- Ratio and derived metrics --------------------------------------------
@@ -266,13 +266,13 @@ cases:
       filters:
         - "{orders.status} = 'completed'"
         - "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '180' DAY"
-    user: { region: Sul }
+    user: { region: Midwest }
     sql: |
       SELECT c.state AS customers__state, SUM(o.amount) AS revenue
       FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
       WHERE o.status = 'completed'
         AND o.ordered_at >= CURRENT_DATE - INTERVAL '180' DAY
-        AND c.region = 'Sul'
+        AND c.region = 'Midwest'
       GROUP BY c.state
     sql_by_dialect:
       tsql: |
@@ -280,7 +280,7 @@ cases:
         FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
         WHERE o.status = 'completed'
           AND o.ordered_at >= DATEADD(day, -180, CAST(GETDATE() AS DATE))
-          AND c.region = 'Sul'
+          AND c.region = 'Midwest'
         GROUP BY c.state
 
   - id: R16
@@ -291,17 +291,17 @@ cases:
       metrics: [customer_count]
       dimensions: [customers.segment]
       filters: ["{rule.active_customer}"]
-    user: { region: Sudeste }
+    user: { region: Northeast }
     sql: |
       SELECT segment AS customers__segment, COUNT(DISTINCT customer_id) AS customer_count
       FROM public.customers
-      WHERE last_order_at >= CURRENT_DATE - INTERVAL '90' DAY AND region = 'Sudeste'
+      WHERE last_order_at >= CURRENT_DATE - INTERVAL '90' DAY AND region = 'Northeast'
       GROUP BY segment
     sql_by_dialect:
       tsql: |
         SELECT segment AS customers__segment, COUNT(DISTINCT customer_id) AS customer_count
         FROM public.customers
-        WHERE last_order_at >= DATEADD(day, -90, CAST(GETDATE() AS DATE)) AND region = 'Sudeste'
+        WHERE last_order_at >= DATEADD(day, -90, CAST(GETDATE() AS DATE)) AND region = 'Northeast'
         GROUP BY segment
 
   # -- Row filters and LGPD ------------------------------------------------
@@ -312,10 +312,10 @@ cases:
     request:
       metrics: [customer_count]
       dimensions: [customers.region]
-    user: { region: Norte }
+    user: { region: West }
     sql: |
       SELECT region AS customers__region, COUNT(DISTINCT customer_id) AS customer_count
-      FROM public.customers WHERE region = 'Norte' GROUP BY region
+      FROM public.customers WHERE region = 'West' GROUP BY region
 
   - id: R18
     category: policies
@@ -324,7 +324,7 @@ cases:
     request:
       metrics: [customer_count]
       dimensions: [customers.health_plan]
-    user: { region: Sul }
+    user: { region: Midwest }
     channel: mcp
     expect_error: PolicyError
 
@@ -332,13 +332,13 @@ cases:
   - id: R19
     category: glossary
     phase: 1
-    title: "Question in Portuguese: \"Quantos compradores ativos temos?\" (how many active buyers?)"
-    question: compradores ativos
+    title: "Agent question: \"How many active buyers do we have?\""
+    question: How many active buyers do we have?
     expect_maps_to: rule:active_customer
 
   - id: R20
     category: glossary
     phase: 1
-    title: "Question in Portuguese: \"Qual o faturamento líquido?\" (what is the net revenue?)"
-    question: faturamento líquido
+    title: "Agent question: \"What were our net sales?\""
+    question: What were our net sales?
     expect_maps_to: metric:net_revenue

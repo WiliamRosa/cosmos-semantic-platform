@@ -16,7 +16,7 @@ from cosmos_semantic.planner import Planner, Principal, QueryRequest
 from cosmos_semantic.spec import Project
 
 FIXTURES = Path(__file__).parent / "fixtures"
-SUL = Principal(user={"region": "Sul"})
+SUL = Principal(user={"region": "Midwest"})
 
 
 def rows(graph, connector, request: QueryRequest, principal=None):
@@ -91,7 +91,7 @@ def test_cube_joins_and_row_level_equivalence(graph, duckdb_connector):
         QueryRequest(
             metrics=["revenue", "customer_count"],
             dimensions=["customers.segment"],
-            filters=["{customers.region} = 'Sul'"],
+            filters=["{customers.region} = 'Midwest'"],
         ),
     )
     same(native, cube)
@@ -131,14 +131,14 @@ def test_dbt_reports_what_was_not_imported():
 
 def test_dbt_jinja_filter_becomes_reference(graph, duckdb_connector):
     other, _ = imported("dbt", FIXTURES / "dbt_legacy", schema="public")
-    assert other.metrics["sul_revenue"].filter == "{customers.region} = 'Sul'"
+    assert other.metrics["midwest_revenue"].filter == "{customers.region} = 'Midwest'"
     native = rows(
         graph,
         duckdb_connector,
         QueryRequest(metrics=["revenue"], dimensions=["customers.region"]),
         SUL,
     )
-    dbt = rows(other, duckdb_connector, QueryRequest(metrics=["sul_revenue"]))
+    dbt = rows(other, duckdb_connector, QueryRequest(metrics=["midwest_revenue"]))
     assert math.isclose(native[0][1], dbt[0][0], rel_tol=1e-6)
 
 

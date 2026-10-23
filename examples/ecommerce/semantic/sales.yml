@@ -85,7 +85,7 @@ semantic_models:
     dimensions:
       - name: method
         type: categorical
-        description: pix, cartao (card) or boleto (bank slip)
+        description: wallet, card or bank_transfer
       - name: installments
         type: number
       - name: paid_at

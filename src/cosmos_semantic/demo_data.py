@@ -1,9 +1,11 @@
-"""Synthetic data generator for a Brazilian e-commerce, for tests and demos.
+"""Synthetic e-commerce data for tests and demos.
 
 Deterministic given the seed and the anchor date: orders cover the 18 months before the
 anchor, so rules like "customer active in the last 90 days" always have cases on both sides.
-Includes CPF (Brazilian taxpayer id), e-mail and health plan to exercise LGPD rules. Values
-are in Portuguese on purpose: this is Brazilian data.
+Includes a tax id, e-mail and health plan to exercise personal-data (LGPD/GDPR) rules.
+
+The default locale is ``en_US``. ``pt_BR`` produces Brazilian data (CPF, Brazilian regions and
+Portuguese labels) for LGPD demos; the schema is the same in both.
 """
 
 from __future__ import annotations
@@ -14,40 +16,70 @@ from pathlib import Path
 
 import pyarrow as pa
 
-REGIONS = {
-    "Sul": ["RS", "SC", "PR"],
-    "Sudeste": ["SP", "RJ", "MG", "ES"],
-    "Centro-Oeste": ["DF", "GO", "MT", "MS"],
-    "Nordeste": ["BA", "PE", "CE", "MA", "PB", "RN", "AL", "SE", "PI"],
-    "Norte": ["AM", "PA", "RO", "TO", "AC", "AP", "RR"],
+LOCALES = {
+    "en_US": {
+        "regions": {
+            "Midwest": ["IL", "OH", "MI"],
+            "Northeast": ["NY", "NJ", "PA", "MA"],
+            "Mountain": ["CO", "AZ", "UT", "NV"],
+            "South": ["TX", "FL", "GA", "NC", "VA", "TN", "AL", "LA", "SC"],
+            "West": ["CA", "WA", "OR", "HI", "AK", "ID", "MT"],
+        },
+        "weights": [15, 42, 8, 27, 8],
+        # "Café" keeps an accented value in the default data: encodings differ across databases.
+        "categories": ["Electronics", "Home", "Fashion", "Sports", "Books", "Beauty", "Café"],
+        "segments": ["Consumer", "SMB", "Enterprise"],
+        "health_plans": ["None", "Basic", "Premium"],
+        "methods": ["wallet", "card", "bank_transfer"],
+        "email": "customer",
+    },
+    "pt_BR": {
+        "regions": {
+            "Sul": ["RS", "SC", "PR"],
+            "Sudeste": ["SP", "RJ", "MG", "ES"],
+            "Centro-Oeste": ["DF", "GO", "MT", "MS"],
+            "Nordeste": ["BA", "PE", "CE", "MA", "PB", "RN", "AL", "SE", "PI"],
+            "Norte": ["AM", "PA", "RO", "TO", "AC", "AP", "RR"],
+        },
+        "weights": [15, 42, 8, 27, 8],
+        "categories": ["Eletrônicos", "Casa", "Moda", "Esporte", "Livros", "Beleza", "Brinquedos"],
+        "segments": ["Varejo", "PME", "Corporativo"],
+        "health_plans": ["Nenhum", "Básico", "Premium"],
+        "methods": ["pix", "cartao", "boleto"],
+        "email": "cliente",
+    },
 }
-REGION_WEIGHTS = {"Sul": 15, "Sudeste": 42, "Centro-Oeste": 8, "Nordeste": 27, "Norte": 8}
-CATEGORIES = ["Eletrônicos", "Casa", "Moda", "Esporte", "Livros", "Beleza", "Brinquedos"]
 STATUSES = ["completed"] * 8 + ["canceled", "pending"]
-METHODS = ["pix", "cartao", "boleto"]
 
 TABLES = ("customers", "sellers", "products", "orders", "order_items", "payments")
 
 
-def _state_region(rng: random.Random) -> tuple[str, str]:
-    region = rng.choices(list(REGION_WEIGHTS), weights=list(REGION_WEIGHTS.values()))[0]
-    return rng.choice(REGIONS[region]), region
+def _state_region(rng: random.Random, values: dict) -> tuple[str, str]:
+    region = rng.choices(list(values["regions"]), weights=values["weights"])[0]
+    return rng.choice(values["regions"][region]), region
 
 
 def generate(
-    customers: int = 2_000, *, seed: int = 42, anchor: dt.date | None = None
+    customers: int = 2_000,
+    *,
+    seed: int = 42,
+    anchor: dt.date | None = None,
+    locale: str = "en_US",
 ) -> dict[str, pa.Table]:
     from faker import Faker
 
+    if locale not in LOCALES:
+        raise ValueError(f"unknown locale `{locale}`; use one of {', '.join(LOCALES)}")
+    values = LOCALES[locale]
     anchor = anchor or dt.date.today()
     rng = random.Random(seed)
-    fake = Faker("pt_BR")
+    fake = Faker(locale)
     fake.seed_instance(seed)
     start = anchor - dt.timedelta(days=540)
 
     sellers = []
     for i in range(1, max(customers // 20, 5) + 1):
-        state, region = _state_region(rng)
+        state, region = _state_region(rng, values)
         sellers.append({"seller_id": i, "name": fake.company(), "state": state, "region": region})
 
     products = []
@@ -57,28 +89,24 @@ def generate(
                 "product_id": i,
                 "name": f"{fake.word().capitalize()} {fake.word()}",
                 # ~5% without a category: exercises null dimensions
-                "category": None if rng.random() < 0.05 else rng.choice(CATEGORIES),
+                "category": None if rng.random() < 0.05 else rng.choice(values["categories"]),
                 "list_price": round(rng.uniform(15, 2_500), 2),
             }
         )
 
     customer_rows = []
     for i in range(1, customers + 1):
-        state, region = _state_region(rng)
+        state, region = _state_region(rng, values)
         customer_rows.append(
             {
                 "customer_id": i,
                 "name": fake.name(),
-                "cpf": fake.cpf(),
-                "email": f"cliente{i}@{fake.free_email_domain()}",
+                "tax_id": fake.cpf() if locale == "pt_BR" else fake.ssn(),
+                "email": f"{values['email']}{i}@{fake.free_email_domain()}",
                 "state": state,
                 "region": region,
-                "segment": rng.choices(
-                    ["Varejo", "PME", "Corporativo", None], weights=[68, 22, 7, 3]
-                )[0],
-                "health_plan": rng.choices(["Nenhum", "Básico", "Premium"], weights=[55, 30, 15])[
-                    0
-                ],
+                "segment": rng.choices([*values["segments"], None], weights=[68, 22, 7, 3])[0],
+                "health_plan": rng.choices(values["health_plans"], weights=[55, 30, 15])[0],
                 "created_at": start + dt.timedelta(days=rng.randint(-365, 300)),
                 "last_order_at": None,
             }
@@ -131,13 +159,15 @@ def generate(
             )
             for value in parts:
                 payment_id += 1
-                method = rng.choice(METHODS)
+                method = rng.choice(values["methods"])
                 payments.append(
                     {
                         "payment_id": payment_id,
                         "order_id": order_id,
                         "method": method,
-                        "installments": rng.choice([1, 2, 3, 6, 10]) if method == "cartao" else 1,
+                        "installments": rng.choice([1, 2, 3, 6, 10])
+                        if method == values["methods"][1]
+                        else 1,
                         "value": value,
                         "paid_at": ordered_at + dt.timedelta(hours=rng.randint(0, 72)),
                     }
@@ -151,7 +181,7 @@ def generate(
             [
                 ("customer_id", pa.int64()),
                 ("name", pa.string()),
-                ("cpf", pa.string()),
+                ("tax_id", pa.string()),
                 ("email", pa.string()),
                 ("state", pa.string()),
                 ("region", pa.string()),

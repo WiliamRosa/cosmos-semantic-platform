@@ -125,11 +125,11 @@ def test_missing_user_context_denies_query(graph):
 
 
 def test_agent_cannot_filter_by_personal_data(graph):
-    request = QueryRequest(metrics=["customer_count"], filters=["{customers.cpf} = '123'"])
+    request = QueryRequest(metrics=["customer_count"], filters=["{customers.tax_id} = '123'"])
     with pytest.raises(PolicyError, match="LGPD"):
-        Planner(graph).plan(request, Principal(user={"region": "Sul"}, channel="mcp"))
+        Planner(graph).plan(request, Principal(user={"region": "Midwest"}, channel="mcp"))
     # Applications (not agents) may filter by personal data
-    Planner(graph).plan(request, Principal(user={"region": "Sul"}, channel="api"))
+    Planner(graph).plan(request, Principal(user={"region": "Midwest"}, channel="api"))
 
 
 def test_unreachable_dimension_is_explained(graph):
@@ -157,7 +157,7 @@ def test_one_to_many_dimension_goes_through_a_distinct_bridge(graph):
 def test_filter_mixing_both_sides_is_refused(graph):
     request = QueryRequest(
         metrics=["revenue"],
-        filters=["{orders.status} = 'completed' OR {products.category} = 'Casa'"],
+        filters=["{orders.status} = 'completed' OR {products.category} = 'Home'"],
     )
     with pytest.raises(QueryError, match="split it"):
         Planner(graph).plan(request)
@@ -181,7 +181,7 @@ def test_sql_is_generated_for_every_dialect(graph, dialect):
             dimensions=["orders.ordered_at__month", "customers.region"],
             limit=10,
         ),
-        Principal(user={"region": "Sul"}),
+        Principal(user={"region": "Midwest"}),
     )
     assert compiled.dialect == dialect
     ensure_read_only(compiled.sql, dialect)

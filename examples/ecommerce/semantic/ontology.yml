@@ -6,41 +6,41 @@ version: 1
 
 glossary:
   - concept: customer
-    pref_label: { pt: Cliente, en: Customer }
+    pref_label: { en: Customer, pt: Cliente }
     alt_labels: { pt: [comprador, consumidor], en: [buyer, client] }
     definition: Registered person or company that can place orders
     maps_to: entity:customer
 
   - concept: active_customer
-    pref_label: { pt: Cliente ativo, en: Active customer }
+    pref_label: { en: Active customer, pt: Cliente ativo }
     alt_labels: { pt: [cliente recorrente, comprador ativo], en: [active buyer, recurring customer] }
     broader: customer
     definition: Customer with a purchase in the last 90 days
     maps_to: rule:active_customer
 
   - concept: gross_revenue
-    pref_label: { pt: Receita bruta, en: Gross revenue }
+    pref_label: { en: Gross revenue, pt: Receita bruta }
     alt_labels: { pt: [faturamento bruto, vendas], en: [sales] }
     definition: Sum of order values, before discounts
     maps_to: metric:revenue
 
   - concept: net_revenue
-    pref_label: { pt: Receita líquida, en: Net revenue }
+    pref_label: { en: Net revenue, pt: Receita líquida }
     alt_labels: { pt: [faturamento líquido], en: [net sales] }
     broader: gross_revenue
     definition: Gross revenue minus discounts
     maps_to: metric:net_revenue
 
   - concept: average_order_value
-    pref_label: { pt: Ticket médio, en: Average order value }
+    pref_label: { en: Average order value, pt: Ticket médio }
     alt_labels: { pt: [valor médio do pedido], en: [aov] }
     definition: Gross revenue divided by the number of orders
     maps_to: metric:average_order_value
 
   - concept: customer_region
-    pref_label: { pt: Região do cliente, en: Customer region }
+    pref_label: { en: Customer region, pt: Região do cliente }
     alt_labels: { pt: [região], en: [region] }
-    definition: Brazilian region where the customer lives
+    definition: Region where the customer lives
     maps_to: dimension:customers.region
 
 business_rules:
@@ -67,25 +67,25 @@ business_rules:
     kind: classification
     owner: sales-leadership
     effective_from: 2026-01-01
-    description: Order size band by gross value (band names are Brazilian business labels)
+    description: Order size band by gross value
     inputs:
       amount: number
     decision_table:
       - when: "{amount} >= 5000"
-        then: Grande
+        then: Large
       - when: "{amount} >= 1000"
-        then: Médio
-      - otherwise: Pequeno
+        then: Medium
+      - otherwise: Small
     applies_to:
       - model: orders
         bind: { amount: amount }
     tests:
       - given: { amount: 7200 }
-        expect: Grande
+        expect: Large
       - given: { amount: 1000 }
-        expect: Médio
+        expect: Medium
       - given: { amount: 80 }
-        expect: Pequeno
+        expect: Small
 
   - name: order_net_value
     kind: derived

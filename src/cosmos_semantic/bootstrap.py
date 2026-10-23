@@ -30,7 +30,7 @@ from cosmos_semantic.expressions import table_ref
 from cosmos_semantic.spec import Project
 
 PERSONAL = re.compile(
-    r"(^|_)(cpf|cnpj|rg|ssn|email|e_mail|phone|telefone|celular|mobile|address|endereco|"
+    r"(^|_)(cpf|cnpj|rg|ssn|tax_id|taxid|tax_number|nif|nino|email|e_mail|phone|telefone|celular|mobile|address|endereco|"
     r"cep|zip|birth|nascimento|passport|passaporte|full_name|nome_completo)($|_)"
 )
 SENSITIVE = re.compile(
@@ -277,7 +277,8 @@ class Bootstrapper:
                             f"match in {target_table}; an INNER JOIN would drop them"
                         )
                     continue
-                if lowered.endswith("_id") or lowered == "id":
+                # Other ids are technical, except personal identifiers such as tax_id.
+                if (lowered.endswith("_id") or lowered == "id") and not PERSONAL.search(lowered):
                     continue
                 name = _ident(column.name)
                 if column.kind == "number":

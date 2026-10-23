@@ -19,7 +19,7 @@ The complete, runnable model is in [examples/ecommerce/semantic](../examples/eco
 
 ```yaml
 version: 1
-timezone: America/Sao_Paulo
+timezone: America/New_York
 
 semantic_models:
   - name: orders
@@ -237,10 +237,10 @@ business_rules:
       amount: number
     decision_table:
       - when: "{amount} >= 5000"
-        then: Grande
+        then: Large
       - when: "{amount} >= 1000"
-        then: Médio
-      - otherwise: Pequeno
+        then: Medium
+      - otherwise: Small
     applies_to:
       - model: orders
         bind: { amount: amount }
@@ -264,14 +264,14 @@ business_rules:
 
 A rule inherits the LGPD classification of the columns it reads: a rule over sensitive data is also denied to agents.
 
-**How a question goes through the ontology:** "quantos compradores ativos temos no Sul?" (how many active buyers in the South?) → the synonym "comprador ativo" leads to the concept `active_customer` → defined by the rule `active_customer` → which becomes a filter on `customers`. `CURRENT_DATE` is replaced by the business date, so the result is the same on every database:
+**How a question goes through the ontology:** "quantos compradores ativos temos no Midwest?" (how many active buyers in the South?) → the synonym "comprador ativo" leads to the concept `active_customer` → defined by the rule `active_customer` → which becomes a filter on `customers`. `CURRENT_DATE` is replaced by the business date, so the result is the same on every database:
 
 ```sql
 WITH customers_agg AS (
   SELECT COUNT(DISTINCT customers.customer_id) AS customer_count
   FROM public.customers AS customers
   WHERE (customers.last_order_at) >= CAST('2026-10-22' AS DATE) + INTERVAL '-90 DAY'
-    AND customers.region = 'Sul'                       -- the user's row filter
+    AND customers.region = 'Midwest'                       -- the user's row filter
 )
 SELECT customers_agg.customer_count AS customer_count FROM customers_agg
 ```
@@ -293,7 +293,7 @@ WITH orders_agg AS (
     COUNT(*) AS order_count
   FROM public.orders AS orders
   LEFT JOIN public.customers AS customers ON orders.customer_id = customers.customer_id
-  WHERE customers.region = 'Sul'                       -- the user's row filter
+  WHERE customers.region = 'Midwest'                       -- the user's row filter
   GROUP BY DATE_TRUNC('MONTH', orders.ordered_at), customers.region
 )
 SELECT
@@ -311,14 +311,14 @@ WITH orders_agg AS (
   SELECT customers.region AS customers__region, SUM(orders.amount) AS revenue
   FROM public.orders AS orders
   LEFT JOIN public.customers AS customers ON orders.customer_id = customers.customer_id
-  WHERE customers.region = 'Sul'
+  WHERE customers.region = 'Midwest'
   GROUP BY customers.region
 ), payments_agg AS (
   SELECT customers.region AS customers__region, SUM(payments.value) AS paid_value
   FROM public.payments AS payments
   LEFT JOIN public.orders AS orders ON payments.order_id = orders.order_id
   LEFT JOIN public.customers AS customers ON orders.customer_id = customers.customer_id
-  WHERE customers.region = 'Sul'
+  WHERE customers.region = 'Midwest'
   GROUP BY customers.region
 ), dimensions AS (
   SELECT customers__region FROM orders_agg

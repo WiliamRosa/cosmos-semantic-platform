@@ -50,19 +50,19 @@ cases:
     request:
       metrics: [orders_per_buyer]
       dimensions: [customers.segment]
-    user: { region: Sul }
+    user: { region: Midwest }
     sql: |
       SELECT c.segment AS customers__segment,
              CAST(COUNT(*) AS DOUBLE PRECISION) / NULLIF(COUNT(DISTINCT o.customer_id), 0) AS orders_per_buyer
       FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
-      WHERE c.region = 'Sul'
+      WHERE c.region = 'Midwest'
       GROUP BY c.segment
     sql_by_dialect:
       tsql: |
         SELECT c.segment AS customers__segment,
                CAST(COUNT(*) AS FLOAT) / NULLIF(COUNT(DISTINCT o.customer_id), 0) AS orders_per_buyer
         FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
-        WHERE c.region = 'Sul'
+        WHERE c.region = 'Midwest'
         GROUP BY c.segment
 
   - id: A04
@@ -193,11 +193,11 @@ cases:
       metrics: [paid_value, payment_count]
       dimensions: [orders.order_size_band]
     sql: |
-      SELECT CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+      SELECT CASE WHEN o.amount >= 5000 THEN 'Large' WHEN o.amount >= 1000 THEN 'Medium' ELSE 'Small' END
                AS orders__order_size_band,
              SUM(p.value) AS paid_value, COUNT(*) AS payment_count
       FROM public.payments p JOIN public.orders o ON o.order_id = p.order_id
-      GROUP BY CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+      GROUP BY CASE WHEN o.amount >= 5000 THEN 'Large' WHEN o.amount >= 1000 THEN 'Medium' ELSE 'Small' END
 
   - id: A11
     category: regras
@@ -207,22 +207,22 @@ cases:
       metrics: [revenue, order_count]
       dimensions: [orders.order_size_band]
       filters: ["{rule.active_customer}"]
-    user: { region: Sudeste }
+    user: { region: Northeast }
     sql: |
-      SELECT CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+      SELECT CASE WHEN o.amount >= 5000 THEN 'Large' WHEN o.amount >= 1000 THEN 'Medium' ELSE 'Small' END
                AS orders__order_size_band,
              SUM(o.amount) AS revenue, COUNT(*) AS order_count
       FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
-      WHERE c.last_order_at >= CURRENT_DATE - INTERVAL '90' DAY AND c.region = 'Sudeste'
-      GROUP BY CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+      WHERE c.last_order_at >= CURRENT_DATE - INTERVAL '90' DAY AND c.region = 'Northeast'
+      GROUP BY CASE WHEN o.amount >= 5000 THEN 'Large' WHEN o.amount >= 1000 THEN 'Medium' ELSE 'Small' END
     sql_by_dialect:
       tsql: |
-        SELECT CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+        SELECT CASE WHEN o.amount >= 5000 THEN 'Large' WHEN o.amount >= 1000 THEN 'Medium' ELSE 'Small' END
                  AS orders__order_size_band,
                SUM(o.amount) AS revenue, COUNT(*) AS order_count
         FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
-        WHERE c.last_order_at >= DATEADD(day, -90, CAST(GETDATE() AS DATE)) AND c.region = 'Sudeste'
-        GROUP BY CASE WHEN o.amount >= 5000 THEN 'Grande' WHEN o.amount >= 1000 THEN 'Médio' ELSE 'Pequeno' END
+        WHERE c.last_order_at >= DATEADD(day, -90, CAST(GETDATE() AS DATE)) AND c.region = 'Northeast'
+        GROUP BY CASE WHEN o.amount >= 5000 THEN 'Large' WHEN o.amount >= 1000 THEN 'Medium' ELSE 'Small' END
 
   - id: A12
     category: regras
@@ -272,16 +272,16 @@ cases:
     request:
       metrics: [customer_count, revenue]
       dimensions: [customers.segment]
-      filters: ["{customers.segment} IN ('PME', 'Corporativo') OR {customers.segment} IS NULL"]
-    user: { region: Sul }
+      filters: ["{customers.segment} IN ('SMB', 'Enterprise') OR {customers.segment} IS NULL"]
+    user: { region: Midwest }
     sql: |
       WITH c AS (
         SELECT segment, COUNT(DISTINCT customer_id) AS customer_count FROM public.customers
-        WHERE region = 'Sul' AND (segment IN ('PME', 'Corporativo') OR segment IS NULL) GROUP BY segment
+        WHERE region = 'Midwest' AND (segment IN ('SMB', 'Enterprise') OR segment IS NULL) GROUP BY segment
       ), o AS (
         SELECT c.segment, SUM(o.amount) AS revenue
         FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
-        WHERE c.region = 'Sul' AND (c.segment IN ('PME', 'Corporativo') OR c.segment IS NULL) GROUP BY c.segment
+        WHERE c.region = 'Midwest' AND (c.segment IN ('SMB', 'Enterprise') OR c.segment IS NULL) GROUP BY c.segment
       )
       SELECT c.segment AS customers__segment, c.customer_count, o.revenue
       FROM c LEFT JOIN o ON o.segment IS NOT DISTINCT FROM c.segment
@@ -356,21 +356,21 @@ cases:
     request:
       metrics: [buyers, customer_count, line_count]
       dimensions: [customers.region]
-    user: { region: Nordeste }
+    user: { region: South }
     sql: |
       WITH b AS (
         SELECT c.region, COUNT(DISTINCT o.customer_id) AS buyers
         FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
-        WHERE c.region = 'Nordeste' GROUP BY c.region
+        WHERE c.region = 'South' GROUP BY c.region
       ), cc AS (
         SELECT region, COUNT(DISTINCT customer_id) AS customer_count
-        FROM public.customers WHERE region = 'Nordeste' GROUP BY region
+        FROM public.customers WHERE region = 'South' GROUP BY region
       ), l AS (
         SELECT c.region, COUNT(*) AS line_count
         FROM public.order_items i
         JOIN public.orders o ON o.order_id = i.order_id
         JOIN public.customers c ON c.customer_id = o.customer_id
-        WHERE c.region = 'Nordeste' GROUP BY c.region
+        WHERE c.region = 'South' GROUP BY c.region
       )
       SELECT cc.region AS customers__region, b.buyers, cc.customer_count, l.line_count
       FROM cc LEFT JOIN b ON b.region = cc.region LEFT JOIN l ON l.region = cc.region
@@ -402,11 +402,11 @@ cases:
     request:
       metrics: [customer_count]
       dimensions: [customers.health_plan]
-    user: { region: Sul }
+    user: { region: Midwest }
     channel: api
     sql: |
       SELECT health_plan AS customers__health_plan, COUNT(DISTINCT customer_id) AS customer_count
-      FROM public.customers WHERE region = 'Sul' GROUP BY health_plan
+      FROM public.customers WHERE region = 'Midwest' GROUP BY health_plan
 
   - id: A23
     category: joins
@@ -415,7 +415,7 @@ cases:
     request:
       metrics: [line_count, item_revenue]
       dimensions: [customers.region, sellers.region]
-    user: { region: Centro-Oeste }
+    user: { region: Mountain }
     sql: |
       SELECT c.region AS customers__region, s.region AS sellers__region,
              COUNT(*) AS line_count, SUM(i.quantity * i.unit_price) AS item_revenue
@@ -423,7 +423,7 @@ cases:
       JOIN public.orders o ON o.order_id = i.order_id
       JOIN public.customers c ON c.customer_id = o.customer_id
       JOIN public.sellers s ON s.seller_id = i.seller_id
-      WHERE c.region = 'Centro-Oeste'
+      WHERE c.region = 'Mountain'
       GROUP BY c.region, s.region
 
   - id: A24
@@ -433,7 +433,7 @@ cases:
     request:
       metrics: [customer_count]
       filters: ["{customers.email} LIKE '%@gmail.com'"]
-    user: { region: Sul }
+    user: { region: Midwest }
     channel: mcp
     expect_error: PolicyError
 
@@ -457,17 +457,17 @@ cases:
   - id: A26
     category: one-to-many
     phase: 2
-    title: Revenue of orders containing a Casa item, by status (filter on the many side)
+    title: Revenue of orders containing a Home item, by status (filter on the many side)
     request:
       metrics: [revenue, order_count]
       dimensions: [orders.status]
-      filters: ["{products.category} = 'Casa'"]
+      filters: ["{products.category} = 'Home'"]
     sql: |
       SELECT o.status AS orders__status, SUM(o.amount) AS revenue, COUNT(*) AS order_count
       FROM public.orders o
       WHERE EXISTS (
         SELECT 1 FROM public.order_items i JOIN public.products p ON p.product_id = i.product_id
-        WHERE i.order_id = o.order_id AND p.category = 'Casa'
+        WHERE i.order_id = o.order_id AND p.category = 'Home'
       )
       GROUP BY o.status
 
@@ -478,7 +478,7 @@ cases:
     request:
       metrics: [customer_count]
       dimensions: [products.category]
-    user: { region: Sudeste }
+    user: { region: Northeast }
     sql: |
       SELECT b.category AS products__category, COUNT(DISTINCT c.customer_id) AS customer_count
       FROM public.customers c
@@ -488,5 +488,5 @@ cases:
         JOIN public.orders o ON o.order_id = i.order_id
         LEFT JOIN public.products p ON p.product_id = i.product_id
       ) b ON b.customer_id = c.customer_id
-      WHERE c.region = 'Sudeste'
+      WHERE c.region = 'Northeast'
       GROUP BY b.category

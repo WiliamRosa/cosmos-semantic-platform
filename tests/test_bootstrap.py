@@ -9,7 +9,7 @@ from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
 
 SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector"]
-SUL = Principal(user={"region": "Sul"})
+SUL = Principal(user={"region": "Midwest"})
 
 
 @pytest.fixture(params=SOURCES)
@@ -57,7 +57,7 @@ def test_personal_data_is_flagged_for_review(connector):
     flagged = {item["column"]: item["suggested"] for item in report["sensitivity"]}
     assert flagged == {
         "customers.name": "personal",
-        "customers.cpf": "personal",
+        "customers.tax_id": "personal",
         "customers.email": "personal",
         "customers.health_plan": "sensitive",
     }
@@ -82,7 +82,7 @@ def test_draft_answers_with_the_same_numbers(graph, connector):
             QueryRequest(
                 metrics=["value"],
                 dimensions=["customers.segment"],
-                filters=["{customers.region} = 'Sul'"],
+                filters=["{customers.region} = 'Midwest'"],
             ),
         ),
         run(
@@ -107,6 +107,7 @@ def test_reports_review_points_and_timing(connector):
     "column,table,expected",
     [
         ("cpf", "customers", "personal"),
+        ("tax_id", "customers", "personal"),
         ("contact_email", "leads", "personal"),
         ("plano_saude", "beneficiarios", "sensitive"),
         ("name", "customers", "personal"),

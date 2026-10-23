@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../../schema/cosmos-semantic.v1.schema.json
 version: 1
-timezone: America/Sao_Paulo
+timezone: America/New_York
 
 user_context:
   region:
@@ -23,7 +23,7 @@ semantic_models:
         type: categorical
       - name: segment
         type: categorical
-        description: Varejo (retail), PME (SMB) or Corporativo (enterprise)
+        description: Consumer, SMB or Enterprise
       - name: created_at
         type: time
       - name: last_order_at
@@ -31,13 +31,13 @@ semantic_models:
       - name: email
         type: categorical
         sensitivity: personal
-      - name: cpf
+      - name: tax_id
         type: categorical
         sensitivity: personal
       - name: health_plan
         type: categorical
         sensitivity: sensitive
-        description: Health plan (sensitive personal data under LGPD)
+        description: Health plan (sensitive personal data)
     measures:
       - name: customer_count
         agg: count_distinct

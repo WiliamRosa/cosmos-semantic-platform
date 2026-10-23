@@ -46,17 +46,17 @@ cases:
     expect: { status: divergent, causes: [fan_out] }
 
   - id: Z04
-    title: Days cut in UTC instead of the business time zone
+    title: Days cut in UTC instead of the business time zone (New York, UTC-5)
     request:
       metrics: [revenue]
       dimensions: [orders.ordered_at__day]
     sql: |
-      SELECT DATE_TRUNC('day', ordered_at + INTERVAL '3' HOUR), SUM(amount)
+      SELECT DATE_TRUNC('day', ordered_at + INTERVAL '5' HOUR), SUM(amount)
       FROM public.orders GROUP BY 1
     sql_by_dialect:
       tsql: |
-        SELECT DATETRUNC(day, DATEADD(hour, 3, ordered_at)), SUM(amount) FROM public.orders
-        GROUP BY DATETRUNC(day, DATEADD(hour, 3, ordered_at))
+        SELECT DATETRUNC(day, DATEADD(hour, 5, ordered_at)), SUM(amount) FROM public.orders
+        GROUP BY DATETRUNC(day, DATEADD(hour, 5, ordered_at))
     expect: { status: divergent, causes: [time_shift] }
 
   - id: Z05
@@ -84,11 +84,11 @@ cases:
     request:
       metrics: [customer_count]
       dimensions: [customers.segment]
-    user: { region: Sul }
+    user: { region: Midwest }
     sql: |
       SELECT c.segment, COUNT(DISTINCT c.customer_id)
       FROM public.customers c JOIN public.orders o ON o.customer_id = c.customer_id
-      WHERE c.region = 'Sul'
+      WHERE c.region = 'Midwest'
       GROUP BY c.segment
     expect: { status: divergent, causes: [inner_join_drop] }
 

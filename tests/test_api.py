@@ -35,7 +35,7 @@ def client(graph, duckdb_connector, signing_key):
         issuer=ISSUER,
         audience=AUDIENCE,
         jwks_url="https://example.invalid/keys",
-        dev_keys={"dev-sul": DevKey(subject="dev@local", user={"region": "Sul"})},
+        dev_keys={"dev-sul": DevKey(subject="dev@local", user={"region": "Midwest"})},
     )
     authenticator = Authenticator(settings, graph.project.user_context)
 
@@ -67,19 +67,19 @@ def test_dev_key(client):
         json={"metrics": ["customer_count"], "dimensions": ["customers.region"]},
     )
     assert response.status_code == 200, response.text
-    assert [r["customers__region"] for r in response.json()["rows"]] == ["Sul"]
+    assert [r["customers__region"] for r in response.json()["rows"]] == ["Midwest"]
 
 
 def test_oidc_token_claims_feed_row_filters(client, signing_key):
     response = client.post(
         "/v1/query",
-        headers={"Authorization": f"Bearer {token(signing_key, region='Norte')}"},
+        headers={"Authorization": f"Bearer {token(signing_key, region='West')}"},
         json={"metrics": ["customer_count"], "dimensions": ["customers.region"]},
     )
     assert response.status_code == 200, response.text
-    assert [r["customers__region"] for r in response.json()["rows"]] == ["Norte"]
+    assert [r["customers__region"] for r in response.json()["rows"]] == ["West"]
     evidence = response.json()["evidence"]
-    assert evidence["policies"]["row_filters"][0]["user_fields"] == {"region": "Norte"}
+    assert evidence["policies"]["row_filters"][0]["user_fields"] == {"region": "West"}
 
 
 def test_token_without_required_claim_is_forbidden(client, signing_key):
@@ -90,9 +90,9 @@ def test_token_without_required_claim_is_forbidden(client, signing_key):
 
 def test_wrong_audience_or_expired_token_is_rejected(client, signing_key):
     for bad in (
-        token(signing_key, region="Sul", aud="api://outra"),
-        token(signing_key, region="Sul", exp=int(time.time()) - 10),
-        token(rsa.generate_private_key(public_exponent=65537, key_size=2048), region="Sul"),
+        token(signing_key, region="Midwest", aud="api://outra"),
+        token(signing_key, region="Midwest", exp=int(time.time()) - 10),
+        token(rsa.generate_private_key(public_exponent=65537, key_size=2048), region="Midwest"),
     ):
         response = client.get("/v1/members", headers={"Authorization": f"Bearer {bad}"})
         assert response.status_code == 401
@@ -111,4 +111,4 @@ def test_concepts_and_explain(client):
     hits = client.get("/v1/concepts", params={"q": "faturamento líquido"}, headers=headers).json()
     assert hits[0]["maps_to"] == "metric:net_revenue"
     rule = client.get("/v1/explain/rule:order_size_band", headers=headers).json()
-    assert rule["kind"] == "rule" and "Grande" in rule["text"]
+    assert rule["kind"] == "rule" and "Large" in rule["text"]

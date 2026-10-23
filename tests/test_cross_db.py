@@ -18,13 +18,13 @@ from cosmos_semantic.compiler import TIME_GRAINS
 from cosmos_semantic.errors import CosmosError
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
 
-REGIONS = ["Sul", "Sudeste", "Nordeste", "Norte", "Centro-Oeste"]
+REGIONS = ["Midwest", "Northeast", "South", "West", "Mountain"]
 FILTERS = [
     "{orders.status} = 'completed'",
     "{orders.has_discount}",
     "NOT {orders.has_discount}",
     "{rule.active_customer}",
-    "{orders.order_size_band} IN ('Grande', 'Médio')",
+    "{orders.order_size_band} IN ('Large', 'Medium')",
     "{products.category} IS NULL OR {products.category} LIKE 'C%'",
     "{payments.installments} >= 3",
     "{customers.segment} IS NOT NULL",
@@ -146,8 +146,8 @@ def test_refusals_are_the_same_everywhere(graph, connectors):
         (QueryRequest(metrics=["paid_value"], dimensions=["products.category"]), Principal()),
         (QueryRequest(metrics=["customer_count"]), Principal()),
         (
-            QueryRequest(metrics=["customer_count"], dimensions=["customers.cpf"]),
-            Principal(user={"region": "Sul"}, channel="mcp"),
+            QueryRequest(metrics=["customer_count"], dimensions=["customers.tax_id"]),
+            Principal(user={"region": "Midwest"}, channel="mcp"),
         ),
         (QueryRequest(metrics=["revenue_month_to_date"]), Principal()),
     ]

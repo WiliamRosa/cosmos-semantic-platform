@@ -62,8 +62,8 @@ def test_consumers_come_from_the_audit_log(graph, duckdb_connector, tmp_path):
     engine._connectors["src"] = duckdb_connector
     audit = tmp_path / "audit.jsonl"
     service = SemanticService(engine, audit_path=audit)
-    ana = Principal(user={"region": "Sul"}, channel="api", subject="ana")
-    bot = Principal(user={"region": "Sul"}, channel="mcp", subject="agent")
+    ana = Principal(user={"region": "Midwest"}, channel="api", subject="ana")
+    bot = Principal(user={"region": "Midwest"}, channel="mcp", subject="agent")
     service.query(QueryRequest(metrics=["customer_count"], filters=["{rule.active_customer}"]), ana)
     service.query(QueryRequest(metrics=["customer_count"], dimensions=["segment"]), ana)
     service.query(QueryRequest(metrics=["revenue"], dimensions=["orders.status"]), bot)

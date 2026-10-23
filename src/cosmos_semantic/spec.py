@@ -197,7 +197,7 @@ class Project(_Base):
     timezone: str | None = Field(
         None,
         description=(
-            'Business time zone, such as `America/Sao_Paulo`. Defines what "today" means for '
+            'Business time zone, such as `America/New_York`. Defines what "today" means for '
             "rules and filters using CURRENT_DATE, identically on every data source. Default: UTC."
         ),
     )

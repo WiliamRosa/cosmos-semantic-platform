@@ -18,7 +18,7 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 uv sync --all-extras
 
 # Generate synthetic e-commerce data into a local DuckDB (data/ecommerce.duckdb)
-uv run cosmos demo-data -c examples/ecommerce/connections.yml
+uv run cosmos demo-data -c examples/ecommerce/connections.yml   # --locale pt_BR for Brazilian data with CPF
 
 # Validate the example model
 uv run cosmos validate -m examples/ecommerce/semantic
@@ -28,16 +28,16 @@ uv run cosmos query revenue average_order_value --by orders.status \
   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
 # Metrics from different models, with the user's row filter; --show-sql prints the generated SQL
-uv run cosmos query revenue paid_value customer_count --by customers.region -u region=Sul --show-sql \
+uv run cosmos query revenue paid_value customer_count --by customers.region -u region=Midwest --show-sql \
   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
 # Business rules as a filter and as a grouping; --as-of pins "today"
 uv run cosmos query customer_count --where "{rule.active_customer}" --by customers.segment \
-  -u region=Sudeste --as-of 2026-10-22 -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+  -u region=Northeast --as-of 2026-10-22 -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
 # Evidence envelope: formulas, rules, policies, as_of and hashes; then replay the audited query
 export COSMOS_AUDIT_LOG=data/audit.jsonl
-uv run cosmos query average_order_value --by customers.segment --where "{rule.active_customer}"   -u region=Sudeste --evidence -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+uv run cosmos query average_order_value --by customers.segment --where "{rule.active_customer}"   -u region=Northeast --evidence -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 uv run cosmos replay <query_id> -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
 # Reconcile a governed metric with legacy SQL or another model, and explain the divergence
@@ -132,7 +132,7 @@ src/cosmos_semantic/
   api.py             REST API (FastAPI)
   mcp_server.py      MCP server
   interchange/       dbt, Ossie and Cube import
-  demo_data.py       pt_BR synthetic data
+  demo_data.py       synthetic data (en_US default, pt_BR optional)
   reference.py       running the reference queries
   cli.py             the `cosmos` command
 schema/              JSON Schema of the format

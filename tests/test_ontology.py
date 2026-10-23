@@ -55,10 +55,10 @@ def test_rule_becomes_dimension_and_filter(graph):
     by_band = planner.plan(
         QueryRequest(metrics=["order_count"], dimensions=["orders.order_size_band"])
     )
-    assert "CASE" in by_band.sql and "Grande" in by_band.sql
+    assert "CASE" in by_band.sql and "Large" in by_band.sql
     active = planner.plan(
         QueryRequest(metrics=["customer_count"], filters=["{rule.active_customer}"]),
-        Principal(user={"region": "Sul"}),
+        Principal(user={"region": "Midwest"}),
     )
     assert "last_order_at" in active.sql
 

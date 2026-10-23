@@ -83,9 +83,9 @@ metrics:
       measure: revenue
       cumulative_type_params:
         grain_to_date: month
-  - name: sul_revenue
+  - name: midwest_revenue
     type: simple
     type_params:
       measure:
         name: revenue
-        filter: "{{ Dimension('customer__region') }} = 'Sul'"
+        filter: "{{ Dimension('customer__region') }} = 'Midwest'"

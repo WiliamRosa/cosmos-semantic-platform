@@ -48,7 +48,7 @@ def make_client(graph, connector, signing_key, public_url=None):
         issuer=ISSUER,
         audience=AUDIENCE,
         jwks_url="https://example.invalid/keys",
-        dev_keys={"dev-sul": DevKey(subject="dev", user={"region": "Sul"})},
+        dev_keys={"dev-sul": DevKey(subject="dev", user={"region": "Midwest"})},
     )
     authenticator = Authenticator(settings, graph.project.user_context)
 
@@ -110,7 +110,7 @@ def test_invalid_token_and_missing_claims(graph, duckdb_connector, signing_key):
         bad = client.post(
             "/mcp/",
             json=INITIALIZE,
-            headers=MCP_HEADERS | {"authorization": f"Bearer {token(other_key, region='Sul')}"},
+            headers=MCP_HEADERS | {"authorization": f"Bearer {token(other_key, region='Midwest')}"},
         )
         assert bad.status_code == 401 and 'error="invalid_token"' in bad.headers["www-authenticate"]
         no_claim = client.post(
@@ -125,7 +125,7 @@ def test_invalid_token_and_missing_claims(graph, duckdb_connector, signing_key):
 def test_valid_token_reaches_the_mcp_server(graph, duckdb_connector, signing_key):
     with make_client(graph, duckdb_connector, signing_key) as client:
         for headers in (
-            {"authorization": f"Bearer {token(signing_key, region='Sul')}"},
+            {"authorization": f"Bearer {token(signing_key, region='Midwest')}"},
             {"x-api-key": "dev-sul"},
         ):
             response = client.post("/mcp/", json=INITIALIZE, headers=MCP_HEADERS | headers)

@@ -18,7 +18,7 @@ def server(graph, duckdb_connector):
     engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
     engine._connectors["local"] = duckdb_connector
     settings = AuthSettings(
-        dev_keys={"agente-sul": DevKey(subject="agente", user={"region": "Sul"})}
+        dev_keys={"agente-sul": DevKey(subject="agente", user={"region": "Midwest"})}
     )
     return build_mcp(SemanticService(engine), Authenticator(settings, graph.project.user_context))
 
@@ -73,4 +73,4 @@ def test_agent_is_blocked_from_sensitive_data(server, monkeypatch):
 def test_show_sql_applies_the_users_row_filter(server, monkeypatch):
     monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
     result = call(server, "show_sql", metrics=["customer_count"], dimensions=["customers.region"])
-    assert "'Sul'" in result["sql"]
+    assert "'Midwest'" in result["sql"]

@@ -14,7 +14,7 @@ from cosmos_semantic.planner import Principal, QueryRequest
 from cosmos_semantic.service import SemanticService
 
 SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector"]
-SUDESTE = Principal(user={"region": "Sudeste"}, channel="api", subject="ana@example.com")
+SUDESTE = Principal(user={"region": "Northeast"}, channel="api", subject="ana@example.com")
 REQUEST = QueryRequest(
     metrics=["average_order_value", "customer_count"],
     dimensions=["customers.segment"],
@@ -38,12 +38,12 @@ def test_envelope_describes_definitions_rules_and_policies(graph, connector, tmp
     ev = result["evidence"]
 
     assert ev["query_id"].startswith("q_")
-    assert ev["as_of"] and ev["timezone"] == "America/Sao_Paulo"
+    assert ev["as_of"] and ev["timezone"] == "America/New_York"
     assert ev["data_source"]["dialect"] == connector.dialect
     assert ev["principal"] == {
         "subject": "ana@example.com",
         "channel": "api",
-        "user_context": {"region": "Sudeste"},
+        "user_context": {"region": "Northeast"},
     }
 
     metrics = {m["name"]: m for m in ev["metrics"]}
@@ -62,7 +62,7 @@ def test_envelope_describes_definitions_rules_and_policies(graph, connector, tmp
 
     [row_filter] = ev["policies"]["row_filters"]
     assert row_filter["model"] == "customers"
-    assert row_filter["user_fields"] == {"region": "Sudeste"}
+    assert row_filter["user_fields"] == {"region": "Northeast"}
     assert sorted(row_filter["applied_in"]) == ["customers_agg", "orders_agg"]
 
     assert set(ev["lineage"]["models"]) == {"customers", "orders"}
@@ -112,7 +112,7 @@ def test_replay_detects_changed_model(graph, connector, tmp_path):
 def test_only_the_original_user_can_replay(graph, duckdb_connector, tmp_path):
     service = make_service(graph, duckdb_connector, tmp_path)
     query_id = service.query(REQUEST, SUDESTE)["evidence"]["query_id"]
-    other = Principal(user={"region": "Sul"}, channel="api", subject="bob@example.com")
+    other = Principal(user={"region": "Midwest"}, channel="api", subject="bob@example.com")
     with pytest.raises(PolicyError):
         service.replay(query_id, requester=other)
     assert service.replay(query_id, requester=SUDESTE)["verdict"] == "identical"
@@ -122,8 +122,8 @@ def test_failed_queries_are_audited_without_hashes(graph, duckdb_connector, tmp_
     service = make_service(graph, duckdb_connector, tmp_path)
     with pytest.raises(PolicyError):
         service.query(
-            QueryRequest(metrics=["customer_count"], dimensions=["customers.cpf"]),
-            Principal(user={"region": "Sul"}, channel="mcp"),
+            QueryRequest(metrics=["customer_count"], dimensions=["customers.tax_id"]),
+            Principal(user={"region": "Midwest"}, channel="mcp"),
         )
     record = (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()[-1]
     assert '"outcome": "error"' in record and '"result_hash": null' in record

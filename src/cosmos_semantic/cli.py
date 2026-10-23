@@ -28,7 +28,7 @@ SourceOpt = Annotated[
     str | None, typer.Option("--source", "-s", help="Data source in connections.yml.")
 ]
 UserOpt = Annotated[
-    list[str] | None, typer.Option("--user", "-u", help="User context, such as region=Sul.")
+    list[str] | None, typer.Option("--user", "-u", help="User context, such as region=Midwest.")
 ]
 DEFAULT_CASES = [Path("reference/queries.yml"), Path("reference/queries_advanced.yml")]
 
@@ -268,12 +268,18 @@ def demo_data_cmd(
     anchor: Annotated[
         str | None, typer.Option(help="Anchor date YYYY-MM-DD; default: today.")
     ] = None,
+    locale: Annotated[
+        str, typer.Option(help="en_US (default) or pt_BR (Brazilian data with CPF).")
+    ] = "en_US",
 ) -> None:
     """Generates the synthetic e-commerce data and loads it into a data source."""
     from cosmos_semantic import demo_data
 
     tables = demo_data.generate(
-        customers, seed=seed, anchor=dt.date.fromisoformat(anchor) if anchor else None
+        customers,
+        seed=seed,
+        anchor=dt.date.fromisoformat(anchor) if anchor else None,
+        locale=locale,
     )
     if target.startswith("parquet:"):
         for path in demo_data.write_parquet(tables, target.split(":", 1)[1]):
