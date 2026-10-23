@@ -41,6 +41,9 @@ class DataSourceConfig(BaseModel):
     uri: str | None = None
     path: str | None = Field(None, description="Arquivo do DuckDB.")
     options: dict[str, Any] = {}
+    schema_map: dict[str, str] = Field(
+        {}, description="Troca de esquema por origem, como `public: dbo`, sem mudar o modelo."
+    )
     max_rows: int = Field(10_000, ge=1)
     timeout_seconds: int = Field(30, ge=1)
 

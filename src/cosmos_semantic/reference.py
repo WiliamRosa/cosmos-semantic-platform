@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict
 from cosmos_semantic import errors
 from cosmos_semantic.compiler import SemanticGraph
 from cosmos_semantic.connectors import Connector
+from cosmos_semantic.expressions import remap_sql
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
 
 
@@ -101,7 +102,7 @@ def run_case(
 
     assert case.request is not None
     principal = Principal(user=case.user, channel=case.channel)
-    planner = Planner(graph, connector.dialect)
+    planner = Planner(graph, connector.dialect, connector.config.schema_map)
     try:
         compiled = planner.plan(case.request, principal)
     except errors.CosmosError as exc:
@@ -114,6 +115,7 @@ def run_case(
     expected_sql = case.sql_for(connector.dialect)
     if expected_sql is None:
         return CaseResult(case, "skip", "sem SQL de referência")
+    expected_sql = remap_sql(expected_sql, connector.dialect, connector.config.schema_map)
     got = connector.execute(compiled.sql).to_pylist()
     want = connector.execute(expected_sql).to_pylist()
     columns = [c.name for c in compiled.columns]

@@ -9,6 +9,7 @@ from typing import Literal
 from cosmos_semantic.errors import ModelError, QueryError
 from cosmos_semantic.expressions import REF_RE, USER_RE
 from cosmos_semantic.spec import (
+    BusinessRule,
     CumulativeMetric,
     DerivedMetric,
     Dimension,
@@ -76,6 +77,8 @@ class SemanticGraph:
         self.measure_owner: dict[str, str] = {}
         self.metrics: dict[str, Metric] = {}
         self.edges: dict[str, list[JoinEdge]] = defaultdict(list)
+        self.rules: dict[str, BusinessRule] = {}
+        self.rule_models: dict[str, list[str]] = {}
         self.issues: list[Issue] = []
 
     # -- consultas ao grafo -------------------------------------------------
@@ -93,7 +96,29 @@ class SemanticGraph:
         head, _, tail = ref.rpartition("__")
         if head and tail in TIME_GRAINS:
             ref, grain = head, tail
-        if "." in ref:
+        if ref.startswith("rule."):
+            name = ref[5:]
+            models = self.rule_models.get(name)
+            if not models:
+                raise QueryError(f"regra `{name}` não existe")
+            if context:
+                reach = self.reachable(context)
+                candidates = [m for m in models if m in reach]
+                if context in candidates:
+                    candidates = [context]
+            else:
+                candidates = models
+            if not candidates:
+                raise QueryError(
+                    f"a regra `{name}` não vale para nenhum modelo alcançável de `{context}`"
+                )
+            if len(candidates) > 1:
+                options = ", ".join(f"{m}.{name}" for m in candidates)
+                raise QueryError(
+                    f"a regra `{name}` vale para vários modelos; use uma de: {options}"
+                )
+            model = candidates[0]
+        elif "." in ref:
             model, name = ref.split(".", 1)
             node = self.models.get(model)
             if node is None or name not in node.dimensions:
@@ -233,6 +258,10 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
     if len(data_sources) > 1:
         warn("semantic_models", "há mais de uma origem; consultas não cruzam origens")
 
+    from cosmos_semantic import ontology
+
+    ontology.attach_rules(g, err, warn)
+
     # Métricas
     for name in _dup([m.name for m in project.metrics]):
         err(f"metrics.{name}", "nome de métrica duplicado")
@@ -271,6 +300,8 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
             for user_field in USER_RE.findall(row_filter.filter):
                 if user_field not in project.user_context:
                     err(loc, f"`$user.{user_field}` não está declarado em user_context")
+
+    ontology.check_glossary(g, err, warn)
 
     if strict:
         errors = [i for i in g.issues if i.severity == "error"]

@@ -243,12 +243,34 @@ def reference(
 
 
 def _glossary_resolver(graph):
-    try:
-        from cosmos_semantic.ontology import Glossary
-    except ImportError:
-        return None
+    from cosmos_semantic.ontology import Glossary
+
     glossary = Glossary(graph.project)
-    return lambda text: (glossary.search(text) or [None])[0] and glossary.search(text)[0].maps_to
+
+    def resolve(text: str) -> str | None:
+        hits = glossary.search(text, limit=1)
+        return hits[0].maps_to if hits else None
+
+    return resolve
+
+
+@app.command("test")
+def test_rules(model: ModelOpt = Path("semantic")) -> None:
+    """Executa os exemplos das regras de negócio no DuckDB, sem acessar as origens."""
+    from cosmos_semantic.ontology import run_rule_tests
+
+    try:
+        project = load_project(model)
+        compile_project(project)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    results = run_rule_tests(project)
+    for r in results:
+        color = typer.colors.GREEN if r.passed else typer.colors.RED
+        typer.secho(f"{r.rule}[{r.index}] {'ok' if r.passed else 'falhou'} {r.detail}", fg=color)
+    if any(not r.passed for r in results):
+        raise typer.Exit(1)
+    typer.secho(f"{len(results)} exemplos de regras ok", fg=typer.colors.GREEN)
 
 
 if __name__ == "__main__":

@@ -41,6 +41,7 @@ packages = ["src/cosmos_semantic"]
 testpaths = ["tests"]
 markers = [
     "postgres: precisa de um Postgres em COSMOS_PG_URI",
+    "sqlserver: precisa de um SQL Server em COSMOS_MSSQL_URI",
     "databricks: precisa de um SQL warehouse do Databricks configurado",
 ]
 

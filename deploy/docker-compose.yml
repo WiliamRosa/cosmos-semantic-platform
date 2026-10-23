@@ -17,5 +17,15 @@ services:
     volumes:
       - cosmos-pg:/var/lib/postgresql/data
 
+  # Opcional: docker compose -f deploy/docker-compose.yml --profile sqlserver up -d
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    profiles: [sqlserver]
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Cosmos!Passw0rd"
+    ports:
+      - "14330:1433"
+
 volumes:
   cosmos-pg:

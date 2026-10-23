@@ -54,11 +54,13 @@ class Engine:
 
     def compile(self, request: QueryRequest, principal: Principal | None = None) -> CompiledQuery:
         sources = {m.spec.data_source for m in self.graph.models.values()}
-        dialect = self.config(next(iter(sources)) if len(sources) == 1 else None).dialect
-        compiled = Planner(self.graph, dialect).plan(request, principal)
-        expected = self.config(compiled.data_source).dialect
-        if expected != dialect:
-            compiled = Planner(self.graph, expected).plan(request, principal)
+        config = self.config(next(iter(sources)) if len(sources) == 1 else None)
+        compiled = Planner(self.graph, config.dialect, config.schema_map).plan(request, principal)
+        actual = self.config(compiled.data_source)
+        if actual is not config:
+            compiled = Planner(self.graph, actual.dialect, actual.schema_map).plan(
+                request, principal
+            )
         return compiled
 
     def query(self, request: QueryRequest, principal: Principal | None = None) -> QueryResult:

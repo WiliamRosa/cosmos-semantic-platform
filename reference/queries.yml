@@ -297,6 +297,12 @@ cases:
       FROM public.customers
       WHERE last_order_at >= CURRENT_DATE - INTERVAL '90' DAY AND region = 'Sudeste'
       GROUP BY segment
+    sql_by_dialect:
+      tsql: |
+        SELECT segment AS customers__segment, COUNT(DISTINCT customer_id) AS customer_count
+        FROM public.customers
+        WHERE last_order_at >= DATEADD(day, -90, GETDATE()) AND region = 'Sudeste'
+        GROUP BY segment
 
   # -- Filtro por linha e LGPD -----------------------------------------------
   - id: R17

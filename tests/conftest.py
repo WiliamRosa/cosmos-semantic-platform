@@ -46,6 +46,19 @@ def postgres_connector(tables):
 
 
 @pytest.fixture(scope="session")
+def sqlserver_connector(tables):
+    uri = os.environ.get("COSMOS_MSSQL_URI")
+    if not uri:
+        pytest.skip("defina COSMOS_MSSQL_URI para rodar contra o SQL Server")
+    connector = connect(
+        DataSourceConfig(type="sqlserver", uri=uri, schema_map={"public": "cosmos"})
+    )
+    demo_data.load(connector, tables)
+    yield connector
+    connector.close()
+
+
+@pytest.fixture(scope="session")
 def databricks_connector(tables):
     env = os.environ.get
     if not env("DATABRICKS_HTTP_PATH") or not (

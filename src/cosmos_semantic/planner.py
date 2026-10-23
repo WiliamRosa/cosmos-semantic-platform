@@ -22,7 +22,9 @@ from cosmos_semantic.expressions import (
     parse_template,
     qualify,
     substitute,
+    table_ref,
 )
+from cosmos_semantic.ontology import RULE_DIALECT
 from cosmos_semantic.spec import (
     CumulativeMetric,
     DerivedMetric,
@@ -96,9 +98,18 @@ _SAFE_AGGS = {
 
 
 class Planner:
-    def __init__(self, graph: SemanticGraph, dialect: str = "postgres") -> None:
+    def __init__(
+        self,
+        graph: SemanticGraph,
+        dialect: str = "postgres",
+        schema_map: dict[str, str] | None = None,
+    ) -> None:
         self.graph = graph
         self.dialect = dialect
+        self.schema_map = schema_map or {}
+
+    def _table(self, name: str, alias: str) -> exp.Table:
+        return table_ref(name, self.dialect, self.schema_map).as_(alias)
 
     # -- entrada pública -----------------------------------------------------
 
@@ -112,16 +123,8 @@ class Planner:
         filters = [parse_template(f, self.dialect, error=QueryError) for f in request.filters]
         for template in filters:
             check_request_expression(template)
-        filter_dims = [g.resolve_dimension(r) for t in filters for r in t.refs]
-
-        if principal.is_agent:
-            for ref in [*dims, *filter_dims]:
-                level = g.dimension(ref).sensitivity
-                if level:
-                    raise PolicyError(
-                        f"`{ref.model}.{ref.name}` é dado {_LEVEL[level]} (LGPD) e não chega a "
-                        "agentes de IA nem como agrupamento nem como filtro"
-                    )
+        for ref in dims:
+            self._check_sensitivity(ref, principal)
 
         groups: dict[str, _Group] = {}
         metric_exprs: dict[str, exp.Expression] = {}
@@ -157,6 +160,14 @@ class Planner:
             data_source=next(iter(data_sources)) if data_sources else None,
             models=sorted(used_models),
         )
+
+    def _check_sensitivity(self, ref: DimensionRef, principal: Principal) -> None:
+        level = self.graph.dimension(ref).sensitivity
+        if principal.is_agent and level:
+            raise PolicyError(
+                f"`{ref.model}.{ref.name}` é dado {_LEVEL[level]} (LGPD) e não chega a "
+                "agentes de IA nem como agrupamento nem como filtro"
+            )
 
     # -- métricas -----------------------------------------------------------
 
@@ -231,7 +242,8 @@ class Planner:
                 )
             need(ref.model)
             dim = g.dimension(ref)
-            column = qualify(dim.expr or dim.name, ref.model, self.dialect)
+            read = RULE_DIALECT if ref.model in g.rule_models.get(ref.name, ()) else self.dialect
+            column = qualify(dim.expr or dim.name, ref.model, read)
             if ref.grain:
                 column = exp.TimestampTrunc(this=column, unit=exp.Var(this=ref.grain.upper()))
             return column
@@ -239,8 +251,14 @@ class Planner:
         def ref_resolver(context: str | None):
             return lambda r: dim_sql(g.resolve_dimension(r, context=context))
 
-        projections = [dim_sql(d).as_(d.alias) for d in dims]
-        conditions = [substitute(t, ref_resolver(None)) for t in filters]
+        def request_ref(r: str) -> exp.Expression:
+            ref = g.resolve_dimension(r, context=base if r.startswith("rule.") else None)
+            self._check_sensitivity(ref, principal)
+            return dim_sql(ref)
+
+        dim_exprs = [dim_sql(d) for d in dims]
+        projections = [e.copy().as_(d.alias) for e, d in zip(dim_exprs, dims, strict=True)]
+        conditions = [substitute(t, request_ref) for t in filters]
 
         for item, alias in group.inputs.items():
             measure = g.models[base].measures[item.measure]
@@ -266,19 +284,19 @@ class Planner:
                         substitute(template, ref_resolver(model), self._user_resolver(principal))
                     )
 
-        select = exp.select(*projections).from_(_table(g.models[base].spec.table, base))
+        select = exp.select(*projections).from_(self._table(g.models[base].spec.table, base))
         for target, edge in _ordered(joins, base):
             on = exp.EQ(
                 this=qualify(edge.source_expr, edge.source, self.dialect),
                 expression=qualify(edge.target_expr, edge.target, self.dialect),
             )
             select = select.join(
-                _table(g.models[target].spec.table, target), on=on, join_type="left"
+                self._table(g.models[target].spec.table, target), on=on, join_type="left"
             )
         if conditions:
             select = select.where(exp.and_(*conditions))
         if dims:
-            select = select.group_by(*[exp.Literal.number(i + 1) for i in range(len(dims))])
+            select = select.group_by(*[e.copy() for e in dim_exprs])
         return select, {base, *joins}
 
     def _aggregate(
@@ -424,10 +442,6 @@ def _and(a: str | None, b: str | None) -> str | None:
 def _dim_member(d: DimensionRef) -> str:
     member = f"{d.model}.{d.name}"
     return f"{member}__{d.grain}" if d.grain else member
-
-
-def _table(name: str, alias: str) -> exp.Table:
-    return exp.to_table(name).as_(alias)
 
 
 def _ordered(joins: dict[str, JoinEdge], base: str) -> list[tuple[str, JoinEdge]]:

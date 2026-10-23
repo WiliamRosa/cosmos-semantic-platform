@@ -295,12 +295,13 @@ def _sql_literal(value):
 def load(connector, tables: dict[str, pa.Table]) -> None:
     from cosmos_semantic.connectors import ADBCPostgresConnector, DuckDBConnector
 
+    schema = connector.config.schema_map.get("public", "public")
     if isinstance(connector, DuckDBConnector):
-        load_duckdb(connector.connection, tables)
+        load_duckdb(connector.connection, tables, schema)
     elif isinstance(connector, ADBCPostgresConnector):
-        load_postgres(connector.connection, tables)
+        load_postgres(connector.connection, tables, schema)
     else:
-        load_sql(connector, tables)
+        load_sql(connector, tables, schema)
 
 
 def write_parquet(tables: dict[str, pa.Table], directory: str | Path) -> list[Path]:

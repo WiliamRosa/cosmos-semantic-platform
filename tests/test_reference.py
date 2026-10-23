@@ -21,24 +21,24 @@ def _check(case, graph, connector):
 
 @pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
 def test_reference_duckdb(case, graph, duckdb_connector):
-    if case.phase > 0 and case.id == "R16":
-        pytest.importorskip("cosmos_semantic.ontology")
     _check(case, graph, duckdb_connector)
 
 
 @pytest.mark.postgres
 @pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
 def test_reference_postgres(case, graph, postgres_connector):
-    if case.phase > 0 and case.id == "R16":
-        pytest.importorskip("cosmos_semantic.ontology")
     _check(case, graph, postgres_connector)
+
+
+@pytest.mark.sqlserver
+@pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
+def test_reference_sqlserver(case, graph, sqlserver_connector):
+    _check(case, graph, sqlserver_connector)
 
 
 @pytest.mark.databricks
 @pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
 def test_reference_databricks(case, graph, databricks_connector):
-    if case.phase > 0 and case.id == "R16":
-        pytest.importorskip("cosmos_semantic.ontology")
     _check(case, graph, databricks_connector)
 
 
