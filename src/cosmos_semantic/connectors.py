@@ -30,6 +30,17 @@ DIALECTS = {
 }
 
 
+class CostRates(BaseModel):
+    """Estimated cost of a query on a data source, for `cosmos usage`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    per_query: float = Field(0.0, ge=0)
+    per_second: float = Field(0.0, ge=0, description="Per second of query duration.")
+    per_1k_rows: float = Field(0.0, ge=0, description="Per 1,000 rows returned.")
+    currency: str = "USD"
+
+
 class DataSourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -47,6 +58,7 @@ class DataSourceConfig(BaseModel):
     )
     max_rows: int = Field(10_000, ge=1)
     timeout_seconds: int = Field(30, ge=1)
+    cost: CostRates | None = Field(None, description="Rates for the usage and cost report.")
 
     @property
     def dialect(self) -> str:

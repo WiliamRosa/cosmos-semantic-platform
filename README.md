@@ -47,6 +47,12 @@ uv run cosmos reconcile --cases examples/ecommerce/divergence_zoo.yml   -m examp
 # What a change affects, and who queried it (also: --changes-from <previous model>)
 uv run cosmos impact rule:active_customer -m examples/ecommerce/semantic --audit data/audit.jsonl
 
+# Past numbers under the rule in effect then, or under today's rule
+uv run cosmos query customer_count -w "{rule.active_customer}" --as-of 2026-06-30 --rules-as-of 2026-10-23   -u region=Midwest -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+
+# Usage and estimated cost per metric, user, agent and data source (rates: `cost` in connections.yml)
+uv run cosmos usage --audit data/audit.jsonl -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+
 # Draft a model from the database catalog (keys, joins, measures, LGPD suggestions), then review it
 uv run cosmos bootstrap -c examples/ecommerce/connections.yml -o semantic/draft.yml
 

@@ -58,7 +58,7 @@ Redefined by [ADR 0009](decisions/0009-business-context-as-phase-3-differentiato
 
 - **Phase differentiator: business context.**
     1. **Rule versions** (done): `history` on a rule; a query uses the version in effect on `rules_as_of` (default `as_of`); the evidence envelope names the version and its tests.
-    2. **Usage and cost report** (`cosmos usage`): per metric, principal and channel, from the audit log, with configurable rates per data source.
+    2. **Usage and cost report** (done) (`cosmos usage`): per metric, rule, principal, channel and data source, from the audit log, with configurable rates per data source and the list of unused metrics.
     3. **Expanded knowledge graph:** teams, systems and processes linked to metrics, rules and models; impact grouped by owner; graph export.
     4. **Power BI import** (`.bim` and TMDL): simple DAX measures become metrics; the rest becomes warnings.
     5. **AI-assisted discovery:** suggestions validated by the engine and written as a reviewable YAML change.

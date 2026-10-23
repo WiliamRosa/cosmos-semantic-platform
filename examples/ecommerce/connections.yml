@@ -24,3 +24,6 @@ data_sources:
       access_token: ${DATABRICKS_TOKEN:-}
       profile: ${DATABRICKS_CONFIG_PROFILE:-}   # alternative to the token: a Databricks CLI profile
       catalog: ${DATABRICKS_CATALOG:-cosmos_demo}
+    cost:                # illustrative rates for `cosmos usage`; set your own
+      per_second: 0.002  # warehouse time
+      currency: USD

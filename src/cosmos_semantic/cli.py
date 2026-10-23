@@ -505,6 +505,70 @@ def impact(
             )
 
 
+@app.command()
+def usage(
+    audit: Annotated[
+        Path | None, typer.Option("--audit", help="Audit log (.jsonl); default: COSMOS_AUDIT_LOG.")
+    ] = None,
+    model: ModelOpt = Path("semantic"),
+    connections: ConnOpt = Path("connections.yml"),
+    since: Annotated[str | None, typer.Option(help="First day YYYY-MM-DD (UTC).")] = None,
+    until: Annotated[str | None, typer.Option(help="Last day YYYY-MM-DD (UTC).")] = None,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Usage and estimated cost per metric, rule, user, channel and data source, from the
+    audit log. Rates come from `cost` in connections.yml."""
+    import os
+
+    from cosmos_semantic.usage import usage_report
+
+    if audit is None and os.environ.get("COSMOS_AUDIT_LOG"):
+        audit = Path(os.environ["COSMOS_AUDIT_LOG"])
+    if audit is None:
+        _fail(ValueError("give --audit or set COSMOS_AUDIT_LOG"))
+    try:
+        graph = compile_project(load_project(model)) if model.exists() else None
+        conns = load_connections(connections) if connections.exists() else None
+        report = usage_report(
+            audit,
+            conns,
+            graph,
+            since=dt.date.fromisoformat(since) if since else None,
+            until=dt.date.fromisoformat(until) if until else None,
+        )
+    except errors.CosmosError as exc:
+        _fail(exc)
+    if as_json:
+        typer.echo(json.dumps(report, default=str, ensure_ascii=False, indent=2))
+        return
+    currency = report["currency"] or ""
+    t = report["total"]
+    typer.secho(
+        f"{t['queries']} queries  {t['errors']} errors  {t['denied']} denied  "
+        f"{t['rows']} rows  {t['duration_ms'] / 1000:.1f}s  cost {t['cost']:.4f} {currency}",
+        bold=True,
+    )
+    sections = [
+        ("metric", "by_metric", ("metric",)),
+        ("user", "by_principal", ("subject", "channel")),
+        ("channel", "by_channel", ("channel",)),
+        ("source", "by_data_source", ("data_source",)),
+    ]
+    for title, key, names in sections:
+        for item in report[key]:
+            label = " via ".join(str(item[n] or "-") for n in names)
+            extra = f"  agents {item['agent_queries']}" if "agent_queries" in item else ""
+            typer.echo(
+                f"  {title:8} {label:32} {item['queries']:>5} q  avg {item['avg_ms']:>7.1f} ms  "
+                f"cost {item['cost']:.4f}{extra}"
+            )
+    for item in report["by_rule"]:
+        typer.echo(f"  rule     {item['rule']:32} {item['queries']:>5} q")
+    if report.get("unused_metrics"):
+        typer.secho(f"  unused   {', '.join(report['unused_metrics'])}", fg=typer.colors.YELLOW)
+    typer.secho(report["note"], fg=typer.colors.BRIGHT_BLACK, err=True)
+
+
 @app.command("bootstrap")
 def bootstrap_cmd(
     output: Annotated[Path, typer.Option("--output", "-o", help="Draft model file (.yml).")],

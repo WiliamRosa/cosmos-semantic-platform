@@ -141,6 +141,19 @@ Legacy SQL can read anything the database user can, bypassing row filters, so re
 
 With `--audit` (or `COSMOS_AUDIT_LOG`), the report adds the **consumers**: who queried any affected member, through which channel, how many times and when last. With `--changes-from <previous model>`, the command first finds the members whose definition changed (metrics, measures, dimensions, rules, glossary concepts and models, including removals) and reports their combined impact, which is what a reviewer needs on a pull request.
 
+## Usage and cost
+
+`cosmos usage` reads the audit log and reports queries, errors, policy denials, rows, duration and an estimated cost per metric, business rule, user, channel (AI agents appear as `mcp`) and data source, plus the slowest queries and the metrics nobody queried in the period (`--since`, `--until`). Rates are set per data source in `connections.yml`:
+
+```yaml
+data_sources:
+  warehouse:
+    type: databricks
+    cost: { per_query: 0.0, per_second: 0.002, per_1k_rows: 0.0, currency: USD }
+```
+
+The cost is an estimate, not billing data: a query costs `per_query + per_second × duration + per_1k_rows × rows / 1000`, split evenly across the metrics it requested; queries denied or rejected before reaching a data source cost nothing. All data sources must use the same currency ([ADR 0009](decisions/0009-business-context-as-phase-3-differentiator.md)).
+
 ## Model bootstrap
 
 `cosmos bootstrap -o draft.yml` drafts a semantic model from the database catalog (`information_schema`, available on DuckDB, Postgres and SQL Server), without AI:
