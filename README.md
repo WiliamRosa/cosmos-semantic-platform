@@ -4,7 +4,7 @@
 
 A semantic layer for AI agents and applications, with **its own engine**: its own versioned YAML format with the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and a JSON Schema, SQL generation for each data source, and native interoperability with [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (formerly Open Semantic Interchange, OSI). [Cube](https://github.com/cube-js/cube) and dbt are **import sources and export targets**, not dependencies.
 
-**Status:** phases 0 and 1 are implemented; phase 2 (verifiable numbers) is in progress, with the evidence envelope, replay and reconciliation done. The engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity and dbt, Ossie and Cube import are ready. Reference queries and a randomized cross-database test pass on DuckDB, Postgres and SQL Server; Databricks validation depends on a configured SQL warehouse. See the [roadmap](docs/roadmap.md).
+**Status:** phases 0 and 1 are implemented; phase 2 (verifiable numbers) is in progress, with the evidence envelope, replay, reconciliation and impact analysis done. The engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity and dbt, Ossie and Cube import are ready. Reference queries and a randomized cross-database test pass on DuckDB, Postgres and SQL Server; Databricks validation depends on a configured SQL warehouse. See the [roadmap](docs/roadmap.md).
 
 ## In one sentence
 
@@ -43,6 +43,9 @@ uv run cosmos replay <query_id> -m examples/ecommerce/semantic -c examples/ecomm
 # Reconcile a governed metric with legacy SQL or another model, and explain the divergence
 uv run cosmos reconcile revenue --by orders.status --sql legacy_revenue.sql   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 uv run cosmos reconcile --cases examples/ecommerce/divergence_zoo.yml   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+
+# What a change affects, and who queried it (also: --changes-from <previous model>)
+uv run cosmos impact rule:active_customer -m examples/ecommerce/semantic --audit data/audit.jsonl
 
 # Business rule examples (on DuckDB, without touching the data sources) and reference queries
 uv run cosmos test -m examples/ecommerce/semantic
@@ -118,6 +121,7 @@ src/cosmos_semantic/
   auth.py            OIDC token validation and development keys
   evidence.py        evidence envelope: formulas, rules, policies, hashes
   reconcile.py       reconciliation with legacy SQL or another model, and divergence probes
+  impact.py          impact analysis over the model graph and the audit log
   service.py         querying with evidence, auditing and replay, shared by REST, MCP and CLI
   api.py             REST API (FastAPI)
   mcp_server.py      MCP server

@@ -46,7 +46,7 @@ Redefined by [ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentia
 - **Phase differentiator: verifiable numbers.**
     1. **Evidence envelope** (done) on every REST, MCP and CLI answer: expanded metric definitions, rules with owner, effective date and test status, applied policies, data source, `as_of`, model and SQL hashes; `cosmos replay` re-runs an audited query.
     2. **Reconciliation v1** (done) (`cosmos reconcile`): a Cosmos metric against existing SQL, and model against model, with a diagnosis of the likely cause, proven against a "divergence zoo" of legacy SQL with classic mistakes.
-    3. **Impact analysis** (`cosmos impact`): what a change to a rule or metric affects, and who queried it according to the audit log.
+    3. **Impact analysis** (done) (`cosmos impact`): what a change to a rule or metric affects, and who queried it according to the audit log.
     4. **Model bootstrap** (`cosmos bootstrap`): a draft model from the database catalog, deterministic and without AI.
 - Enablers: publish the open source core (Apache 2.0, contributions with DCO); remote MCP server with OAuth (protected resource metadata), ready for the Claude connectors directory; one-to-many dimensions (for example, order revenue by product category).
 

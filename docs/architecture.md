@@ -135,6 +135,12 @@ Probes are evidence, not proof: when two causes produce the same numbers, both a
 
 Legacy SQL can read anything the database user can, bypassing row filters, so reconciliation is an operator tool in the CLI; it is not exposed through the REST API or MCP. The governed side uses the database server's date as `as_of`, so both sides agree on "today".
 
+## Impact analysis
+
+`cosmos impact <kind:name>` lists what a change affects, following the compiled graph: metrics built on a measure (directly or through other metrics), metrics whose filters use a dimension, rules bound to a column, row filters, glossary concepts, and the models that join to an affected model. Models that join to a changed model are listed but not expanded: a change to `customers` does not change order revenue unless a query groups or filters by customer attributes, which the consumers section shows.
+
+With `--audit` (or `COSMOS_AUDIT_LOG`), the report adds the **consumers**: who queried any affected member, through which channel, how many times and when last. With `--changes-from <previous model>`, the command first finds the members whose definition changed (metrics, measures, dimensions, rules, glossary concepts and models, including removals) and reports their combined impact, which is what a reviewer needs on a pull request.
+
 ## MCP server tools
 
 | Tool | What it returns |

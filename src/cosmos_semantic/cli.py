@@ -430,6 +430,64 @@ def _print_reconciliation(report: dict) -> None:
         typer.secho(f"  cause    [{cause['code']}] {cause['summary']}", fg=typer.colors.CYAN)
 
 
+@app.command()
+def impact(
+    targets: Annotated[
+        list[str] | None,
+        typer.Argument(help="kind:name, such as rule:active_customer or dimension:orders.status."),
+    ] = None,
+    model: ModelOpt = Path("semantic"),
+    changes_from: Annotated[
+        Path | None,
+        typer.Option("--changes-from", help="Previous model version: analyze what changed."),
+    ] = None,
+    audit: Annotated[
+        Path | None, typer.Option("--audit", help="Audit log (.jsonl); default: COSMOS_AUDIT_LOG.")
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Shows what a change to a rule, metric, measure, dimension or model affects, and who
+    queried it."""
+    import os
+
+    from cosmos_semantic.impact import analyze, changed_members
+
+    if audit is None and os.environ.get("COSMOS_AUDIT_LOG"):
+        audit = Path(os.environ["COSMOS_AUDIT_LOG"])
+    try:
+        graph = compile_project(load_project(model))
+        targets = list(targets or [])
+        removed: list[str] = []
+        if changes_from is not None:
+            old = compile_project(load_project(changes_from))
+            targets += changed_members(old, graph)
+        if not targets:
+            if changes_from is not None:
+                typer.secho("no changes between the two model versions", fg=typer.colors.GREEN)
+                return
+            _fail(ValueError("give at least one target or --changes-from"))
+        report = analyze(graph, targets, audit_path=audit, removed=removed)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    if as_json:
+        typer.echo(json.dumps(report, default=str, ensure_ascii=False, indent=2))
+        return
+    typer.secho(f"impact of {', '.join(report['targets']) or '-'}", bold=True)
+    for name in report.get("removed", []):
+        typer.secho(f"  removed     {name}", fg=typer.colors.RED)
+    for kind, items in report["affected"].items():
+        if items:
+            typer.echo(f"  {kind:11} {', '.join(items)}")
+    if audit:
+        if not report["consumers"]:
+            typer.echo("  consumers   none in the audit log")
+        for c in report["consumers"]:
+            typer.echo(
+                f"  consumer    {c['subject'] or '-'} via {c['channel']}: {c['queries']} queries, "
+                f"last {c['last_at']}, using {', '.join(c['members'])}"
+            )
+
+
 def _glossary_resolver(graph):
     from cosmos_semantic.ontology import Glossary
 
