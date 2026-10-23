@@ -273,5 +273,69 @@ def test_rules(model: ModelOpt = Path("semantic")) -> None:
     typer.secho(f"{len(results)} exemplos de regras ok", fg=typer.colors.GREEN)
 
 
+def _service(model: Path, connections: Path):
+    import logging
+
+    from cosmos_semantic.auth import Authenticator, AuthSettings
+    from cosmos_semantic.service import SemanticService
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    engine = Engine.from_paths(model, load_connections(connections))
+    settings = AuthSettings.from_env()
+    return SemanticService(engine), Authenticator(settings, engine.graph.project.user_context)
+
+
+@app.command()
+def serve(
+    model: ModelOpt = Path("semantic"),
+    connections: ConnOpt = Path("connections.yml"),
+    host: str = "127.0.0.1",
+    port: int = 8080,
+    allow_anonymous: Annotated[
+        bool, typer.Option(help="Aceita chamadas sem credencial (só desenvolvimento).")
+    ] = False,
+) -> None:
+    """Sobe a API REST (/v1) e o servidor MCP (/mcp) no mesmo processo.
+
+    Identidade: COSMOS_OIDC_ISSUER e COSMOS_OIDC_AUDIENCE (tokens do provedor), ou
+    COSMOS_DEV_API_KEYS com chaves de desenvolvimento.
+    """
+    import uvicorn
+
+    from cosmos_semantic.api import create_app
+    from cosmos_semantic.mcp_server import build_mcp
+
+    try:
+        service, authenticator = _service(model, connections)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    if not authenticator.settings.enabled and not allow_anonymous:
+        _fail(
+            errors.ModelError(
+                "configure COSMOS_OIDC_ISSUER ou COSMOS_DEV_API_KEYS, ou use --allow-anonymous"
+            )
+        )
+    mcp_app = build_mcp(service, authenticator).streamable_http_app(
+        streamable_http_path="/", host=host
+    )
+    api = create_app(service, authenticator, allow_anonymous=allow_anonymous, mcp_app=mcp_app)
+    uvicorn.run(api, host=host, port=port)
+
+
+@app.command()
+def mcp(
+    model: ModelOpt = Path("semantic"),
+    connections: ConnOpt = Path("connections.yml"),
+) -> None:
+    """Servidor MCP via stdio, para clientes locais. O contexto vem de COSMOS_API_KEY."""
+    from cosmos_semantic.mcp_server import build_mcp
+
+    try:
+        service, authenticator = _service(model, connections)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    build_mcp(service, authenticator).run("stdio")
+
+
 if __name__ == "__main__":
     app()
