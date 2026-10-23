@@ -1,7 +1,15 @@
-"""REST API for applications (FastAPI)."""
+"""REST API for applications (FastAPI), and the HTTP front of the MCP server.
 
+The MCP endpoint follows the MCP authorization spec: it is an OAuth protected resource. It
+publishes its metadata (RFC 9728) at ``/.well-known/oauth-protected-resource`` and answers
+requests without a valid token with HTTP 401 and a ``WWW-Authenticate`` header that points to
+that metadata, so clients such as Claude can discover the identity provider and sign the user in.
+"""
+
+import json
 from typing import Annotated, Any
 
+import anyio
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 
@@ -26,12 +34,74 @@ _STATUS = {
 }
 
 
+class MCPAuthGate:
+    """ASGI wrapper for the MCP endpoint: rejects requests without a valid credential at the
+    HTTP level (401 or 403), before any MCP message is processed. Tools still validate the
+    token of their own message, as a second layer."""
+
+    def __init__(self, app, authenticator: Authenticator | None, metadata_url, allow_anonymous):
+        self.app = app
+        self.authenticator = authenticator
+        self.metadata_url = metadata_url
+        self.allow_anonymous = allow_anonymous
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        auth = self.authenticator
+        if auth is None or not auth.settings.enabled:
+            if self.allow_anonymous:
+                return await self.app(scope, receive, send)
+            return await self._deny(scope, send, 401, "authentication is not configured")
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        authorization = headers.get("authorization", "")
+        bearer = authorization[7:].strip() if authorization.lower().startswith("bearer ") else None
+        api_key = headers.get("x-api-key")
+        if not bearer and not api_key:
+            return await self._deny(scope, send, 401, "send `Authorization: Bearer <token>`")
+        try:
+            await anyio.to_thread.run_sync(
+                lambda: auth.authenticate(bearer=bearer, api_key=api_key, channel="mcp")
+            )
+        except ForbiddenError as exc:
+            return await self._deny(scope, send, 403, str(exc), error="insufficient_scope")
+        except AuthError as exc:
+            return await self._deny(scope, send, 401, str(exc), error="invalid_token")
+        return await self.app(scope, receive, send)
+
+    async def _deny(self, scope, send, status: int, detail: str, error: str | None = None):
+        challenge = f'Bearer resource_metadata="{self.metadata_url(scope)}"'
+        if error:
+            challenge += f', error="{error}"'
+        body = json.dumps({"error": "AuthError", "detail": detail}).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"www-authenticate", challenge.encode()),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+
+def _base_url(scope, public_url: str | None) -> str:
+    if public_url:
+        return public_url.rstrip("/")
+    headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+    host = headers.get("host", "localhost")
+    return f"{scope.get('scheme', 'http')}://{host}"
+
+
 def create_app(
     service: SemanticService,
     authenticator: Authenticator | None,
     *,
     allow_anonymous: bool = False,
     mcp_app: Any = None,
+    public_url: str | None = None,
 ) -> FastAPI:
     lifespan = None
     if mcp_app is not None:
@@ -48,8 +118,24 @@ def create_app(
         description="Semantic layer with its own engine: metrics, business rules and glossary.",
         lifespan=lifespan,
     )
+
+    def metadata_url(scope) -> str:
+        return f"{_base_url(scope, public_url)}/.well-known/oauth-protected-resource"
+
     if mcp_app is not None:
-        app.mount("/mcp", mcp_app)
+        app.mount("/mcp", MCPAuthGate(mcp_app, authenticator, metadata_url, allow_anonymous))
+
+    @app.get("/.well-known/oauth-protected-resource", include_in_schema=False)
+    @app.get("/.well-known/oauth-protected-resource/mcp", include_in_schema=False)
+    def protected_resource(request: Request) -> dict[str, Any]:
+        """OAuth protected resource metadata (RFC 9728) for the MCP endpoint."""
+        issuer = authenticator.settings.issuer if authenticator else None
+        return {
+            "resource": f"{_base_url(request.scope, public_url)}/mcp",
+            "authorization_servers": [issuer] if issuer else [],
+            "bearer_methods_supported": ["header"],
+            "resource_name": "Cosmos Semantic",
+        }
 
     @app.exception_handler(CosmosError)
     async def _cosmos_error(_request: Request, exc: CosmosError) -> JSONResponse:

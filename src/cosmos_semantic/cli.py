@@ -639,8 +639,11 @@ def serve(
     """Starts the REST API (/v1) and the MCP server (/mcp) in the same process.
 
     Identity: COSMOS_OIDC_ISSUER and COSMOS_OIDC_AUDIENCE (provider tokens), or
-    COSMOS_DEV_API_KEYS with development keys.
+    COSMOS_DEV_API_KEYS with development keys. COSMOS_PUBLIC_URL is the address clients use
+    (for the OAuth protected resource metadata behind a proxy).
     """
+    import os
+
     import uvicorn
 
     from cosmos_semantic.api import create_app
@@ -659,7 +662,13 @@ def serve(
     mcp_app = build_mcp(service, authenticator).streamable_http_app(
         streamable_http_path="/", host=host
     )
-    api = create_app(service, authenticator, allow_anonymous=allow_anonymous, mcp_app=mcp_app)
+    api = create_app(
+        service,
+        authenticator,
+        allow_anonymous=allow_anonymous,
+        mcp_app=mcp_app,
+        public_url=os.environ.get("COSMOS_PUBLIC_URL"),
+    )
     uvicorn.run(api, host=host, port=port)
 
 

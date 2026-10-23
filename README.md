@@ -76,6 +76,8 @@ curl -X POST localhost:8080/v1/query -H "X-API-Key: <key>" -H "content-type: app
   -d '{"metrics": ["revenue"], "dimensions": ["customers.segment"]}'
 ```
 
+Remote MCP clients use `/mcp` as an OAuth protected resource: requests without a valid token get HTTP 401 with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`, which names the identity provider (set `COSMOS_PUBLIC_URL` behind a proxy).
+
 For local MCP clients (Claude Desktop, Claude Code), use the stdio transport: `cosmos mcp -m ... -c ...` with `COSMOS_API_KEY` set. The tools are `search_concepts`, `explain`, `list_members`, `query` and `show_sql`. Every call runs as the user who owns the token; personal data never reaches agents.
 
 ### Data sources
