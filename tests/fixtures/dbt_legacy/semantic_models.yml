@@ -1,0 +1,91 @@
+semantic_models:
+  - name: orders
+    model: ref('orders')
+    defaults:
+      agg_time_dimension: ordered_at
+    entities:
+      - name: order
+        type: primary
+        expr: order_id
+      - name: customer
+        type: foreign
+        expr: customer_id
+    dimensions:
+      - name: ordered_at
+        type: time
+        type_params:
+          time_granularity: day
+      - name: status
+        type: categorical
+    measures:
+      - name: order_count
+        agg: count
+        expr: 1
+      - name: revenue
+        agg: sum
+        expr: amount
+      - name: discounts
+        agg: sum
+        expr: discount
+      - name: average_amount
+        agg: average
+        expr: amount
+      - name: p90_amount
+        agg: percentile
+        expr: amount
+
+  - name: customers
+    model: ref('customers')
+    entities:
+      - name: customer
+        type: primary
+        expr: customer_id
+    dimensions:
+      - name: region
+        type: categorical
+      - name: segment
+        type: categorical
+    measures:
+      - name: customer_count
+        agg: count_distinct
+        expr: customer_id
+
+metrics:
+  - name: completed_revenue
+    type: simple
+    type_params:
+      measure: revenue
+    filter: "{{ Dimension('order__status') }} = 'completed'"
+  - name: average_order_value
+    type: ratio
+    type_params:
+      numerator: revenue
+      denominator: order_count
+  - name: net_revenue
+    type: derived
+    type_params:
+      expr: revenue - discounts
+      metrics:
+        - name: revenue
+        - name: discounts
+  - name: revenue_growth
+    type: derived
+    type_params:
+      expr: revenue - revenue_7d
+      metrics:
+        - name: revenue
+        - name: revenue
+          offset_window: 7 days
+          alias: revenue_7d
+  - name: revenue_mtd
+    type: cumulative
+    type_params:
+      measure: revenue
+      cumulative_type_params:
+        grain_to_date: month
+  - name: sul_revenue
+    type: simple
+    type_params:
+      measure:
+        name: revenue
+        filter: "{{ Dimension('customer__region') }} = 'Sul'"

@@ -65,6 +65,15 @@ O planejador é a parte mais delicada do produto, porque é onde um número pode
 5. **Gerar SQL:** o plano é convertido no dialeto da origem pelo SQLGlot, incluindo truncamento de datas por granularidade.
 6. **Executar e limitar:** o conector executa, com limite de linhas e tempo máximo configuráveis.
 
+## Comportamentos do motor que o modelo precisa considerar
+
+- **Filtro por linha vale onde o modelo participa.** O filtro de `customers` só entra quando `customers` faz parte da consulta. Para restringir pedidos pela região do cliente mesmo sem agrupar por cliente, declare o filtro em `orders` referenciando `{customers.region}`; o motor faz o join necessário.
+- **Só joins muitos-para-um.** Cada medida parte do seu modelo e só alcança dimensões do lado "um". Pedir uma dimensão do lado "muitos" (por exemplo, categoria do produto para a receita do pedido) é recusado com explicação; use a medida do modelo mais detalhado (`item_revenue` em `order_items`).
+- **Junção pela espinha de dimensões.** Medidas de modelos diferentes são agregadas em CTEs separadas e unidas pela união das combinações de dimensões, com igualdade segura para nulos. Métricas derivadas seguem a regra do SQL: se uma das medidas não tem valor naquela combinação, o resultado é nulo.
+- **Regras de negócio herdam a classificação de LGPD** das colunas que usam; uma regra sobre um dado sensível também é negada a agentes.
+- **Uma consulta por vez por processo** na API e no MCP; para mais vazão, rode mais réplicas no Container Apps.
+- **Mesmo modelo em esquemas diferentes:** `schema_map` na conexão troca o esquema das tabelas por origem (por exemplo `public: dbo` no SQL Server).
+
 ## Ferramentas do servidor MCP
 
 | Ferramenta | O que devolve |

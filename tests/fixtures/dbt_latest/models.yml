@@ -1,0 +1,82 @@
+models:
+  - name: orders
+    semantic_model:
+      enabled: true
+    agg_time_dimension: ordered_at
+    columns:
+      - name: order_id
+        entity:
+          type: primary
+          name: order
+      - name: customer_id
+        entity:
+          type: foreign
+          name: customer
+      - name: ordered_at
+        granularity: day
+        dimension:
+          type: time
+      - name: status
+        dimension:
+          type: categorical
+    metrics:
+      - name: order_count
+        type: simple
+        agg: count
+        expr: 1
+      - name: revenue
+        type: simple
+        agg: sum
+        expr: amount
+      - name: discounts
+        type: simple
+        agg: sum
+        expr: discount
+      - name: completed_revenue
+        type: simple
+        agg: sum
+        expr: amount
+        filter: "{{ Dimension('order__status') }} = 'completed'"
+
+  - name: customers
+    semantic_model: true
+    columns:
+      - name: customer_id
+        entity:
+          type: primary
+          name: customer
+      - name: region
+        dimension:
+          type: categorical
+      - name: segment
+        dimension:
+          type: categorical
+          name: customer_segment
+    metrics:
+      - name: customer_count
+        type: simple
+        agg: count_distinct
+        expr: customer_id
+
+  - name: not_semantic
+    columns:
+      - name: x
+
+metrics:
+  - name: average_order_value
+    type: ratio
+    numerator: revenue
+    denominator: order_count
+  - name: net_revenue
+    type: derived
+    expr: gross - discounts
+    input_metrics:
+      - name: revenue
+        alias: gross
+      - name: discounts
+  - name: revenue_mtd
+    type: cumulative
+    input_metric: revenue
+    grain_to_date: month
+  - name: funnel
+    type: conversion

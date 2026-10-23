@@ -4,7 +4,7 @@
 
 Camada semântica para agentes de IA e aplicações, com **motor próprio**: formato YAML próprio com o vocabulário do [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl), versionado e com JSON Schema, geração de SQL para cada origem e interoperabilidade nativa com o [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (antigo Open Semantic Interchange, OSI). O [Cube](https://github.com/cube-js/cube) e o dbt são **origens de importação e destinos de exportação**, não dependências.
 
-**Status:** fase 0 (fundação) implementada: formato v1 com JSON Schema, compilador com joins inferidos, planejador com agregação no próprio grão, conectores em Arrow, dados sintéticos e consultas de referência validadas em DuckDB e Postgres. Ver [roadmap](docs/roadmap.md).
+**Status:** fases 0 e 1 implementadas. O motor, a ontologia (glossário e regras de negócio), a API REST, o servidor MCP, a identidade OIDC e a importação de dbt, Ossie e Cube estão prontos. As consultas de referência passam em DuckDB, Postgres e SQL Server; a validação no Databricks depende de um SQL warehouse configurado. Ver [roadmap](docs/roadmap.md).
 
 ## Começando
 
@@ -27,11 +27,41 @@ uv run cosmos query revenue average_order_value --by orders.status \
 uv run cosmos query revenue paid_value customer_count --by customers.region -u region=Sul --show-sql \
   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
-# Consultas de referência: motor versus SQL escrito à mão
-uv run cosmos reference --phase 0
+# Regras de negócio como filtro e como agrupamento
+uv run cosmos query customer_count --where "{rule.cliente_ativo}" --by customers.segment -u region=Sudeste   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+
+# Testes das regras de negócio (no DuckDB, sem acessar as origens) e consultas de referência
+uv run cosmos test -m examples/ecommerce/semantic
+uv run cosmos reference
+
+# Importar modelos de outras ferramentas
+uv run cosmos import cube caminho/do/modelo -o semantic/importado.yml
+uv run cosmos import dbt caminho/do/projeto/models --schema analytics -o semantic/dbt.yml
+uv run cosmos import ossie modelo.yaml -o semantic/ossie.yml
 ```
 
+### API REST e MCP
+
+`cosmos serve` sobe a API REST em `/v1` e o servidor MCP em `/mcp` no mesmo processo; a documentação interativa fica em `/docs`.
+
+```bash
+# Produção: tokens do provedor OIDC (o Cosmos só valida, não emite)
+export COSMOS_OIDC_ISSUER=https://login.microsoftonline.com/<tenant>/v2.0
+export COSMOS_OIDC_AUDIENCE=api://cosmos-semantic
+# Desenvolvimento: chaves de API ligadas a um contexto fixo (arquivo com `keys: {<chave>: {subject, user}}`)
+export COSMOS_DEV_API_KEYS=dev-keys.yml
+
+uv run cosmos serve -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+curl -X POST localhost:8080/v1/query -H "X-API-Key: <chave>" -H "content-type: application/json"   -d '{"metrics": ["revenue"], "dimensions": ["customers.segment"]}'
+```
+
+Para clientes MCP locais (Claude Desktop, Claude Code), use o transporte stdio: `cosmos mcp -m ... -c ...` com `COSMOS_API_KEY` definida. As ferramentas são `search_concepts`, `explain`, `list_members`, `query` e `show_sql`. Cada chamada vale para o usuário dono do token; dados pessoais nunca chegam a agentes.
+
+### Origens
+
 Postgres local: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml up -d`, depois `cosmos demo-data --target postgres` e `cosmos reference --source postgres`. Para rodar os testes também no Postgres, defina `COSMOS_PG_URI=postgresql://cosmos:cosmos@localhost:55432/cosmos`.
+
+SQL Server local: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile sqlserver up -d` e `COSMOS_MSSQL_URI='mssql+pymssql://sa:Cosmos!Passw0rd@localhost:14330/master'`. Cada origem aceita `schema_map` em `connections.yml` (por exemplo `public: dbo`) para usar o mesmo modelo em esquemas diferentes.
 
 Databricks: defina `DATABRICKS_HTTP_PATH` (SQL warehouse) e `DATABRICKS_TOKEN` com `DATABRICKS_SERVER_HOSTNAME`, ou `DATABRICKS_CONFIG_PROFILE` com um perfil do Databricks CLI.
 
@@ -71,12 +101,20 @@ src/cosmos_semantic/
   planner.py         plano de consulta e SQL por dialeto (SQLGlot)
   connectors.py      DuckDB, Postgres (ADBC), Databricks e SQL Server (SQLAlchemy), sempre em Arrow
   engine.py          modelo + conexões -> consultas executadas
+  ontology.py        regras de negócio (dimensões virtuais e testes) e glossário SKOS
+  catalog.py         membros, busca de conceitos e explicações
+  auth.py            validação de tokens OIDC e chaves de desenvolvimento
+  service.py         consulta com auditoria, compartilhada por REST e MCP
+  api.py             API REST (FastAPI)
+  mcp_server.py      servidor MCP
+  interchange/       importação de dbt, Ossie e Cube
   demo_data.py       dados sintéticos em pt_BR
   reference.py       execução das consultas de referência
   cli.py             comando `cosmos`
 schema/              JSON Schema do formato
 examples/ecommerce/  modelo e conexões de exemplo
 reference/           as 20 consultas de referência
+tests/fixtures/      modelos de exemplo em dbt, Ossie e Cube
 deploy/              docker compose local
 docs/                documentação e ADRs
 ```

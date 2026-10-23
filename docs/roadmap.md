@@ -1,8 +1,10 @@
 # Roadmap
 
+**Situação em 22/10/2026:** fases 0 e 1 implementadas. As 18 consultas de referência com SQL passam em DuckDB, Postgres e SQL Server, e as 2 perguntas por sinônimo passam pelo glossário. O gate 1 e o gate 2 ainda precisam da execução no Databricks, que depende de um SQL warehouse configurado. A importação do Cube entrou na fase 1, com teste de equivalência: o modelo importado dá os mesmos números que o nativo.
+
 As durações são estimativas para uma pessoa e devem ser recalibradas ao fim de cada fase. Regra do projeto: um diferencial por fase, além do núcleo.
 
-## Fase 0: fundação (3 a 4 semanas)
+## Fase 0: fundação (3 a 4 semanas) — concluída
 
 - Especificação v1 do formato de autoria (`version: 1`), com JSON Schema gerado dos modelos Pydantic e o exemplo completo de [modelo semântico](modelo-semantico.md).
 - Gerador de dados sintéticos em pt_BR (e-commerce com clientes, pedidos, itens, pagamentos e vendedores, incluindo CPF, e-mail e um campo sensível) e um conjunto de 20 consultas de referência escritas à mão em SQL.
@@ -11,7 +13,7 @@ As durações são estimativas para uma pessoa e devem ser recalibradas ao fim d
 
 **Critério de avanço:** o protótipo reproduz o resultado das consultas de referência de um único modelo em Postgres e Databricks.
 
-## Fase 1: MVP (14 a 16 semanas)
+## Fase 1: MVP (14 a 16 semanas) — implementada; falta validar no Databricks
 
 - Planejador completo: joins inferidos com vários saltos, os 4 tipos de métrica, agregação no próprio grão para evitar multiplicação de linhas.
 - Origens: Postgres, Databricks e SQL Server.

@@ -1,0 +1,98 @@
+version: 0.2.0.dev0
+name: ecommerce
+datasets:
+  - name: orders
+    source: public.orders
+    primary_key: [order_id]
+    fields:
+      - name: order_id
+        datatype: Integer
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: order_id
+      - name: customer_id
+        datatype: Integer
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: customer_id
+      - name: status
+        datatype: String
+        dimension: {}
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: status
+      - name: ordered_at
+        datatype: DateTime
+        dimension:
+          is_time: true
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: ordered_at
+      - name: amount
+        datatype: Decimal
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: amount
+    metrics:
+      - name: revenue
+        description: Valor bruto dos pedidos
+        ai_context:
+          synonyms: [faturamento bruto, vendas]
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: SUM(amount)
+      - name: order_count
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: COUNT(*)
+      - name: average_order_value
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: 1.0 * SUM(amount) / COUNT(*)
+  - name: customers
+    source: public.customers
+    primary_key: [customer_id]
+    fields:
+      - name: customer_id
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: customer_id
+      - name: region
+        datatype: String
+        dimension: {}
+        ai_context:
+          synonyms: [região]
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: region
+    metrics:
+      - name: customer_count
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: COUNT(DISTINCT customer_id)
+relationships:
+  - name: orders_to_customers
+    from: orders
+    to: customers
+    from_columns: [customer_id]
+    to_columns: [customer_id]
+metrics:
+  - name: revenue_per_customer
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: SUM(orders.amount) / COUNT(DISTINCT customers.customer_id)
+custom_extensions:
+  - vendor_name: DBT
+    data: '{"materialized": "table"}'

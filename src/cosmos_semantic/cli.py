@@ -273,6 +273,41 @@ def test_rules(model: ModelOpt = Path("semantic")) -> None:
     typer.secho(f"{len(results)} exemplos de regras ok", fg=typer.colors.GREEN)
 
 
+@app.command("import")
+def import_cmd(
+    kind: Annotated[str, typer.Argument(help="dbt, ossie ou cube.")],
+    source: Annotated[Path, typer.Argument(help="Arquivo ou pasta de origem.")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Arquivo .yml de saída.")],
+    schema_name: Annotated[
+        str | None, typer.Option("--schema", help="Esquema das tabelas (dbt e Cube).")
+    ] = None,
+) -> None:
+    """Importa um modelo de dbt (atual e legado), Apache Ossie ou Cube (YAML estático)."""
+    from cosmos_semantic.interchange import dump_project, import_model
+
+    options = {"schema": schema_name} if kind in ("dbt", "cube") and schema_name else {}
+    try:
+        result = import_model(kind, source, **options)
+        graph = compile_project(result.project, strict=False)
+    except (errors.CosmosError, ValueError) as exc:
+        _fail(exc)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(dump_project(result.project), encoding="utf-8", newline="\n")
+    for warning in result.warnings:
+        typer.secho(f"aviso: {warning}", fg=typer.colors.YELLOW)
+    for issue in graph.issues:
+        color = typer.colors.RED if issue.severity == "error" else typer.colors.YELLOW
+        typer.secho(str(issue), fg=color)
+    p = result.project
+    typer.secho(
+        f"importado em {output}: {len(p.semantic_models)} modelos, {len(p.metrics)} métricas, "
+        f"{len(p.business_rules)} regras, {len(result.warnings)} avisos",
+        fg=typer.colors.GREEN,
+    )
+    if any(i.severity == "error" for i in graph.issues):
+        raise typer.Exit(1)
+
+
 def _service(model: Path, connections: Path):
     import logging
 

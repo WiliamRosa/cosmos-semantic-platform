@@ -18,8 +18,15 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U cosmos" --health-interval 2s --health-retries 30
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Cosmos!Passw0rd"
+        ports: ["1433:1433"]
     env:
       COSMOS_PG_URI: postgresql://cosmos:cosmos@localhost:5432/cosmos
+      COSMOS_MSSQL_URI: mssql+pymssql://sa:Cosmos!Passw0rd@localhost:1433/master
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -27,4 +34,11 @@ jobs:
       - run: uv run ruff check src tests
       - run: uv run ruff format --check src tests
       - run: uv run cosmos validate -m examples/ecommerce/semantic
+      - run: uv run cosmos test -m examples/ecommerce/semantic
+      - name: Espera o SQL Server
+        run: |
+          for i in $(seq 1 60); do
+            uv run python -c "import pymssql; pymssql.connect('localhost', 'sa', 'Cosmos!Passw0rd', port=1433)" && break
+            sleep 2
+          done
       - run: uv run pytest -q

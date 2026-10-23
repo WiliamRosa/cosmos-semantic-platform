@@ -1,0 +1,95 @@
+cubes:
+  - name: orders
+    sql_table: public.orders
+    joins:
+      - name: customers
+        relationship: many_to_one
+        sql: "{CUBE}.customer_id = {customers}.customer_id"
+    dimensions:
+      - name: order_id
+        sql: order_id
+        type: number
+        primary_key: true
+      - name: status
+        sql: "{CUBE}.status"
+        type: string
+      - name: ordered_at
+        sql: ordered_at
+        type: time
+    measures:
+      - name: order_count
+        type: count
+      - name: revenue
+        type: sum
+        sql: amount
+      - name: discounts
+        type: sum
+        sql: discount
+      - name: completed_revenue
+        type: sum
+        sql: amount
+        filters:
+          - sql: "{CUBE}.status = 'completed'"
+      - name: average_order_value
+        type: number
+        sql: "1.0 * {revenue} / NULLIF({order_count}, 0)"
+      - name: revenue_month_to_date
+        type: sum
+        sql: amount
+        rolling_window:
+          type: to_date
+          granularity: month
+    segments:
+      - name: concluidos
+        sql: "{CUBE}.status = 'completed'"
+    pre_aggregations:
+      - name: by_month
+        measures: [revenue]
+        time_dimension: ordered_at
+        granularity: month
+
+  - name: customers
+    sql: SELECT * FROM public.customers
+    dimensions:
+      - name: customer_id
+        sql: customer_id
+        type: number
+        primary_key: true
+      - name: region
+        sql: region
+        type: string
+      - name: segment
+        sql: segment
+        type: string
+    measures:
+      - name: customer_count
+        type: count_distinct
+        sql: customer_id
+
+  - name: payments
+    sql_table: public.payments
+    joins:
+      - name: orders
+        relationship: belongs_to
+        sql: "{payments}.order_id = {orders.order_id}"
+    dimensions:
+      - name: payment_id
+        sql: payment_id
+        type: number
+        primary_key: true
+      - name: method
+        sql: method
+        type: string
+      - name: location
+        sql: "{CUBE}.lat"
+        type: geo
+    measures:
+      - name: paid_value
+        type: sum
+        sql: value
+
+views:
+  - name: vendas
+    cubes:
+      - join_path: orders
+        includes: [revenue, status]
