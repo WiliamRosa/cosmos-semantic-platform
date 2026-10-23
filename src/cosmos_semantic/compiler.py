@@ -314,6 +314,10 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
 
     ontology.check_glossary(g, err, warn)
 
+    from cosmos_semantic import knowledge
+
+    knowledge.check_context(g, err, warn)
+
     if strict:
         errors = [i for i in g.issues if i.severity == "error"]
         if errors:

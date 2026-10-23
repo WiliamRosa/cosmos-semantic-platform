@@ -495,6 +495,11 @@ def impact(
     for kind, items in report["affected"].items():
         if items:
             typer.echo(f"  {kind:11} {', '.join(items)}")
+    if report["source_systems"]:
+        typer.echo(f"  from        {', '.join(report['source_systems'])}")
+    for owner, members in report["owners"].items():
+        color = typer.colors.YELLOW if owner == "unowned" else None
+        typer.secho(f"  owner       {owner}: {', '.join(members)}", fg=color)
     if audit:
         if not report["consumers"]:
             typer.echo("  consumers   none in the audit log")
@@ -503,6 +508,48 @@ def impact(
                 f"  consumer    {c['subject'] or '-'} via {c['channel']}: {c['queries']} queries, "
                 f"last {c['last_at']}, using {', '.join(c['members'])}"
             )
+
+
+@app.command()
+def graph(
+    model: ModelOpt = Path("semantic"),
+    focus: Annotated[
+        str | None,
+        typer.Option(help="kind:name; only what it depends on and what depends on it."),
+    ] = None,
+    fmt: Annotated[str, typer.Option("--format", "-f", help="json, mermaid or dot.")] = "mermaid",
+    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+) -> None:
+    """Exports the business knowledge graph: teams, systems, processes, models, metrics,
+    rules and concepts, with ownership and dependencies."""
+    from cosmos_semantic.knowledge import build_graph
+
+    try:
+        compiled = compile_project(load_project(model))
+        kg = build_graph(compiled)
+        if focus:
+            from cosmos_semantic.impact import DependencyGraph
+
+            target = (
+                focus if focus.startswith("team:") else DependencyGraph(compiled).normalize(focus)
+            )
+            kg = kg.focus(target)
+        rendered = kg.render(fmt)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    text = (
+        json.dumps(rendered, ensure_ascii=False, indent=2) + "\n"
+        if isinstance(rendered, dict)
+        else rendered
+    )
+    if output:
+        output.write_text(text, encoding="utf-8")
+        typer.secho(
+            f"{len(kg.nodes)} nodes, {len(kg.edges)} edges written to {output}",
+            fg=typer.colors.GREEN,
+        )
+    else:
+        typer.echo(text, nl=False)
 
 
 @app.command()

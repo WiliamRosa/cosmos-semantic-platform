@@ -17,9 +17,10 @@ from typing import Any
 from cosmos_semantic.compiler import SemanticGraph
 from cosmos_semantic.errors import QueryError
 from cosmos_semantic.expressions import REF_RE
+from cosmos_semantic.knowledge import owner_of, upstream_systems
 from cosmos_semantic.spec import CumulativeMetric, DerivedMetric, RatioMetric, SimpleMetric
 
-KINDS = ("model", "measure", "metric", "dimension", "rule", "concept")
+KINDS = ("model", "measure", "metric", "dimension", "rule", "concept", "system", "process")
 
 
 @dataclass
@@ -32,6 +33,8 @@ class Impact:
     row_filters: set[str] = field(default_factory=set)
     concepts: set[str] = field(default_factory=set)
     models: set[str] = field(default_factory=set)
+    processes: set[str] = field(default_factory=set)
+    systems: set[str] = field(default_factory=set)
 
     def members(self) -> set[str]:
         """Names as they appear in requests: metrics, measures, `model.dim`, `rule.name`."""
@@ -48,6 +51,7 @@ class Impact:
                 "row_filters": sorted(self.row_filters),
                 "concepts": sorted(self.concepts),
                 "models": sorted(self.models),
+                "processes": sorted(self.processes),
             },
         }
 
@@ -127,6 +131,19 @@ class DependencyGraph:
             if concept.broader:
                 self._add(f"concept:{concept.broader}", f"concept:{concept.concept}")
 
+        for system in g.project.systems:
+            for model in system.feeds:
+                self._add(f"system:{system.name}", f"model:{model}")
+        for process in g.project.processes:
+            me = f"process:{process.name}"
+            for system in process.systems:
+                self._add(f"system:{system}", me)
+            for target in process.uses:
+                try:
+                    self._add(self.normalize(target), me)
+                except QueryError:  # reported by validation
+                    continue
+
     def normalize(self, target: str) -> str:
         kind, sep, name = target.partition(":")
         if not sep:
@@ -140,6 +157,8 @@ class DependencyGraph:
             "metric": name in g.metrics,
             "rule": name in g.rules,
             "concept": any(c.concept == name for c in g.project.glossary),
+            "system": any(s.name == name for s in g.project.systems),
+            "process": any(p.name == name for p in g.project.processes),
             "dimension": "." in name
             and name.split(".")[0] in g.models
             and name.split(".")[1] in g.models[name.split(".")[0]].dimensions,
@@ -170,6 +189,8 @@ class DependencyGraph:
                 "row_filter": result.row_filters,
                 "concept": result.concepts,
                 "model": result.models,
+                "process": result.processes,
+                "system": result.systems,
             }[kind]
             bucket.add(name)
         # Models that reach an affected model through joins are listed, but not expanded: a
@@ -261,6 +282,14 @@ def changed_members(old: SemanticGraph, new: SemanticGraph) -> list[str]:
         {c.concept: c for c in old.project.glossary},
         {c.concept: c for c in new.project.glossary},
     )
+    compare(
+        "system", {x.name: x for x in old.project.systems}, {x.name: x for x in new.project.systems}
+    )
+    compare(
+        "process",
+        {x.name: x for x in old.project.processes},
+        {x.name: x for x in new.project.processes},
+    )
     old_measures = {n: old.models[o].measures[n] for n, o in old.measure_owner.items()}
     new_measures = {n: new.models[o].measures[n] for n, o in new.measure_owner.items()}
     compare("measure", old_measures, new_measures)
@@ -315,7 +344,24 @@ def analyze(
             removed.append(target)
     impact = deps.impact(present)
     report = impact.as_dict()
+    report["owners"] = _by_owner(graph, impact)
+    report["source_systems"] = upstream_systems(graph, impact.models)
     if removed:
         report["removed"] = removed
     report["consumers"] = consumers(audit_path, impact, graph) if audit_path else []
     return report
+
+
+def _by_owner(graph: SemanticGraph, impact: Impact) -> dict[str, list[str]]:
+    """Affected members grouped by the team that owns them (`unowned` when nobody does)."""
+    members = (
+        [f"metric:{m}" for m in impact.metrics]
+        + [f"measure:{m}" for m in impact.measures]
+        + [f"rule:{r}" for r in impact.rules]
+        + [f"process:{p}" for p in impact.processes]
+        + [f"model:{m}" for m in impact.models]
+    )
+    owners: dict[str, list[str]] = {}
+    for member in sorted(members):
+        owners.setdefault(owner_of(graph, member) or "unowned", []).append(member)
+    return dict(sorted(owners.items()))

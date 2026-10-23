@@ -10,7 +10,15 @@ from pydantic import ValidationError
 from cosmos_semantic.errors import ModelError
 from cosmos_semantic.spec import Project
 
-_LIST_KEYS = ("semantic_models", "metrics", "glossary", "business_rules")
+_LIST_KEYS = (
+    "semantic_models",
+    "metrics",
+    "glossary",
+    "business_rules",
+    "teams",
+    "systems",
+    "processes",
+)
 
 
 def load_file(path: Path) -> Project:

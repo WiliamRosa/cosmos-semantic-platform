@@ -293,6 +293,37 @@ SELECT customers_agg.customer_count AS customer_count FROM customers_agg
 
 **Limits:** rules only use columns of the row (classifications over aggregates need a summary model); the glossary does no logical inference.
 
+## Business context
+
+Teams, systems and processes put the model in its business setting ([ADR 0009](decisions/0009-business-context-as-phase-3-differentiator.md)). Models and metrics take an optional `owner`, like rules.
+
+```yaml
+teams:
+  - name: controllership
+    description: Revenue recognition, discounts and collections
+    contact: controllership@example.com
+
+systems:
+  - name: payment_gateway
+    kind: api            # application, database, warehouse, pipeline, bi, api or other
+    owner: controllership
+    feeds: [payments]    # models whose data originates here
+
+processes:
+  - name: order_to_cash
+    owner: controllership
+    systems: [storefront, payment_gateway]
+    uses: [metric:net_revenue, metric:collection_gap, rule:order_net_value]
+```
+
+| Element | Links | Used by |
+| --- | --- | --- |
+| `teams` | Named by `owner` anywhere; when teams are declared, an owner outside them is a warning | `explain team:<name>` lists what the team owns |
+| `systems` | `feeds` models | Impact of `system:<name>` (an outage or a late feed); `source_systems` in `explain` |
+| `processes` | `systems` and `uses` (`kind:name` members) | Impact reports the affected processes; `explain` lists the processes of a metric or rule |
+
+Measures and dimensions inherit the owner of their model. `cosmos impact` groups the affected members by owner (`unowned` when nobody owns them) and lists the source systems, and `cosmos graph` exports everything as Mermaid, Graphviz DOT or JSON, optionally focused on one member (`--focus metric:net_revenue`): what it depends on, what depends on it and who owns each part.
+
 ## The SQL the engine generates
 
 The examples below are Postgres output (lightly abridged). The same plan generates SQL for other dialects through SQLGlot; `cosmos sql` shows it for any request.

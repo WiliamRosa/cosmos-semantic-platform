@@ -71,7 +71,10 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
         )()
 
     @mcp.tool(
-        description="Explain a metric, business rule, dimension or concept: definition, owner and logic."
+        description=(
+            "Explain a metric, business rule, dimension, concept, team, system or process: "
+            "definition, owner, source systems, processes and logic."
+        )
     )
     def explain(name: str, ctx: Context) -> dict[str, Any]:
         return guarded(lambda: _check(principal(ctx), service.catalog.explain(name)))()

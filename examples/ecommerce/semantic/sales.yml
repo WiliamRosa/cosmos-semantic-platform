@@ -4,6 +4,7 @@ version: 1
 semantic_models:
   - name: orders
     table: public.orders
+    owner: digital-commerce
     description: Sales orders, one row per order
     entities:
       - name: order
@@ -41,6 +42,7 @@ semantic_models:
 
   - name: order_items
     table: public.order_items
+    owner: digital-commerce
     description: Order items, one row per item
     entities:
       - name: order_item
@@ -74,6 +76,7 @@ semantic_models:
 
   - name: payments
     table: public.payments
+    owner: controllership
     description: Payments, one or more per order
     entities:
       - name: payment
@@ -101,42 +104,51 @@ semantic_models:
 metrics:
   - name: completed_revenue
     type: simple
+    owner: sales-leadership
     measure: revenue
     filter: "{status} = 'completed'"
     description: Gross revenue of completed orders only
   - name: average_order_value
     type: ratio
+    owner: sales-leadership
     numerator: revenue
     denominator: order_count
     description: Average order value
   - name: net_revenue
     type: derived
+    owner: controllership
     expr: "{revenue} - {discounts}"
     description: Gross revenue minus discounts
   - name: collection_gap
     type: derived
+    owner: controllership
     expr: "{net_revenue} - {paid_value}"
     description: Net revenue not yet paid (spans orders and payments)
   - name: discount_rate
     type: ratio
+    owner: controllership
     numerator: discounts
     denominator: revenue
     description: Discounts over gross revenue
   - name: orders_per_buyer
     type: derived
+    owner: sales-leadership
     expr: "{order_count} / {buyers}"
     description: Orders per buyer (division between integer counts)
   - name: items_per_order
     type: derived
+    owner: sales-leadership
     expr: "{items_sold} / {order_count}"
     description: Units per order (spans items and orders)
   - name: revenue_year_to_date
     type: cumulative
+    owner: controllership
     measure: revenue
     grain_to_date: year
     description: Year-to-date revenue
   - name: revenue_month_to_date
     type: cumulative
+    owner: controllership
     measure: revenue
     grain_to_date: month
     description: Month-to-date revenue

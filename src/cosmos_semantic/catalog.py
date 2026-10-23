@@ -136,7 +136,11 @@ class Catalog:
                     for old in reversed(rule.versions()[:-1])
                 ],
                 "change_note": rule.change_note,
+                **self._context(f"rule:{name}"),
             }
+        context = self._explain_context(kind, name)
+        if context is not None:
+            return context
         if kind in ("", "metric") and name in g.metrics:
             metric = g.metrics[name]
             return {
@@ -146,6 +150,7 @@ class Catalog:
                 "description": metric.description,
                 "definition": _metric_text(metric),
                 "concepts": self._concepts(f"metric:{name}"),
+                **self._context(f"metric:{name}"),
             }
         if kind in ("", "metric", "measure") and name in g.measure_owner:
             owner = g.measure_owner[name]
@@ -157,6 +162,7 @@ class Catalog:
                 "description": measure.description,
                 "definition": f"{measure.agg}({measure.expr or ('*' if measure.agg == 'count' else measure.name)}) in `{owner}`",
                 "concepts": self._concepts(f"metric:{name}") + self._concepts(f"measure:{name}"),
+                **self._context(f"measure:{name}"),
             }
         try:
             ref = g.resolve_dimension(name)
@@ -173,6 +179,76 @@ class Catalog:
             "sensitivity": dim.sensitivity,
             "concepts": self._concepts(f"dimension:{ref.model}.{ref.name}"),
         }
+
+    def _context(self, member: str) -> dict[str, Any]:
+        """Owner, source systems and processes of a member (the business knowledge graph)."""
+        from cosmos_semantic.impact import DependencyGraph
+        from cosmos_semantic.knowledge import owner_of, upstream_systems
+
+        g = self.graph
+        deps = DependencyGraph(g)
+        upstream: set[str] = set()
+        stack = [member]
+        reverse: dict[str, set[str]] = {}
+        for used, users in deps.dependents.items():
+            for by in users:
+                reverse.setdefault(by, set()).add(used)
+        while stack:
+            item = stack.pop()
+            if item not in upstream:
+                upstream.add(item)
+                stack.extend(reverse.get(item, ()))
+        models = {m.partition(":")[2] for m in upstream if m.startswith("model:")}
+        processes = sorted(deps.impact([member]).processes)
+        out: dict[str, Any] = {"owner": owner_of(g, member)}
+        if systems := upstream_systems(g, models):
+            out["source_systems"] = systems
+        if processes:
+            out["processes"] = processes
+        return out
+
+    def _explain_context(self, kind: str, name: str) -> dict[str, Any] | None:
+        project = self.graph.project
+        if kind in ("", "team"):
+            team = next((t for t in project.teams if t.name == name), None)
+            if team is not None:
+                from cosmos_semantic.knowledge import owned_items
+
+                return {
+                    "kind": "team",
+                    "name": name,
+                    "description": team.description,
+                    "contact": team.contact,
+                    "owns": sorted(m for m, o in owned_items(self.graph) if o == name),
+                }
+        if kind in ("", "system"):
+            system = next((s for s in project.systems if s.name == name), None)
+            if system is not None:
+                from cosmos_semantic.impact import analyze
+
+                affected = analyze(self.graph, [f"system:{name}"])["affected"]
+                return {
+                    "kind": "system",
+                    "name": name,
+                    "system_kind": system.kind,
+                    "description": system.description,
+                    "owner": system.owner,
+                    "feeds": system.feeds,
+                    "metrics": affected["metrics"],
+                    "processes": affected["processes"],
+                }
+        if kind in ("", "process"):
+            process = next((p for p in project.processes if p.name == name), None)
+            if process is not None:
+                return {
+                    "kind": "process",
+                    "name": name,
+                    "description": process.description,
+                    "owner": process.owner,
+                    "systems": process.systems,
+                    "uses": process.uses,
+                }
+        return None
 
     def _concepts(self, target: str) -> list[str]:
         return [c.concept for c in self.glossary.for_target(target)]

@@ -263,6 +263,19 @@
           "default": null,
           "title": "Label"
         },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Team responsible for the definition.",
+          "title": "Owner"
+        },
         "type": {
           "const": "cumulative",
           "title": "Type",
@@ -390,6 +403,19 @@
           ],
           "default": null,
           "title": "Label"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Team responsible for the definition.",
+          "title": "Owner"
         },
         "type": {
           "const": "derived",
@@ -585,6 +611,67 @@
       "title": "Measure",
       "type": "object"
     },
+    "Process": {
+      "additionalProperties": false,
+      "description": "A business process and the definitions it depends on.",
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "systems": {
+          "default": [],
+          "description": "Systems the process runs on.",
+          "items": {
+            "maxLength": 64,
+            "pattern": "^[a-z_][a-z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Systems",
+          "type": "array"
+        },
+        "uses": {
+          "default": [],
+          "description": "Members the process relies on, as `kind:name`: metric, measure, rule, concept, model or dimension (`dimension:model.name`).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Uses",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Process",
+      "type": "object"
+    },
     "RatioMetric": {
       "additionalProperties": false,
       "properties": {
@@ -617,6 +704,19 @@
           ],
           "default": null,
           "title": "Label"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Team responsible for the definition.",
+          "title": "Owner"
         },
         "type": {
           "const": "ratio",
@@ -838,6 +938,19 @@
           "default": null,
           "title": "Description"
         },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Team responsible for the data.",
+          "title": "Owner"
+        },
         "data_source": {
           "anyOf": [
             {
@@ -923,6 +1036,19 @@
           "default": null,
           "title": "Label"
         },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Team responsible for the definition.",
+          "title": "Owner"
+        },
         "type": {
           "const": "simple",
           "title": "Type",
@@ -953,6 +1079,112 @@
         "measure"
       ],
       "title": "SimpleMetric",
+      "type": "object"
+    },
+    "System": {
+      "additionalProperties": false,
+      "description": "Where data comes from or goes to: an application, a pipeline, a warehouse, a BI tool.",
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "default": "other",
+          "enum": [
+            "application",
+            "database",
+            "warehouse",
+            "pipeline",
+            "bi",
+            "api",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "feeds": {
+          "default": [],
+          "description": "Semantic models whose data originates here.",
+          "items": {
+            "maxLength": 64,
+            "pattern": "^[a-z_][a-z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Feeds",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "System",
+      "type": "object"
+    },
+    "Team": {
+      "additionalProperties": false,
+      "description": "Who owns definitions, data and processes.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "contact": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "E-mail, channel or page, for questions.",
+          "title": "Contact"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Team",
       "type": "object"
     },
     "UserContextField": {
@@ -1075,6 +1307,30 @@
         "$ref": "#/$defs/BusinessRule"
       },
       "title": "Business Rules",
+      "type": "array"
+    },
+    "teams": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Team"
+      },
+      "title": "Teams",
+      "type": "array"
+    },
+    "systems": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/System"
+      },
+      "title": "Systems",
+      "type": "array"
+    },
+    "processes": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Process"
+      },
+      "title": "Processes",
       "type": "array"
     },
     "custom_extensions": {

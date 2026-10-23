@@ -92,6 +92,9 @@ def test_changes_between_model_versions(graph):
     project.metrics = [m for m in project.metrics if m.name not in dropped]
     concept = next(c for c in project.glossary if c.concept == "net_revenue")
     concept.maps_to = None
+    # A process that used a removed metric must be updated too, or validation fails.
+    process = next(p for p in project.processes if p.name == "order_to_cash")
+    process.uses = [u for u in process.uses if u.partition(":")[2] not in dropped]
     new = compile_project(project)
 
     changes = changed_members(graph, new)
@@ -103,6 +106,7 @@ def test_changes_between_model_versions(graph):
         "rule:active_customer",
         "measure:discounts",
         "concept:net_revenue",
+        "process:order_to_cash",
     }
     removed: list[str] = []
     report = analyze(new, changes, removed=removed)

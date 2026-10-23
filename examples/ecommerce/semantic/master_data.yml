@@ -11,6 +11,7 @@ user_context:
 semantic_models:
   - name: customers
     table: public.customers
+    owner: digital-commerce
     description: Customers
     entities:
       - name: customer
@@ -48,6 +49,7 @@ semantic_models:
 
   - name: sellers
     table: public.sellers
+    owner: data-platform
     entities:
       - name: seller
         type: primary
@@ -60,6 +62,7 @@ semantic_models:
 
   - name: products
     table: public.products
+    owner: data-platform
     entities:
       - name: product
         type: primary

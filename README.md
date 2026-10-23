@@ -53,6 +53,10 @@ uv run cosmos query customer_count -w "{rule.active_customer}" --as-of 2026-06-3
 # Usage and estimated cost per metric, user, agent and data source (rates: `cost` in connections.yml)
 uv run cosmos usage --audit data/audit.jsonl -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
+# The business knowledge graph: owners, source systems and processes (Mermaid, DOT or JSON)
+uv run cosmos graph --focus process:order_to_cash -m examples/ecommerce/semantic
+uv run cosmos impact system:payment_gateway -m examples/ecommerce/semantic
+
 # Draft a model from the database catalog (keys, joins, measures, LGPD suggestions), then review it
 uv run cosmos bootstrap -c examples/ecommerce/connections.yml -o semantic/draft.yml
 

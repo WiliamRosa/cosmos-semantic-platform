@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=../../../schema/cosmos-semantic.v1.schema.json
+#
+# Business context: who owns what, where the data comes from and which processes rely on it.
+version: 1
+
+teams:
+  - name: sales-leadership
+    description: Commercial targets, customer segmentation and retention
+    contact: sales-leads@example.com
+  - name: controllership
+    description: Revenue recognition, discounts and collections
+    contact: controllership@example.com
+  - name: digital-commerce
+    description: The online store and its order flow
+    contact: "#digital-commerce"
+  - name: data-platform
+    description: Pipelines and the analytical warehouse
+    contact: "#data-platform"
+
+systems:
+  - name: storefront
+    kind: application
+    owner: digital-commerce
+    description: Online store where customers register and place orders
+    feeds: [customers, orders, order_items]
+  - name: payment_gateway
+    kind: api
+    owner: controllership
+    description: Card, wallet and bank transfer payments
+    feeds: [payments]
+  - name: erp
+    kind: application
+    owner: data-platform
+    description: Product catalog and seller registry
+    feeds: [products, sellers]
+
+processes:
+  - name: order_to_cash
+    owner: controllership
+    description: From the order to the money in the bank
+    systems: [storefront, payment_gateway]
+    uses: [metric:net_revenue, metric:collection_gap, rule:order_net_value]
+  - name: customer_retention
+    owner: sales-leadership
+    description: Keeping customers buying, measured by the active base
+    systems: [storefront]
+    uses: [rule:active_customer, metric:orders_per_buyer, concept:active_customer]

@@ -62,6 +62,7 @@ class SemanticModel(_Base):
     name: Name
     table: str
     description: str | None = None
+    owner: str | None = Field(None, description="Team responsible for the data.")
     data_source: str | None = None
     entities: list[Entity] = []
     dimensions: list[Dimension] = []
@@ -73,6 +74,7 @@ class _MetricBase(_Base):
     name: Name
     description: str | None = None
     label: str | None = None
+    owner: str | None = Field(None, description="Team responsible for the definition.")
 
 
 class SimpleMetric(_MetricBase):
@@ -244,6 +246,42 @@ class BusinessRule(_Base):
         return chosen if self.history else versions[-1]
 
 
+class Team(_Base):
+    """Who owns definitions, data and processes."""
+
+    name: str
+    description: str | None = None
+    contact: str | None = Field(None, description="E-mail, channel or page, for questions.")
+
+
+class System(_Base):
+    """Where data comes from or goes to: an application, a pipeline, a warehouse, a BI tool."""
+
+    name: Name
+    kind: Literal["application", "database", "warehouse", "pipeline", "bi", "api", "other"] = (
+        "other"
+    )
+    owner: str | None = None
+    description: str | None = None
+    feeds: list[Name] = Field([], description="Semantic models whose data originates here.")
+
+
+class Process(_Base):
+    """A business process and the definitions it depends on."""
+
+    name: Name
+    owner: str | None = None
+    description: str | None = None
+    systems: list[Name] = Field([], description="Systems the process runs on.")
+    uses: list[str] = Field(
+        [],
+        description=(
+            "Members the process relies on, as `kind:name`: metric, measure, rule, concept, "
+            "model or dimension (`dimension:model.name`)."
+        ),
+    )
+
+
 class Project(_Base):
     """One file (or the merged set of files) of a semantic model."""
 
@@ -260,6 +298,9 @@ class Project(_Base):
     user_context: dict[Name, UserContextField] = {}
     glossary: list[Concept] = []
     business_rules: list[BusinessRule] = []
+    teams: list[Team] = []
+    systems: list[System] = []
+    processes: list[Process] = []
     custom_extensions: dict[str, Any] = Field(
         {}, description="Information from other tools, preserved on import."
     )
