@@ -337,7 +337,7 @@ class Validator:
         user = {name: "__validation__" for name in graph.project.user_context}
         planner = Planner(graph, self.connector.dialect, self.connector.config.schema_map)
         compiled = planner.plan(
-            QueryRequest(metrics=metrics, filters=filters), Principal(user=user)
+            QueryRequest(metrics=metrics, filters=filters, limit=1), Principal(user=user)
         )
         self.connector.execute(compiled.sql, max_rows=1)
 

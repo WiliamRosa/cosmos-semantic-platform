@@ -169,6 +169,24 @@ The cost is an estimate, not billing data: a query costs `per_query + per_second
 
 It needs the optional `anthropic` package (`uv sync --extra ai`) and Claude API credentials (`ANTHROPIC_API_KEY` or an `ant auth login` profile). Tests use a fake model and need neither.
 
+## Industry packs
+
+A pack is a ready semantic model for one industry, written over logical tables and columns ([ADR 0009](decisions/0009-business-context-as-phase-3-differentiator.md)). The first one, `retail`, is seeded from the e-commerce example: orders, items, payments, customers, products and sellers, the revenue metrics, the `active_customer` (with its history) and `order_size_band` rules, the bilingual glossary, the regional row filter and the personal data classification. A test keeps the pack and the example identical.
+
+`cosmos pack apply retail --source <data source> --schema <schema> -o semantic/retail.yml` reads the database catalog and maps every logical table and column by name:
+
+| Match | Example |
+| --- | --- |
+| Same name, singular or plural, common prefixes removed (`tbl_`, `tb_`, `dim_`, `fact_`, `stg_`...) | `orders` -> `tbl_sales_orders` through the synonym `sales_orders` |
+| The table's own key as `id` | `order_id` -> `id` |
+| `<entity>_<column>` | `segment` -> `customer_segment` |
+| Synonyms in English and Portuguese from the pack's `pack.yml` | `last_order_at` -> `last_purchase_date`, `amount` -> `valor_total` |
+| Explicit `--map table=physical` or `--map table.column=physical` | for anything ambiguous |
+
+Expressions are rewritten to the physical columns. What the database lacks is dropped together with everything that depended on it (a missing `sellers` table drops the `sellers` model and the seller entity; a missing column drops its dimension, and a rule bound to it), repeating until the model validates. Then every metric runs once on the data source and the rule tests run; the report (`.report.json`) lists every mapping, rename, missing item and removal. The output is a draft for review: owners, teams and row filters are the organization's to set.
+
+The test maps the pack onto the same data stored with another naming convention (other table names, `id` keys, prefixes, synonyms, no sellers and no health plan column) and checks that it answers with the same numbers as the hand-written model on DuckDB, Postgres and SQL Server.
+
 ## Model bootstrap
 
 `cosmos bootstrap -o draft.yml` drafts a semantic model from the database catalog (`information_schema`, available on DuckDB, Postgres and SQL Server), without AI:

@@ -1,0 +1,62 @@
+# Retail industry pack (ADR 0009), seeded from the e-commerce example.
+#
+# `cosmos pack apply retail` maps these logical tables and columns onto a database by name:
+# exact names, singular/plural, common prefixes (tb_, dim_, fact_...), `id` for the table's own
+# key, `<entity>_<column>` and the synonyms below (English and Portuguese).
+name: retail
+version: 1
+description: >-
+  Orders, order items, payments, customers, products and sellers, with revenue, net revenue,
+  average order value, collection gap and items per order, the active customer and order size
+  rules, a bilingual glossary, regional row filters and personal data classification.
+
+tables:
+  orders:
+    synonyms: [sales_orders, sales_order, order_header, order_headers, purchases, pedidos, pedido, vendas, venda]
+    columns:
+      order_id: [order_number, order_no, id_pedido, pedido_id]
+      customer_id: [client_id, cust_id, buyer_id, id_cliente, cliente_id]
+      ordered_at: [order_date, order_datetime, order_ts, purchase_date, purchased_at, data_pedido, dt_pedido]
+      status: [order_status, state_code, situacao, status_pedido]
+      amount: [total_amount, order_total, total_value, gross_amount, valor_total, valor_pedido, valor]
+      discount: [discount_amount, discount_value, total_discount, desconto, valor_desconto]
+  order_items:
+    synonyms: [order_lines, order_line, line_items, line_item, sales_order_lines, itens_pedido, item_pedido]
+    columns:
+      order_id: [order_number, id_pedido, pedido_id]
+      product_id: [sku_id, item_id, id_produto, produto_id]
+      seller_id: [vendor_id, merchant_id, id_vendedor, vendedor_id]
+      quantity: [qty, units, quantidade, qtd]
+      unit_price: [price, item_price, unit_value, preco_unitario, preco]
+  payments:
+    synonyms: [payment_transactions, payment_txn, transactions, pagamentos, pagamento]
+    columns:
+      order_id: [order_number, id_pedido, pedido_id]
+      method: [payment_method, payment_type, forma_pagamento, meio_pagamento]
+      installments: [installment_count, parcelas, num_parcelas]
+      value: [amount_paid, paid_amount, payment_amount, amount, valor_pago, valor]
+      paid_at: [payment_date, paid_date, payment_datetime, data_pagamento]
+  customers:
+    synonyms: [clients, client, buyers, accounts, clientes, cliente]
+    columns:
+      name: [full_name, customer_name, nome, nome_completo]
+      tax_id: [ssn, cpf, tax_number, national_id, document_number, documento]
+      email: [email_address, e_mail, mail]
+      state: [state_code, uf, estado]
+      region: [sales_region, regiao]
+      segment: [customer_segment, segmento]
+      health_plan: [plano_saude]
+      created_at: [signup_date, registered_at, created_date, data_cadastro]
+      last_order_at: [last_purchase_date, last_purchase_at, last_order_date, data_ultima_compra]
+  products:
+    synonyms: [items, skus, catalog, produtos, produto]
+    columns:
+      name: [product_name, title, description, nome, descricao]
+      category: [product_category, category_name, categoria]
+      list_price: [price, retail_price, preco_lista, preco]
+  sellers:
+    synonyms: [vendors, merchants, stores, vendedores, lojistas, lojas]
+    columns:
+      name: [seller_name, vendor_name, nome]
+      state: [state_code, uf, estado]
+      region: [regiao]

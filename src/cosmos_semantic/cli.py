@@ -675,6 +675,86 @@ def suggest(
     typer.echo(f"report (descriptions to apply by hand, rejections) -> {report_path}")
 
 
+pack_app = typer.Typer(help="Industry semantic packs mapped onto your database.")
+app.add_typer(pack_app, name="pack")
+
+
+@pack_app.command("list")
+def pack_list() -> None:
+    """Lists the available packs."""
+    from cosmos_semantic.packs import available
+
+    for pack in available():
+        typer.secho(f"{pack['name']} (v{pack['version']})", bold=True)
+        typer.echo(f"  {pack['description']}")
+
+
+@pack_app.command("apply")
+def pack_apply(
+    name: Annotated[str, typer.Argument(help="Pack name, such as retail.")],
+    connections: ConnOpt = Path("connections.yml"),
+    source: Annotated[
+        str | None, typer.Option(help="Data source; default: the default one.")
+    ] = None,
+    schema: Annotated[str, typer.Option(help="Schema with your tables.")] = "public",
+    mapping: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--map", help="Override: table=physical_table or table.column=physical_column."
+        ),
+    ] = None,
+    output: Annotated[Path, typer.Option("--output", "-o", help="Draft model (.yml).")] = Path(
+        "semantic/pack.yml"
+    ),
+) -> None:
+    """Maps a pack onto your tables by name, drops what your database lacks, runs every
+    metric, and writes a draft model plus a report for review."""
+    from cosmos_semantic.connectors import connect
+    from cosmos_semantic.interchange import dump_project
+    from cosmos_semantic.packs import apply_pack
+
+    overrides = {}
+    for item in mapping or []:
+        key, sep, value = item.partition("=")
+        if not sep:
+            _fail(ValueError(f"--map expects name=value, got `{item}`"))
+        overrides[key] = value
+    try:
+        conns = load_connections(connections)
+        name_ = source or conns.default or next(iter(conns.data_sources))
+        connector = connect(conns.data_sources[name_])
+        result = apply_pack(name, connector, schema=schema, overrides=overrides)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    report = result.report
+    header = (
+        f"# Draft from the `{name}` pack v{report['pack']['version']} on {dt.date.today()}; "
+        "review it, then set owners, teams and row filters for your organization.\n"
+    )
+    output.write_text(header + dump_project(result.project), encoding="utf-8")
+    report_path = output.with_suffix(".report.json")
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    for logical, physical in report["tables"].items():
+        renamed = report["columns_renamed"].get(logical, {})
+        detail = ", ".join(f"{k}->{v}" for k, v in renamed.items())
+        typer.echo(f"  table    {logical} -> {physical}" + (f"  ({detail})" if detail else ""))
+    for logical in report["missing_tables"]:
+        typer.secho(f"  missing  table {logical}", fg=typer.colors.YELLOW)
+    for logical, columns in report["missing_columns"].items():
+        typer.secho(f"  missing  {logical}: {', '.join(columns)}", fg=typer.colors.YELLOW)
+    for item in report["ambiguous"]:
+        typer.secho(f"  ambiguous {item} (use --map)", fg=typer.colors.YELLOW)
+    for item in report["removed"]:
+        typer.secho(f"  removed  {item['member']}: {item['reason']}", fg=typer.colors.BRIGHT_BLACK)
+    tests = report["rule_tests"]
+    typer.secho(
+        f"{report['metrics_checked']} metrics ran on the data source, rule tests "
+        f"{tests['passed']}/{tests['total']} -> {output}",
+        fg=typer.colors.GREEN,
+    )
+
+
 @app.command("bootstrap")
 def bootstrap_cmd(
     output: Annotated[Path, typer.Option("--output", "-o", help="Draft model file (.yml).")],

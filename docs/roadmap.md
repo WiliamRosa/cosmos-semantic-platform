@@ -1,6 +1,6 @@
 # Roadmap
 
-**Status on 2026-10-23:** phases 0, 1 and 2 are implemented; phase 3 is in progress. The 18 basic and 24 advanced reference queries return the same result as hand-written SQL on DuckDB, Postgres and SQL Server; 80 random requests return identical numbers across the three databases; and the 2 synonym-only questions resolve through the glossary. Databricks validation (gates 1 and 2) is deferred by decision ([ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md)); development continues on DuckDB, Postgres and SQL Server, and the gates stay formally open. Cube import moved into phase 1, with an equivalence test: the imported model returns the same numbers as the native one.
+**Status on 2026-10-23:** phases 0 to 3 are implemented; phase 4 (connected BI and managed product) is paused. The 18 basic and 24 advanced reference queries return the same result as hand-written SQL on DuckDB, Postgres and SQL Server; 80 random requests return identical numbers across the three databases; and the 2 synonym-only questions resolve through the glossary. Databricks validation (gates 1 and 2) is deferred by decision ([ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md)); development continues on DuckDB, Postgres and SQL Server, and the gates stay formally open. Cube import moved into phase 1, with an equivalence test: the imported model returns the same numbers as the native one.
 
 Durations are estimates for one person and must be recalibrated at the end of each phase. Project rule: one differentiator per phase, beyond the core.
 
@@ -52,7 +52,7 @@ Redefined by [ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentia
 
 **Exit criterion:** reconciliation finds and explains every planted divergence on the three databases; replaying an audited query returns the same result and hashes; first external users run the open core with their own models.
 
-## Phase 3: business context (8–10 weeks) — in progress
+## Phase 3: business context (8–10 weeks) — done
 
 Redefined by [ADR 0009](decisions/0009-business-context-as-phase-3-differentiator.md): the connected BI and managed product phases are paused. Every item is validated on DuckDB, Postgres and SQL Server.
 
@@ -62,7 +62,7 @@ Redefined by [ADR 0009](decisions/0009-business-context-as-phase-3-differentiato
     3. **Expanded knowledge graph** (done): teams, systems and processes linked to metrics, rules and models; impact grouped by owner, with source systems and affected processes; `explain` for teams, systems and processes; `cosmos graph` export (Mermaid, DOT, JSON).
     4. **Power BI import** (done) (`.bim` and TMDL): physical tables from the partitions, relationships as entities, simple DAX (aggregations, `DIVIDE`, `CALCULATE` with column filters, `TOTALYTD`/`QTD`/`MTD`, arithmetic) as measures and metrics, the rest as warnings; equivalence test on the three databases.
     5. **AI-assisted discovery** (done) (`cosmos suggest`): concepts with English and Portuguese labels, rules, metrics and descriptions from Claude with a strict JSON Schema; every suggestion compiled and, with a data source, run by the engine; accepted ones written to a separate YAML for review; sample values opt-in and never from sensitive columns.
-    6. **Retail pack:** the e-commerce example as an industry pack, mapped onto a customer's tables.
+    6. **Retail pack** (done) (`cosmos pack apply retail`): the e-commerce example as an industry pack, mapped onto a customer's tables by name (prefixes, `id` keys, `<entity>_<column>`, English and Portuguese synonyms, `--map` overrides), with dependent removals, every metric run on the source and an equivalence test on the three databases.
 
 **Exit criterion:** a past number can be recomputed under the rule that was in effect and under today's rule; every metric can be traced to an owner, a system and its usage cost; a Power BI model imports with an equivalence test.
 

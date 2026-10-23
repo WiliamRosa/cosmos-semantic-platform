@@ -1,0 +1,154 @@
+# yaml-language-server: $schema=../../../../../schema/cosmos-semantic.v1.schema.json
+version: 1
+
+semantic_models:
+  - name: orders
+    table: public.orders
+    owner: digital-commerce
+    description: Sales orders, one row per order
+    entities:
+      - name: order
+        type: primary
+        expr: order_id
+      - name: customer
+        type: foreign
+        expr: customer_id
+    dimensions:
+      - name: ordered_at
+        type: time
+        description: Order date and time
+      - name: status
+        type: categorical
+        description: completed, canceled or pending
+      - name: has_discount
+        type: boolean
+        expr: discount > 0
+        description: The order had a discount
+    measures:
+      - name: order_count
+        agg: count
+        description: Number of orders
+      - name: revenue
+        agg: sum
+        expr: amount
+        description: Gross order value
+      - name: discounts
+        agg: sum
+        expr: discount
+      - name: buyers
+        agg: count_distinct
+        expr: customer_id
+        description: Distinct customers who bought
+
+  - name: order_items
+    table: public.order_items
+    owner: digital-commerce
+    description: Order items, one row per item
+    entities:
+      - name: order_item
+        type: primary
+        expr: order_item_id
+      - name: order
+        type: foreign
+        expr: order_id
+      - name: product
+        type: foreign
+        expr: product_id
+      - name: seller
+        type: foreign
+        expr: seller_id
+    measures:
+      - name: items_sold
+        agg: sum
+        expr: quantity
+        description: Units sold
+      - name: item_revenue
+        agg: sum
+        expr: quantity * unit_price
+        description: Item value before discounts
+      - name: avg_quantity
+        agg: avg
+        expr: quantity
+        description: Average units per item (average of an integer column)
+      - name: line_count
+        agg: count
+        description: Number of items
+
+  - name: payments
+    table: public.payments
+    owner: controllership
+    description: Payments, one or more per order
+    entities:
+      - name: payment
+        type: primary
+        expr: payment_id
+      - name: order
+        type: foreign
+        expr: order_id
+    dimensions:
+      - name: method
+        type: categorical
+        description: wallet, card or bank_transfer
+      - name: installments
+        type: number
+      - name: paid_at
+        type: time
+    measures:
+      - name: paid_value
+        agg: sum
+        expr: value
+        description: Amount actually paid
+      - name: payment_count
+        agg: count
+
+metrics:
+  - name: completed_revenue
+    type: simple
+    owner: sales-leadership
+    measure: revenue
+    filter: "{status} = 'completed'"
+    description: Gross revenue of completed orders only
+  - name: average_order_value
+    type: ratio
+    owner: sales-leadership
+    numerator: revenue
+    denominator: order_count
+    description: Average order value
+  - name: net_revenue
+    type: derived
+    owner: controllership
+    expr: "{revenue} - {discounts}"
+    description: Gross revenue minus discounts
+  - name: collection_gap
+    type: derived
+    owner: controllership
+    expr: "{net_revenue} - {paid_value}"
+    description: Net revenue not yet paid (spans orders and payments)
+  - name: discount_rate
+    type: ratio
+    owner: controllership
+    numerator: discounts
+    denominator: revenue
+    description: Discounts over gross revenue
+  - name: orders_per_buyer
+    type: derived
+    owner: sales-leadership
+    expr: "{order_count} / {buyers}"
+    description: Orders per buyer (division between integer counts)
+  - name: items_per_order
+    type: derived
+    owner: sales-leadership
+    expr: "{items_sold} / {order_count}"
+    description: Units per order (spans items and orders)
+  - name: revenue_year_to_date
+    type: cumulative
+    owner: controllership
+    measure: revenue
+    grain_to_date: year
+    description: Year-to-date revenue
+  - name: revenue_month_to_date
+    type: cumulative
+    owner: controllership
+    measure: revenue
+    grain_to_date: month
+    description: Month-to-date revenue
