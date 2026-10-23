@@ -8,7 +8,7 @@ data_sources:
 
   postgres:
     type: postgres
-    uri: ${COSMOS_PG_URI:-postgresql://cosmos:cosmos@localhost:55432/cosmos}
+    uri: ${COSMOS_PG_URI:-postgresql://cosmos:cosmos@localhost:15432/cosmos}
 
   sqlserver:
     type: sqlserver

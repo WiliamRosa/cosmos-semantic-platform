@@ -110,6 +110,31 @@ With `COSMOS_AUDIT_LOG` pointing to a `.jsonl` file, every query is recorded wit
 
 The result hash is the same on DuckDB, Postgres and SQL Server for the same request, which the tests check.
 
+## Reconciliation
+
+`cosmos reconcile` compares a governed metric with an existing definition and explains why the numbers differ ([ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md)):
+
+- **Metric versus SQL** (`--sql legacy.sql`): the legacy query returns the request's dimensions and one value column, matched by name or by position.
+- **Model versus model** (`--other-model path`): the same request on another semantic model, such as an imported dbt or Cube model.
+
+The report gives matched and differing rows, keys found on one side only, totals with the difference in percent, examples, the governed formula and `as_of`. When the numbers differ, the engine runs **probes**: variants of the governed query, each reproducing a classic mistake. A probe that matches the other side on every row is reported as a likely cause:
+
+| Cause | What the legacy definition does |
+| --- | --- |
+| `filter_difference` | Includes or excludes categories (for example, counts canceled orders, or ignores the metric's filter) |
+| `fan_out` | Joins a one-to-many table before aggregating, so parent rows count once per child row |
+| `inner_join_drop` | Only counts rows that have a match in another table (INNER JOIN) |
+| `count_not_distinct` | Counts rows instead of distinct values |
+| `time_shift` | Buckets dates shifted by some hours, such as a UTC conversion |
+| `truncation` | Integer division, or an average over an integer column |
+| `rounding` | Rounds the values |
+| `null_group_dropped` | Drops rows whose dimension is null (no match in a join, or an IS NOT NULL filter) |
+| `different_metric` | Computes another metric of the model (for example, net instead of gross revenue) |
+
+Probes are evidence, not proof: when two causes produce the same numbers, both are listed. The [divergence zoo](../examples/ecommerce/divergence_zoo.yml) plants each mistake in legacy SQL and is diagnosed on DuckDB, Postgres and SQL Server in the tests (`cosmos reconcile --cases examples/ecommerce/divergence_zoo.yml` runs it as a demo).
+
+Legacy SQL can read anything the database user can, bypassing row filters, so reconciliation is an operator tool in the CLI; it is not exposed through the REST API or MCP. The governed side uses the database server's date as `as_of`, so both sides agree on "today".
+
 ## MCP server tools
 
 | Tool | What it returns |

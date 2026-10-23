@@ -257,10 +257,14 @@ class EvidenceBuilder:
         if name in g.measure_owner:
             owner = g.measure_owner[name]
             m = g.models[owner].measures[name]
-            column = m.expr or ("*" if m.agg == "count" else m.name)
+            if m.expr is None and m.agg == "count":
+                return f"COUNT({owner}.*)"
+            from cosmos_semantic.expressions import qualify
+
+            column = qualify(m.expr or m.name, owner, "postgres").sql()
             if m.agg == "count_distinct":
-                return f"COUNT(DISTINCT {owner}.{column})"
-            return f"{m.agg.upper()}({owner}.{column})"
+                return f"COUNT(DISTINCT {column})"
+            return f"{m.agg.upper()}({column})"
         if name in seen:
             return name
         metric = g.metrics[name]

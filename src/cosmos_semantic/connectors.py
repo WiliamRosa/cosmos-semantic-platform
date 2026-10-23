@@ -255,7 +255,7 @@ class SQLAlchemyConnector(Connector):
 
         with self._engine.connect() as con:
             result = con.execute(sa.text(sql))
-            names = list(result.keys())
+            names = _unique_names(list(result.keys()))
             rows = result.fetchmany(fetch_limit)
         return pa.table({n: [r[i] for r in rows] for i, n in enumerate(names)})
 
@@ -267,6 +267,19 @@ class SQLAlchemyConnector(Connector):
 
     def close(self) -> None:
         self._engine.dispose()
+
+
+def _unique_names(names: list[str]) -> list[str]:
+    """Unnamed or repeated result columns (SQL Server returns "" for expressions without an
+    alias) would collapse into one Arrow column; give each a distinct name instead."""
+    seen: dict[str, int] = {}
+    out = []
+    for i, name in enumerate(names, start=1):
+        base = name or f"column_{i}"
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        out.append(base if count == 0 else f"{base}_{count + 1}")
+    return out
 
 
 def _postgres_numeric(table: pa.Table) -> pa.Table:

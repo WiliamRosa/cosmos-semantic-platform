@@ -331,6 +331,105 @@ def reference(
         raise typer.Exit(1)
 
 
+@app.command()
+def reconcile(
+    metric: Annotated[str | None, typer.Argument(help="Metric to reconcile.")] = None,
+    model: ModelOpt = Path("semantic"),
+    connections: ConnOpt = Path("connections.yml"),
+    source: SourceOpt = None,
+    dimension: DimOpt = None,
+    filter: WhereOpt = None,
+    as_of: AsOfOpt = None,
+    user: UserOpt = None,
+    sql: Annotated[
+        Path | None, typer.Option("--sql", help="File with the legacy SQL to compare with.")
+    ] = None,
+    other_model: Annotated[
+        Path | None, typer.Option("--other-model", help="Another semantic model to compare with.")
+    ] = None,
+    cases: Annotated[
+        Path | None, typer.Option("--cases", help="Run a divergence zoo file instead.")
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Compares a governed metric with legacy SQL or another model and explains divergences.
+
+    Legacy SQL can read anything the database user can, so this is an operator tool: it is
+    not exposed through the REST API or MCP.
+    """
+    from cosmos_semantic.reconcile import (
+        check_zoo_case,
+        load_zoo,
+        reconcile_models,
+        reconcile_sql,
+    )
+
+    try:
+        graph = compile_project(load_project(model))
+        conns = load_connections(connections)
+        connector = connect(conns.data_sources[source or conns.default or "local"])
+    except (errors.CosmosError, KeyError) as exc:
+        _fail(exc)
+    try:
+        if cases:
+            failed = 0
+            for case in load_zoo(cases):
+                ok, report = check_zoo_case(case, graph, connector)
+                failed += not ok
+                causes = ", ".join(c["code"] for c in report["causes"]) or "-"
+                typer.secho(
+                    f"{case.id} {'ok  ' if ok else 'FAIL'} {report['status']:9} {causes:40} "
+                    f"{case.title}",
+                    fg=typer.colors.GREEN if ok else typer.colors.RED,
+                )
+            if failed:
+                raise typer.Exit(1)
+            return
+        if not metric or (sql is None) == (other_model is None):
+            _fail(ValueError("give a metric and exactly one of --sql or --other-model, or --cases"))
+        request = _request([metric], dimension, filter, None, None, as_of)
+        principal = _principal(user)
+        if sql is not None:
+            report = reconcile_sql(
+                graph, connector, request, sql.read_text(encoding="utf-8"), principal
+            )
+        else:
+            other = compile_project(load_project(other_model))
+            report = reconcile_models(graph, other, connector, request, principal)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    finally:
+        connector.close()
+    if as_json:
+        typer.echo(json.dumps(report, default=str, ensure_ascii=False, indent=2))
+        return
+    _print_reconciliation(report)
+
+
+def _print_reconciliation(report: dict) -> None:
+    color = typer.colors.GREEN if report["status"] == "match" else typer.colors.YELLOW
+    typer.secho(f"{report['status']}: {report['metric']}", fg=color, bold=True)
+    rows, totals = report["rows"], report["totals"]
+    typer.echo(
+        f"  rows     {rows['matched']} matched, {rows['differing']} differing, "
+        f"{rows['only_in_cosmos']} only governed, {rows['only_in_legacy']} only legacy"
+    )
+    pct = totals["difference_pct"]
+    typer.echo(
+        f"  totals   governed {totals['cosmos']:,.2f}  legacy {totals['legacy']:,.2f}  "
+        f"difference {totals['difference']:,.2f}" + (f" ({pct:+.2f}%)" if pct is not None else "")
+    )
+    typer.echo(f"  governed {report['cosmos']['formula']}  (as of {report['cosmos']['as_of']})")
+    if report["legacy"].get("formula"):
+        typer.echo(f"  other    {report['legacy']['formula']}")
+    for example in report["examples"][:5]:
+        typer.echo(
+            f"  example  {example['key']}: governed {example['cosmos']} / legacy {example['legacy']}"
+        )
+    for cause in report["causes"]:
+        typer.secho(f"  cause    [{cause['code']}] {cause['summary']}", fg=typer.colors.CYAN)
+
+
 def _glossary_resolver(graph):
     from cosmos_semantic.ontology import Glossary
 

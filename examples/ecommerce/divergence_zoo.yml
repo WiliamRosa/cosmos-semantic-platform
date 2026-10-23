@@ -1,0 +1,138 @@
+# Divergence zoo (ADR 0008): legacy SQL with classic mistakes planted on purpose.
+#
+# Each case pairs a governed request with the "legacy" SQL a team might already use. The
+# reconciliation must flag the divergence and name the planted cause (`expect.causes` lists
+# cause codes that must be among the ones reported). Z10 is a correct query: the control.
+#
+# Legacy columns are matched by position: dimensions first, then the value.
+# Run it with: cosmos reconcile --cases examples/ecommerce/divergence_zoo.yml
+
+cases:
+  - id: Z01
+    title: Canceled and pending orders counted as revenue
+    request:
+      metrics: [completed_revenue]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      SELECT DATE_TRUNC('month', ordered_at), SUM(amount) FROM public.orders GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT DATETRUNC(month, ordered_at), SUM(amount) FROM public.orders
+        GROUP BY DATETRUNC(month, ordered_at)
+    expect: { status: divergent, causes: [filter_difference] }
+
+  - id: Z02
+    title: Net revenue reported as revenue (discounts subtracted)
+    request:
+      metrics: [revenue]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      SELECT DATE_TRUNC('month', ordered_at), SUM(amount - discount) FROM public.orders GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT DATETRUNC(month, ordered_at), SUM(amount - discount) FROM public.orders
+        GROUP BY DATETRUNC(month, ordered_at)
+    expect: { status: divergent, causes: [different_metric] }
+
+  - id: Z03
+    title: Order revenue summed after joining order items (double counting)
+    request:
+      metrics: [revenue]
+      dimensions: [orders.status]
+    sql: |
+      SELECT o.status, SUM(o.amount)
+      FROM public.orders o JOIN public.order_items i ON i.order_id = o.order_id
+      GROUP BY o.status
+    expect: { status: divergent, causes: [fan_out] }
+
+  - id: Z04
+    title: Days cut in UTC instead of the business time zone
+    request:
+      metrics: [revenue]
+      dimensions: [orders.ordered_at__day]
+    sql: |
+      SELECT DATE_TRUNC('day', ordered_at + INTERVAL '3' HOUR), SUM(amount)
+      FROM public.orders GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT DATETRUNC(day, DATEADD(hour, 3, ordered_at)), SUM(amount) FROM public.orders
+        GROUP BY DATETRUNC(day, DATEADD(hour, 3, ordered_at))
+    expect: { status: divergent, causes: [time_shift] }
+
+  - id: Z05
+    title: Average units per item computed with integer division
+    request:
+      metrics: [avg_quantity]
+      dimensions: [products.category]
+    sql: |
+      SELECT p.category, SUM(i.quantity) / COUNT(*)
+      FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+      GROUP BY p.category
+    sql_by_dialect:
+      duckdb: |
+        SELECT p.category, SUM(i.quantity) // COUNT(*)
+        FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+        GROUP BY p.category
+      postgres: |
+        SELECT p.category, CAST(SUM(i.quantity) AS INTEGER) / CAST(COUNT(*) AS INTEGER)
+        FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+        GROUP BY p.category
+    expect: { status: divergent, causes: [truncation] }
+
+  - id: Z06
+    title: Customers without orders lost in an INNER JOIN
+    request:
+      metrics: [customer_count]
+      dimensions: [customers.segment]
+    user: { region: Sul }
+    sql: |
+      SELECT c.segment, COUNT(DISTINCT c.customer_id)
+      FROM public.customers c JOIN public.orders o ON o.customer_id = c.customer_id
+      WHERE c.region = 'Sul'
+      GROUP BY c.segment
+    expect: { status: divergent, causes: [inner_join_drop] }
+
+  - id: Z07
+    title: Buyers counted as rows instead of distinct customers
+    request:
+      metrics: [buyers]
+      dimensions: [orders.status]
+    sql: |
+      SELECT status, COUNT(customer_id) FROM public.orders GROUP BY status
+    expect: { status: divergent, causes: [count_not_distinct] }
+
+  - id: Z08
+    title: Items without a category dropped
+    request:
+      metrics: [item_revenue]
+      dimensions: [products.category]
+    sql: |
+      SELECT p.category, SUM(i.quantity * i.unit_price)
+      FROM public.order_items i JOIN public.products p ON p.product_id = i.product_id
+      WHERE p.category IS NOT NULL
+      GROUP BY p.category
+    expect: { status: divergent, causes: [null_group_dropped] }
+
+  - id: Z09
+    title: Average order value rounded in the report
+    request:
+      metrics: [average_order_value]
+      dimensions: [orders.status]
+    sql: |
+      SELECT status, ROUND(SUM(amount) / COUNT(*), 1) FROM public.orders GROUP BY status
+    sql_by_dialect:
+      duckdb: |
+        SELECT status, ROUND(SUM(amount) / COUNT(*), 1) FROM public.orders GROUP BY status
+      postgres: |
+        SELECT status, ROUND(CAST(SUM(amount) / COUNT(*) AS NUMERIC), 1) FROM public.orders
+        GROUP BY status
+    expect: { status: divergent, causes: [rounding] }
+
+  - id: Z10
+    title: Control, a correct legacy query
+    request:
+      metrics: [revenue]
+      dimensions: [orders.status]
+    sql: |
+      SELECT status, SUM(amount) FROM public.orders GROUP BY status
+    expect: { status: match, causes: [] }
