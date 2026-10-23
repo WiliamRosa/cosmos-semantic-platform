@@ -112,3 +112,17 @@ def test_concepts_and_explain(client):
     assert hits[0]["maps_to"] == "metric:net_revenue"
     rule = client.get("/v1/explain/rule:order_size_band", headers=headers).json()
     assert rule["kind"] == "rule" and "Large" in rule["text"]
+
+
+def test_glossary_as_skos(client):
+    response = client.get(
+        "/v1/glossary", params={"format": "jsonld"}, headers={"X-API-Key": "dev-sul"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/ld+json")
+    ids = {node["@id"] for node in response.json()}
+    assert "urn:cosmos-semantic:glossary:concept/active_customer" in ids
+    turtle = client.get("/v1/glossary", headers={"X-API-Key": "dev-sul"})
+    assert turtle.headers["content-type"].startswith("text/turtle")
+    bad = client.get("/v1/glossary", params={"format": "x"}, headers={"X-API-Key": "dev-sul"})
+    assert bad.status_code == 400

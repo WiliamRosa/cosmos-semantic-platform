@@ -11,7 +11,7 @@ from typing import Annotated, Any
 
 import anyio
 from fastapi import Depends, FastAPI, Header, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from cosmos_semantic.auth import Authenticator, AuthError, ForbiddenError
 from cosmos_semantic.errors import (
@@ -174,6 +174,21 @@ def create_app(
     @app.get("/v1/concepts", summary="Search glossary concepts by term or synonym")
     def concepts(q: str, _user: User, limit: int = 5) -> list[dict[str, Any]]:
         return service.catalog.search_concepts(q, limit)
+
+    @app.get("/v1/glossary", summary="The business glossary as SKOS/RDF, for data catalogs")
+    def glossary(_user: User, format: str = "turtle", base: str | None = None) -> Response:
+        from cosmos_semantic.interchange.skos import FORMATS, export_glossary
+
+        if format not in FORMATS:
+            raise QueryError(f"unknown format `{format}`; use one of {', '.join(FORMATS)}")
+        media = {
+            "turtle": "text/turtle",
+            "jsonld": "application/ld+json",
+            "ntriples": "application/n-triples",
+        }
+        options = {"base": base} if base else {}
+        text = export_glossary(service.engine.graph, format, **options)
+        return Response(text, media_type=f"{media[format]}; charset=utf-8")
 
     @app.get("/v1/explain/{name}", summary="Explain a metric, rule, dimension or concept")
     def explain(name: str, _user: User) -> dict[str, Any]:

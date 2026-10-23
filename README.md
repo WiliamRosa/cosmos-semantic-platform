@@ -64,6 +64,9 @@ uv run cosmos suggest --source local -m examples/ecommerce/semantic -c examples/
 uv run cosmos pack list
 uv run cosmos pack apply retail --source local --schema public -c examples/ecommerce/connections.yml -o semantic/retail.yml
 
+# The business glossary as SKOS/RDF for data catalogs (turtle, jsonld or ntriples)
+uv run cosmos export skos -m examples/ecommerce/semantic -o glossary.ttl --base https://data.example.com/glossary/
+
 # Draft a model from the database catalog (keys, joins, measures, LGPD suggestions), then review it
 uv run cosmos bootstrap -c examples/ecommerce/connections.yml -o semantic/draft.yml
 

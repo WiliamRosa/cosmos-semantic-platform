@@ -76,7 +76,7 @@ Redefined by [ADR 0009](decisions/0009-business-context-as-phase-3-differentiato
 
 ## On the radar
 
-- Exporting the glossary as SKOS/RDF for data catalogs.
+- Exporting the glossary as SKOS/RDF for data catalogs — done (`cosmos export skos`, `GET /v1/glossary`).
 - More industry packs, only with validated demand.
 
 Not planned: governance of agent actions (it changes the product from reading to acting).

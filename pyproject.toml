@@ -29,6 +29,7 @@ cosmos = "cosmos_semantic.cli:app"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "rdflib>=7.0",
     "ruff>=0.5",
 ]
 

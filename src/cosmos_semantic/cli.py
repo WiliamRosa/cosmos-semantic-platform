@@ -755,6 +755,44 @@ def pack_apply(
     )
 
 
+export_app = typer.Typer(help="Export the model to other formats.")
+app.add_typer(export_app, name="export")
+
+
+@export_app.command("skos")
+def export_skos(
+    model: ModelOpt = Path("semantic"),
+    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+    fmt: Annotated[
+        str, typer.Option("--format", "-f", help="turtle, jsonld or ntriples.")
+    ] = "turtle",
+    base: Annotated[
+        str, typer.Option(help="Base IRI for concepts, such as https://data.example.com/glossary/.")
+    ] = "urn:cosmos-semantic:glossary:",
+    title: Annotated[str, typer.Option(help="Title of the concept scheme.")] = "Business glossary",
+    definition_lang: Annotated[str, typer.Option(help="Language tag of the definitions.")] = "en",
+) -> None:
+    """Exports the business glossary as SKOS/RDF for data catalogs (Turtle, JSON-LD or
+    N-Triples), with links to the metrics and rules that define each concept."""
+    from cosmos_semantic.interchange.skos import export_glossary
+
+    try:
+        text = export_glossary(
+            compile_project(load_project(model)),
+            fmt,
+            base=base,
+            title=title,
+            definition_lang=definition_lang,
+        )
+    except (errors.CosmosError, ValueError) as exc:
+        _fail(exc)
+    if output is None:
+        typer.echo(text, nl=False)
+        return
+    output.write_text(text, encoding="utf-8")
+    typer.secho(f"glossary written to {output} ({fmt})", fg=typer.colors.GREEN)
+
+
 @app.command("bootstrap")
 def bootstrap_cmd(
     output: Annotated[Path, typer.Option("--output", "-o", help="Draft model file (.yml).")],
