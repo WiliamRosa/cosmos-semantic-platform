@@ -117,8 +117,11 @@ def _check_version(rule: BusinessRule, version: RuleVersion, loc: str, err) -> b
     ):
         err(loc, "decision table without `otherwise`")
     logic = rule_logic(version)
-    for name in set(_INPUT_RE.findall(logic)) - set(rule.inputs):
+    unknown = set(_INPUT_RE.findall(logic)) - set(rule.inputs)
+    for name in sorted(unknown):
         err(loc, f"the logic uses `{{{name}}}`, which is not in `inputs`")
+    if unknown:
+        return False  # the logic cannot be bound to columns
     try:
         sqlglot.parse_one(_INPUT_RE.sub(lambda m: m.group(1), logic), read=RULE_DIALECT)
     except sqlglot.errors.ParseError as exc:

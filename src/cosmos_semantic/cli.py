@@ -616,6 +616,65 @@ def usage(
     typer.secho(report["note"], fg=typer.colors.BRIGHT_BLACK, err=True)
 
 
+@app.command()
+def suggest(
+    model: ModelOpt = Path("semantic"),
+    connections: ConnOpt = Path("connections.yml"),
+    output: Annotated[
+        Path, typer.Option("--output", "-o", help="YAML with the accepted suggestions.")
+    ] = Path("suggestions.yml"),
+    source: Annotated[
+        str | None,
+        typer.Option(help="Data source to validate suggestions by running them; default: none."),
+    ] = None,
+    samples: Annotated[
+        bool,
+        typer.Option(
+            "--samples",
+            help="Send up to 10 distinct values of non-sensitive categorical columns to the model.",
+        ),
+    ] = False,
+    llm: Annotated[str, typer.Option("--llm", help="Claude model id.")] = "claude-opus-5-5",
+) -> None:
+    """Asks Claude for glossary concepts, rules, metrics and descriptions, validates each one
+    with the engine and writes the accepted ones for review. Nothing is applied to the model.
+    Needs `uv sync --extra ai` and ANTHROPIC_API_KEY (or an `ant auth login` profile)."""
+    from cosmos_semantic.discovery import ClaudeSuggestionModel, discover
+    from cosmos_semantic.interchange import dump_project
+
+    if samples and source is None:
+        _fail(ValueError("--samples needs --source"))
+    try:
+        compiled = compile_project(load_project(model))
+        connector = None
+        if source is not None:
+            connector = Engine(compiled, load_connections(connections)).connector(source)
+        report = discover(compiled, ClaudeSuggestionModel(llm), connector, samples=samples)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    header = (
+        f"# Suggested by {report.model} on {dt.date.today()}, validated by the engine.\n"
+        "# Review, set owners and add tests before moving this file into the model directory.\n"
+    )
+    output.write_text(header + dump_project(report.project()), encoding="utf-8")
+    report_path = output.with_suffix(".report.json")
+    report_path.write_text(
+        json.dumps(report.as_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    accepted = report.as_dict()["accepted"]
+    typer.secho(
+        f"accepted: {len(accepted['concepts'])} concepts, {len(accepted['rules'])} rules, "
+        f"{len(accepted['metrics'])} metrics, {accepted['descriptions']} descriptions "
+        f"-> {output}",
+        fg=typer.colors.GREEN,
+    )
+    for item in report.rejected:
+        typer.secho(
+            f"  rejected {item['kind']} {item['name']}: {item['reason']}", fg=typer.colors.YELLOW
+        )
+    typer.echo(f"report (descriptions to apply by hand, rejections) -> {report_path}")
+
+
 @app.command("bootstrap")
 def bootstrap_cmd(
     output: Annotated[Path, typer.Option("--output", "-o", help="Draft model file (.yml).")],

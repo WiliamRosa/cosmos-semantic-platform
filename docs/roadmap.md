@@ -61,7 +61,7 @@ Redefined by [ADR 0009](decisions/0009-business-context-as-phase-3-differentiato
     2. **Usage and cost report** (done) (`cosmos usage`): per metric, rule, principal, channel and data source, from the audit log, with configurable rates per data source and the list of unused metrics.
     3. **Expanded knowledge graph** (done): teams, systems and processes linked to metrics, rules and models; impact grouped by owner, with source systems and affected processes; `explain` for teams, systems and processes; `cosmos graph` export (Mermaid, DOT, JSON).
     4. **Power BI import** (done) (`.bim` and TMDL): physical tables from the partitions, relationships as entities, simple DAX (aggregations, `DIVIDE`, `CALCULATE` with column filters, `TOTALYTD`/`QTD`/`MTD`, arithmetic) as measures and metrics, the rest as warnings; equivalence test on the three databases.
-    5. **AI-assisted discovery:** suggestions validated by the engine and written as a reviewable YAML change.
+    5. **AI-assisted discovery** (done) (`cosmos suggest`): concepts with English and Portuguese labels, rules, metrics and descriptions from Claude with a strict JSON Schema; every suggestion compiled and, with a data source, run by the engine; accepted ones written to a separate YAML for review; sample values opt-in and never from sensitive columns.
     6. **Retail pack:** the e-commerce example as an industry pack, mapped onto a customer's tables.
 
 **Exit criterion:** a past number can be recomputed under the rule that was in effect and under today's rule; every metric can be traced to an owner, a system and its usage cost; a Power BI model imports with an equivalence test.

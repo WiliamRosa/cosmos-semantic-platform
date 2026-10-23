@@ -158,6 +158,17 @@ data_sources:
 
 The cost is an estimate, not billing data: a query costs `per_query + per_second × duration + per_1k_rows × rows / 1000`, split evenly across the metrics it requested; queries denied or rejected before reaching a data source cost nothing. All data sources must use the same currency ([ADR 0009](decisions/0009-business-context-as-phase-3-differentiator.md)).
 
+## AI-assisted discovery
+
+`cosmos suggest` asks Claude (`claude-opus-5-5` by default, `--llm` to change it) for glossary concepts with English and Portuguese labels, business rules, metrics and descriptions that the model is missing ([ADR 0009](decisions/0009-business-context-as-phase-3-differentiator.md)). It complements `cosmos bootstrap`: bootstrap drafts the structure from the catalog without AI; discovery adds business meaning on top.
+
+- **What the model sees:** model, dimension, measure, metric, rule and concept names, types and descriptions. Sample values (up to 10 distinct values per column) only with `--samples`, and never for columns classified as personal or sensitive.
+- **Strict answer:** the request uses structured outputs with a strict JSON Schema, so the answer always parses; refusals use Anthropic's default fallback model, and a refusal or a truncated answer is reported as an error.
+- **Validated by the engine:** each suggestion is compiled into a copy of the model; with `--source`, a query using it is planned and run on the data source. Suggestions that reference unknown members, break validation or collide with existing names are rejected with the reason.
+- **Never applied:** accepted concepts, rules and metrics go to a separate YAML file (`-o suggestions.yml`) with a header asking for review, owners and tests; descriptions and rejections go to `suggestions.report.json`. Moving the file into the model directory is a person's decision, normally in a pull request.
+
+It needs the optional `anthropic` package (`uv sync --extra ai`) and Claude API credentials (`ANTHROPIC_API_KEY` or an `ant auth login` profile). Tests use a fake model and need neither.
+
 ## Model bootstrap
 
 `cosmos bootstrap -o draft.yml` drafts a semantic model from the database catalog (`information_schema`, available on DuckDB, Postgres and SQL Server), without AI:
