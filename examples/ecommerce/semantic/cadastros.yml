@@ -1,0 +1,71 @@
+# yaml-language-server: $schema=../../../schema/cosmos-semantic.v1.schema.json
+version: 1
+
+user_context:
+  region:
+    claim: region
+    required: true
+    description: Região que o usuário pode ver
+
+semantic_models:
+  - name: customers
+    table: public.customers
+    description: Clientes
+    entities:
+      - name: customer
+        type: primary
+        expr: customer_id
+    dimensions:
+      - name: region
+        type: categorical
+      - name: state
+        type: categorical
+      - name: segment
+        type: categorical
+        description: Varejo, PME ou Corporativo
+      - name: created_at
+        type: time
+      - name: last_order_at
+        type: time
+      - name: email
+        type: categorical
+        sensitivity: personal
+      - name: cpf
+        type: categorical
+        sensitivity: personal
+      - name: health_plan
+        type: categorical
+        sensitivity: sensitive
+        description: Plano de saúde contratado (dado pessoal sensível)
+    measures:
+      - name: customer_count
+        agg: count_distinct
+        expr: customer_id
+    row_filters:
+      - name: por_regiao
+        filter: "{region} = $user.region"
+
+  - name: sellers
+    table: public.sellers
+    entities:
+      - name: seller
+        type: primary
+        expr: seller_id
+    dimensions:
+      - name: region
+        type: categorical
+      - name: state
+        type: categorical
+
+  - name: products
+    table: public.products
+    entities:
+      - name: product
+        type: primary
+        expr: product_id
+    dimensions:
+      - name: category
+        type: categorical
+    measures:
+      - name: product_count
+        agg: count

@@ -1,0 +1,47 @@
+"""Gates do roadmap: o motor dá o mesmo resultado que o SQL escrito à mão."""
+
+from __future__ import annotations
+
+import pytest
+
+from cosmos_semantic.reference import load_cases, run_case
+
+from .conftest import CASES
+
+ALL = load_cases(CASES)
+SQL_CASES = [c for c in ALL if c.question is None]
+
+
+def _check(case, graph, connector):
+    result = run_case(case, graph, connector)
+    if result.status == "skip":
+        pytest.skip(result.detail)
+    assert result.status == "pass", f"{case.id}: {result.detail}"
+
+
+@pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
+def test_reference_duckdb(case, graph, duckdb_connector):
+    if case.phase > 0 and case.id == "R16":
+        pytest.importorskip("cosmos_semantic.ontology")
+    _check(case, graph, duckdb_connector)
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
+def test_reference_postgres(case, graph, postgres_connector):
+    if case.phase > 0 and case.id == "R16":
+        pytest.importorskip("cosmos_semantic.ontology")
+    _check(case, graph, postgres_connector)
+
+
+@pytest.mark.databricks
+@pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
+def test_reference_databricks(case, graph, databricks_connector):
+    if case.phase > 0 and case.id == "R16":
+        pytest.importorskip("cosmos_semantic.ontology")
+    _check(case, graph, databricks_connector)
+
+
+def test_there_are_twenty_cases():
+    assert len(ALL) == 20
+    assert len({c.id for c in ALL}) == 20

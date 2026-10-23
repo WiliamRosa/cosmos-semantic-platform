@@ -1,0 +1,53 @@
+[project]
+name = "cosmos-semantic"
+version = "0.1.0.dev0"
+description = "Cosmos Semantic: camada semântica com motor próprio para agentes de IA e aplicações"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "Wiliam Rosa" }]
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "sqlglot>=25.0",
+    "pyarrow>=15.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+duckdb = ["duckdb>=1.0"]
+postgres = ["adbc-driver-postgresql>=1.0", "adbc-driver-manager>=1.0"]
+databricks = ["databricks-sql-connector>=3.0", "databricks-sdk>=0.30"]
+sqlserver = ["sqlalchemy>=2.0", "pymssql>=2.3"]
+testdata = ["faker>=25.0"]
+
+[project.scripts]
+cosmos = "cosmos_semantic.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cosmos_semantic"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "postgres: precisa de um Postgres em COSMOS_PG_URI",
+    "databricks: precisa de um SQL warehouse do Databricks configurado",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]

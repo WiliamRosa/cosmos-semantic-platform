@@ -1,0 +1,982 @@
+{
+  "$defs": {
+    "BusinessRule": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "predicate",
+            "classification",
+            "derived"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Área ou pessoa responsável. Obrigatório na validação.",
+          "title": "Owner"
+        },
+        "effective_from": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Desde quando a versão atual vale.",
+          "title": "Effective From"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "inputs": {
+          "additionalProperties": {
+            "enum": [
+              "categorical",
+              "time",
+              "number",
+              "boolean"
+            ],
+            "type": "string"
+          },
+          "title": "Inputs",
+          "type": "object"
+        },
+        "logic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Logic"
+        },
+        "decision_table": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/DecisionRow"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decision Table"
+        },
+        "applies_to": {
+          "items": {
+            "$ref": "#/$defs/RuleBinding"
+          },
+          "title": "Applies To",
+          "type": "array"
+        },
+        "tests": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RuleTest"
+          },
+          "title": "Tests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "inputs",
+        "applies_to"
+      ],
+      "title": "BusinessRule",
+      "type": "object"
+    },
+    "Concept": {
+      "additionalProperties": false,
+      "description": "Conceito do glossário, no estilo SKOS.",
+      "properties": {
+        "concept": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Concept",
+          "type": "string"
+        },
+        "pref_label": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Pref Label",
+          "type": "object"
+        },
+        "alt_labels": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "title": "Alt Labels",
+          "type": "object"
+        },
+        "definition": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Definition"
+        },
+        "broader": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "pattern": "^[a-z_][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Broader"
+        },
+        "related": {
+          "default": [],
+          "items": {
+            "maxLength": 64,
+            "pattern": "^[a-z_][a-z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Related",
+          "type": "array"
+        },
+        "maps_to": {
+          "anyOf": [
+            {
+              "pattern": "^(entity|dimension|metric|measure|rule):[a-z_][a-z0-9_.]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Membro ou regra que define o conceito: `metric:net_revenue`, `rule:cliente_ativo`.",
+          "title": "Maps To"
+        }
+      },
+      "required": [
+        "concept",
+        "pref_label"
+      ],
+      "title": "Concept",
+      "type": "object"
+    },
+    "CumulativeMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "type": {
+          "const": "cumulative",
+          "title": "Type",
+          "type": "string"
+        },
+        "measure": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Measure",
+          "type": "string"
+        },
+        "grain_to_date": {
+          "anyOf": [
+            {
+              "enum": [
+                "day",
+                "week",
+                "month",
+                "quarter",
+                "year"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grain To Date"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Janela móvel, como `7 days`. Fora do MVP.",
+          "title": "Window"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "measure"
+      ],
+      "title": "CumulativeMetric",
+      "type": "object"
+    },
+    "DecisionRow": {
+      "additionalProperties": false,
+      "properties": {
+        "when": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "When"
+        },
+        "then": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Then"
+        },
+        "otherwise": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Otherwise"
+        }
+      },
+      "title": "DecisionRow",
+      "type": "object"
+    },
+    "DerivedMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "type": {
+          "const": "derived",
+          "title": "Type",
+          "type": "string"
+        },
+        "expr": {
+          "description": "Expressão sobre medidas ou métricas, referenciadas como `{nome}`.",
+          "title": "Expr",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "expr"
+      ],
+      "title": "DerivedMetric",
+      "type": "object"
+    },
+    "Dimension": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "categorical",
+            "time",
+            "number",
+            "boolean"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "expr": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Expressão SQL; sem ela, usa a coluna `name`.",
+          "title": "Expr"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "sensitivity": {
+          "anyOf": [
+            {
+              "enum": [
+                "personal",
+                "sensitive"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Classificação de LGPD. Agentes nunca recebem o valor bruto dessas colunas.",
+          "title": "Sensitivity"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "Dimension",
+      "type": "object"
+    },
+    "Entity": {
+      "additionalProperties": false,
+      "description": "Chave que liga modelos entre si; os joins são inferidos a partir delas.",
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "primary",
+            "unique",
+            "foreign"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "expr": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Expressão SQL; sem ela, usa a coluna `name`.",
+          "title": "Expr"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "Entity",
+      "type": "object"
+    },
+    "Measure": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "agg": {
+          "enum": [
+            "count",
+            "count_distinct",
+            "sum",
+            "avg",
+            "min",
+            "max"
+          ],
+          "title": "Agg",
+          "type": "string"
+        },
+        "expr": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Expressão SQL agregada; sem ela, `count` conta linhas e os demais usam a coluna `name`.",
+          "title": "Expr"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "name",
+        "agg"
+      ],
+      "title": "Measure",
+      "type": "object"
+    },
+    "RatioMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "type": {
+          "const": "ratio",
+          "title": "Type",
+          "type": "string"
+        },
+        "numerator": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Numerator",
+          "type": "string"
+        },
+        "denominator": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Denominator",
+          "type": "string"
+        },
+        "filter": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filter"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "numerator",
+        "denominator"
+      ],
+      "title": "RatioMetric",
+      "type": "object"
+    },
+    "RowFilter": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "filter": {
+          "description": "Expressão SQL com `{dimensao}` ou `{modelo.dimensao}` e `$user.<campo>`.",
+          "title": "Filter",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "filter"
+      ],
+      "title": "RowFilter",
+      "type": "object"
+    },
+    "RuleBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Model",
+          "type": "string"
+        },
+        "bind": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Entrada da regra -> coluna ou dimensão do modelo.",
+          "title": "Bind",
+          "type": "object"
+        }
+      },
+      "required": [
+        "model",
+        "bind"
+      ],
+      "title": "RuleBinding",
+      "type": "object"
+    },
+    "RuleTest": {
+      "additionalProperties": false,
+      "properties": {
+        "given": {
+          "additionalProperties": true,
+          "title": "Given",
+          "type": "object"
+        },
+        "today": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Today"
+        },
+        "expect": {
+          "title": "Expect"
+        }
+      },
+      "required": [
+        "given",
+        "expect"
+      ],
+      "title": "RuleTest",
+      "type": "object"
+    },
+    "SemanticModel": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "table": {
+          "title": "Table",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "data_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Source"
+        },
+        "entities": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Entity"
+          },
+          "title": "Entities",
+          "type": "array"
+        },
+        "dimensions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Dimension"
+          },
+          "title": "Dimensions",
+          "type": "array"
+        },
+        "measures": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Measure"
+          },
+          "title": "Measures",
+          "type": "array"
+        },
+        "row_filters": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RowFilter"
+          },
+          "title": "Row Filters",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "table"
+      ],
+      "title": "SemanticModel",
+      "type": "object"
+    },
+    "SimpleMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "type": {
+          "const": "simple",
+          "title": "Type",
+          "type": "string"
+        },
+        "measure": {
+          "maxLength": 64,
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "title": "Measure",
+          "type": "string"
+        },
+        "filter": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filter"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "measure"
+      ],
+      "title": "SimpleMetric",
+      "type": "object"
+    },
+    "UserContextField": {
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "description": "Nome da declaração no token do provedor de identidade.",
+          "title": "Claim",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "claim"
+      ],
+      "title": "UserContextField",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Um arquivo (ou o conjunto de arquivos) do modelo semântico.",
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "Versão do formato de autoria.",
+      "title": "Version",
+      "type": "integer"
+    },
+    "semantic_models": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SemanticModel"
+      },
+      "title": "Semantic Models",
+      "type": "array"
+    },
+    "metrics": {
+      "default": [],
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "cumulative": "#/$defs/CumulativeMetric",
+            "derived": "#/$defs/DerivedMetric",
+            "ratio": "#/$defs/RatioMetric",
+            "simple": "#/$defs/SimpleMetric"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/SimpleMetric"
+          },
+          {
+            "$ref": "#/$defs/RatioMetric"
+          },
+          {
+            "$ref": "#/$defs/DerivedMetric"
+          },
+          {
+            "$ref": "#/$defs/CumulativeMetric"
+          }
+        ]
+      },
+      "title": "Metrics",
+      "type": "array"
+    },
+    "user_context": {
+      "default": {},
+      "patternProperties": {
+        "^[a-z_][a-z0-9_]*$": {
+          "$ref": "#/$defs/UserContextField"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64
+      },
+      "title": "User Context",
+      "type": "object"
+    },
+    "glossary": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Concept"
+      },
+      "title": "Glossary",
+      "type": "array"
+    },
+    "business_rules": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/BusinessRule"
+      },
+      "title": "Business Rules",
+      "type": "array"
+    },
+    "custom_extensions": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Informação de outras ferramentas, preservada na importação.",
+      "title": "Custom Extensions",
+      "type": "object"
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "title": "Cosmos Semantic, formato de autoria v1",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

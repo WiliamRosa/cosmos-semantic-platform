@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../../schema/cosmos-semantic.v1.schema.json
+version: 1
+
+semantic_models:
+  - name: orders
+    table: public.orders
+    description: Pedidos de venda, um registro por pedido
+    entities:
+      - name: order
+        type: primary
+        expr: order_id
+      - name: customer
+        type: foreign
+        expr: customer_id
+    dimensions:
+      - name: ordered_at
+        type: time
+        description: Data e hora do pedido
+      - name: status
+        type: categorical
+        description: completed, canceled ou pending
+    measures:
+      - name: order_count
+        agg: count
+        description: Número de pedidos
+      - name: revenue
+        agg: sum
+        expr: amount
+        description: Valor bruto dos pedidos
+      - name: discounts
+        agg: sum
+        expr: discount
+      - name: buyers
+        agg: count_distinct
+        expr: customer_id
+        description: Clientes distintos que compraram
+
+  - name: order_items
+    table: public.order_items
+    description: Itens dos pedidos, um registro por item
+    entities:
+      - name: order_item
+        type: primary
+        expr: order_item_id
+      - name: order
+        type: foreign
+        expr: order_id
+      - name: product
+        type: foreign
+        expr: product_id
+      - name: seller
+        type: foreign
+        expr: seller_id
+    measures:
+      - name: items_sold
+        agg: sum
+        expr: quantity
+        description: Unidades vendidas
+      - name: item_revenue
+        agg: sum
+        expr: quantity * unit_price
+        description: Valor dos itens antes de desconto
+
+  - name: payments
+    table: public.payments
+    description: Pagamentos, um ou mais por pedido
+    entities:
+      - name: payment
+        type: primary
+        expr: payment_id
+      - name: order
+        type: foreign
+        expr: order_id
+    dimensions:
+      - name: method
+        type: categorical
+        description: pix, cartao ou boleto
+      - name: installments
+        type: number
+      - name: paid_at
+        type: time
+    measures:
+      - name: paid_value
+        agg: sum
+        expr: value
+        description: Valor efetivamente pago
+      - name: payment_count
+        agg: count
+
+metrics:
+  - name: completed_revenue
+    type: simple
+    measure: revenue
+    filter: "{status} = 'completed'"
+    description: Receita bruta só de pedidos concluídos
+  - name: average_order_value
+    type: ratio
+    numerator: revenue
+    denominator: order_count
+    description: Ticket médio
+  - name: net_revenue
+    type: derived
+    expr: "{revenue} - {discounts}"
+    description: Receita bruta menos descontos
+  - name: collection_gap
+    type: derived
+    expr: "{net_revenue} - {paid_value}"
+    description: Receita líquida ainda não paga (cruza pedidos e pagamentos)
+  - name: revenue_month_to_date
+    type: cumulative
+    measure: revenue
+    grain_to_date: month
+    description: Receita acumulada no mês

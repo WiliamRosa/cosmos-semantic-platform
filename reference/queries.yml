@@ -1,0 +1,338 @@
+# Consultas de referência do gate 2 (ADR 0007).
+#
+# Cada caso compara o resultado do motor com SQL escrito à mão, sem passar pelo motor.
+# O SQL está no dialeto do Postgres, que também roda no DuckDB e no Databricks; `sql_by_dialect`
+# substitui o texto onde o dialeto diverge. `phase` diz em que fase o caso passa a valer.
+# Os dados vêm de `cosmos demo-data` (examples/ecommerce).
+
+cases:
+  # -- Fan-out: medidas em grãos diferentes ---------------------------------
+  - id: R01
+    category: fan-out
+    phase: 0
+    title: Receita (pedido) e valor pago (pagamento) por região do cliente
+    request:
+      metrics: [revenue, paid_value]
+      dimensions: [customers.region]
+    user: { region: Sudeste }
+    sql: |
+      WITH o AS (
+        SELECT c.region, SUM(o.amount) AS revenue
+        FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE c.region = 'Sudeste' GROUP BY c.region
+      ), p AS (
+        SELECT c.region, SUM(p.value) AS paid_value
+        FROM public.payments p
+        JOIN public.orders o ON o.order_id = p.order_id
+        JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE c.region = 'Sudeste' GROUP BY c.region
+      )
+      SELECT o.region AS customers__region, o.revenue, p.paid_value
+      FROM o JOIN p ON p.region = o.region
+
+  - id: R02
+    category: fan-out
+    phase: 0
+    title: Receita do pedido e receita dos itens por status
+    request:
+      metrics: [revenue, item_revenue]
+      dimensions: [orders.status]
+    sql: |
+      WITH o AS (SELECT status, SUM(amount) AS revenue FROM public.orders GROUP BY status),
+      i AS (
+        SELECT o.status, SUM(i.quantity * i.unit_price) AS item_revenue
+        FROM public.order_items i JOIN public.orders o ON o.order_id = i.order_id
+        GROUP BY o.status
+      )
+      SELECT o.status AS orders__status, o.revenue, i.item_revenue
+      FROM o LEFT JOIN i ON i.status = o.status
+
+  - id: R03
+    category: fan-out
+    phase: 0
+    title: Pedidos, pagamentos e unidades por mês do pedido (três grãos)
+    request:
+      metrics: [order_count, payment_count, items_sold]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      WITH o AS (
+        SELECT DATE_TRUNC('month', ordered_at) AS m, COUNT(*) AS order_count
+        FROM public.orders GROUP BY 1
+      ), p AS (
+        SELECT DATE_TRUNC('month', o.ordered_at) AS m, COUNT(*) AS payment_count
+        FROM public.payments p JOIN public.orders o ON o.order_id = p.order_id GROUP BY 1
+      ), i AS (
+        SELECT DATE_TRUNC('month', o.ordered_at) AS m, SUM(i.quantity) AS items_sold
+        FROM public.order_items i JOIN public.orders o ON o.order_id = i.order_id GROUP BY 1
+      )
+      SELECT o.m AS orders__ordered_at__month, o.order_count, p.payment_count, i.items_sold
+      FROM o LEFT JOIN p ON p.m = o.m LEFT JOIN i ON i.m = o.m
+    sql_by_dialect:
+      tsql: |
+        WITH o AS (
+          SELECT DATETRUNC(month, ordered_at) AS m, COUNT(*) AS order_count
+          FROM public.orders GROUP BY DATETRUNC(month, ordered_at)
+        ), p AS (
+          SELECT DATETRUNC(month, o.ordered_at) AS m, COUNT(*) AS payment_count
+          FROM public.payments p JOIN public.orders o ON o.order_id = p.order_id
+          GROUP BY DATETRUNC(month, o.ordered_at)
+        ), i AS (
+          SELECT DATETRUNC(month, o.ordered_at) AS m, SUM(i.quantity) AS items_sold
+          FROM public.order_items i JOIN public.orders o ON o.order_id = i.order_id
+          GROUP BY DATETRUNC(month, o.ordered_at)
+        )
+        SELECT o.m AS orders__ordered_at__month, o.order_count, p.payment_count, i.items_sold
+        FROM o LEFT JOIN p ON p.m = o.m LEFT JOIN i ON i.m = o.m
+
+  - id: R04
+    category: fan-out
+    phase: 0
+    title: Receita e clientes distintos por segmento
+    request:
+      metrics: [revenue, customer_count]
+      dimensions: [customers.segment]
+    user: { region: Sul }
+    sql: |
+      WITH o AS (
+        SELECT c.segment, SUM(o.amount) AS revenue
+        FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE c.region = 'Sul' GROUP BY c.segment
+      ), c AS (
+        SELECT segment, COUNT(DISTINCT customer_id) AS customer_count
+        FROM public.customers WHERE region = 'Sul' GROUP BY segment
+      )
+      SELECT c.segment AS customers__segment, o.revenue, c.customer_count
+      FROM c LEFT JOIN o ON o.segment = c.segment
+
+  # -- Métrica simples e granularidade de tempo -------------------------------
+  - id: R05
+    category: simple
+    phase: 0
+    title: Receita total
+    request:
+      metrics: [revenue]
+    sql: SELECT SUM(amount) AS revenue FROM public.orders
+
+  - id: R06
+    category: simple
+    phase: 0
+    title: Pedidos por mês
+    request:
+      metrics: [order_count]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      SELECT DATE_TRUNC('month', ordered_at) AS orders__ordered_at__month, COUNT(*) AS order_count
+      FROM public.orders GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT DATETRUNC(month, ordered_at) AS orders__ordered_at__month, COUNT(*) AS order_count
+        FROM public.orders GROUP BY DATETRUNC(month, ordered_at)
+
+  - id: R07
+    category: simple
+    phase: 0
+    title: Valor pago por forma de pagamento e trimestre
+    request:
+      metrics: [paid_value]
+      dimensions: [payments.method, payments.paid_at__quarter]
+    sql: |
+      SELECT method AS payments__method,
+             DATE_TRUNC('quarter', paid_at) AS payments__paid_at__quarter,
+             SUM(value) AS paid_value
+      FROM public.payments GROUP BY 1, 2
+    sql_by_dialect:
+      tsql: |
+        SELECT method AS payments__method,
+               DATETRUNC(quarter, paid_at) AS payments__paid_at__quarter,
+               SUM(value) AS paid_value
+        FROM public.payments GROUP BY method, DATETRUNC(quarter, paid_at)
+
+  # -- Joins inferidos pelas entidades ---------------------------------------
+  - id: R08
+    category: joins
+    phase: 0
+    title: Unidades vendidas por região do vendedor
+    request:
+      metrics: [items_sold]
+      dimensions: [sellers.region]
+    sql: |
+      SELECT s.region AS sellers__region, SUM(i.quantity) AS items_sold
+      FROM public.order_items i JOIN public.sellers s ON s.seller_id = i.seller_id
+      GROUP BY s.region
+
+  - id: R09
+    category: joins
+    phase: 0
+    title: Receita dos itens por estado do cliente (dois saltos)
+    request:
+      metrics: [item_revenue]
+      dimensions: [customers.state]
+    user: { region: Nordeste }
+    sql: |
+      SELECT c.state AS customers__state, SUM(i.quantity * i.unit_price) AS item_revenue
+      FROM public.order_items i
+      JOIN public.orders o ON o.order_id = i.order_id
+      JOIN public.customers c ON c.customer_id = o.customer_id
+      WHERE c.region = 'Nordeste'
+      GROUP BY c.state
+
+  - id: R10
+    category: joins
+    phase: 0
+    title: Valor pago por segmento do cliente (dois saltos)
+    request:
+      metrics: [paid_value]
+      dimensions: [customers.segment]
+    user: { region: Sul }
+    sql: |
+      SELECT c.segment AS customers__segment, SUM(p.value) AS paid_value
+      FROM public.payments p
+      JOIN public.orders o ON o.order_id = p.order_id
+      JOIN public.customers c ON c.customer_id = o.customer_id
+      WHERE c.region = 'Sul'
+      GROUP BY c.segment
+
+  # -- Razão e derivadas -----------------------------------------------------
+  - id: R11
+    category: ratio-derived
+    phase: 0
+    title: Ticket médio por status
+    request:
+      metrics: [average_order_value]
+      dimensions: [orders.status]
+    sql: |
+      SELECT status AS orders__status, SUM(amount) * 1.0 / COUNT(*) AS average_order_value
+      FROM public.orders GROUP BY status
+
+  - id: R12
+    category: ratio-derived
+    phase: 0
+    title: Receita líquida por mês
+    request:
+      metrics: [net_revenue]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      SELECT DATE_TRUNC('month', ordered_at) AS orders__ordered_at__month,
+             SUM(amount) - SUM(discount) AS net_revenue
+      FROM public.orders GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT DATETRUNC(month, ordered_at) AS orders__ordered_at__month,
+               SUM(amount) - SUM(discount) AS net_revenue
+        FROM public.orders GROUP BY DATETRUNC(month, ordered_at)
+
+  - id: R13
+    category: ratio-derived
+    phase: 0
+    title: Receita líquida ainda não paga por status (derivada entre modelos)
+    request:
+      metrics: [collection_gap]
+      dimensions: [orders.status]
+    sql: |
+      WITH o AS (SELECT status, SUM(amount) - SUM(discount) AS net FROM public.orders GROUP BY status),
+      p AS (
+        SELECT o.status, SUM(p.value) AS paid
+        FROM public.payments p JOIN public.orders o ON o.order_id = p.order_id
+        GROUP BY o.status
+      )
+      SELECT o.status AS orders__status, o.net - p.paid AS collection_gap
+      FROM o LEFT JOIN p ON p.status = o.status
+
+  # -- Filtros por dimensão e por regra de negócio ---------------------------
+  - id: R14
+    category: filters
+    phase: 0
+    title: Receita de pedidos concluídos por mês (filtro da métrica)
+    request:
+      metrics: [completed_revenue]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      SELECT DATE_TRUNC('month', ordered_at) AS orders__ordered_at__month,
+             SUM(CASE WHEN status = 'completed' THEN amount END) AS completed_revenue
+      FROM public.orders GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT DATETRUNC(month, ordered_at) AS orders__ordered_at__month,
+               SUM(CASE WHEN status = 'completed' THEN amount END) AS completed_revenue
+        FROM public.orders GROUP BY DATETRUNC(month, ordered_at)
+
+  - id: R15
+    category: filters
+    phase: 0
+    title: Receita concluída dos últimos 180 dias por estado (filtro do pedido)
+    request:
+      metrics: [revenue]
+      dimensions: [customers.state]
+      filters:
+        - "{orders.status} = 'completed'"
+        - "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '180' DAY"
+    user: { region: Sul }
+    sql: |
+      SELECT c.state AS customers__state, SUM(o.amount) AS revenue
+      FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
+      WHERE o.status = 'completed'
+        AND o.ordered_at >= CURRENT_DATE - INTERVAL '180' DAY
+        AND c.region = 'Sul'
+      GROUP BY c.state
+    sql_by_dialect:
+      tsql: |
+        SELECT c.state AS customers__state, SUM(o.amount) AS revenue
+        FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE o.status = 'completed'
+          AND o.ordered_at >= DATEADD(day, -180, CAST(GETDATE() AS DATE))
+          AND c.region = 'Sul'
+        GROUP BY c.state
+
+  - id: R16
+    category: filters
+    phase: 1
+    title: Clientes ativos (regra de negócio) por segmento
+    request:
+      metrics: [customer_count]
+      dimensions: [customers.segment]
+      filters: ["{rule.cliente_ativo}"]
+    user: { region: Sudeste }
+    sql: |
+      SELECT segment AS customers__segment, COUNT(DISTINCT customer_id) AS customer_count
+      FROM public.customers
+      WHERE last_order_at >= CURRENT_DATE - INTERVAL '90' DAY AND region = 'Sudeste'
+      GROUP BY segment
+
+  # -- Filtro por linha e LGPD -----------------------------------------------
+  - id: R17
+    category: policies
+    phase: 0
+    title: Usuário do Norte só vê clientes do Norte
+    request:
+      metrics: [customer_count]
+      dimensions: [customers.region]
+    user: { region: Norte }
+    sql: |
+      SELECT region AS customers__region, COUNT(DISTINCT customer_id) AS customer_count
+      FROM public.customers WHERE region = 'Norte' GROUP BY region
+
+  - id: R18
+    category: policies
+    phase: 0
+    title: Agente não agrupa por plano de saúde (dado pessoal sensível)
+    request:
+      metrics: [customer_count]
+      dimensions: [customers.health_plan]
+    user: { region: Sul }
+    channel: mcp
+    expect_error: PolicyError
+
+  # -- Perguntas só com sinônimos do glossário -------------------------------
+  - id: R19
+    category: glossary
+    phase: 1
+    title: "\"Quantos compradores ativos temos?\""
+    question: compradores ativos
+    expect_maps_to: rule:cliente_ativo
+
+  - id: R20
+    category: glossary
+    phase: 1
+    title: "\"Qual o faturamento líquido?\""
+    question: faturamento líquido
+    expect_maps_to: metric:net_revenue

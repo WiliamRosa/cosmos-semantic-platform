@@ -1,0 +1,20 @@
+# Credenciais vêm de variáveis de ambiente; nunca escreva segredos neste arquivo.
+default: ${COSMOS_DATA_SOURCE:-local}
+
+data_sources:
+  local:
+    type: duckdb
+    path: ${COSMOS_DUCKDB_PATH:-data/ecommerce.duckdb}
+
+  postgres:
+    type: postgres
+    uri: ${COSMOS_PG_URI:-postgresql://cosmos:cosmos@localhost:55432/cosmos}
+
+  databricks:
+    type: databricks
+    options:
+      server_hostname: ${DATABRICKS_SERVER_HOSTNAME:-}
+      http_path: ${DATABRICKS_HTTP_PATH:-}
+      access_token: ${DATABRICKS_TOKEN:-}
+      profile: ${DATABRICKS_CONFIG_PROFILE:-}   # alternativa ao token: perfil do Databricks CLI
+      catalog: ${DATABRICKS_CATALOG:-cosmos_demo}
