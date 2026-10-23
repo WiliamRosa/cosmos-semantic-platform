@@ -130,7 +130,7 @@ Instead of declaring joins, users declare keys.
 | `unique` | A unique value in the model that is not the primary key |
 | `foreign` | A reference to another model's primary or unique entity |
 
-A `foreign` entity in model A and the same `primary` or `unique` entity in model B form an edge of the join graph. The planner walks this graph, across several hops if needed (order items → orders → customers). An ambiguous path is an error.
+A `foreign` entity in model A and the same `primary` or `unique` entity in model B form an edge of the join graph. The planner walks this graph, across several hops if needed (order items → orders → customers). An ambiguous path is an error. Dimensions on the "many" side of a relationship (order revenue by product category) are attributed through a bridge of distinct pairs: each order counts once per category it contains, never once per item.
 
 ### Dimensions
 
@@ -400,4 +400,3 @@ Whatever Cube does not represent the same way produces a warning on export:
 - Conversion (funnel) metrics.
 - A time spine for series without gaps on days without data.
 - Rolling-window cumulative metrics.
-- `one_to_many` joins as a query's starting point.

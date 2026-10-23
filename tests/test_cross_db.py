@@ -143,7 +143,7 @@ def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
 
 def test_refusals_are_the_same_everywhere(graph, connectors):
     bad = [
-        (QueryRequest(metrics=["revenue"], dimensions=["products.category"]), Principal()),
+        (QueryRequest(metrics=["paid_value"], dimensions=["products.category"]), Principal()),
         (QueryRequest(metrics=["customer_count"]), Principal()),
         (
             QueryRequest(metrics=["customer_count"], dimensions=["customers.cpf"]),

@@ -118,6 +118,13 @@ class EvidenceBuilder:
         trace = compiled.trace
         caveats = [REPRODUCIBILITY_CAVEAT]
         metrics = [self._metric(name) for name in request.metrics]
+        for item in trace.one_to_many:
+            what = ", ".join(item["dimensions"]) or "filters " + ", ".join(item["filters"])
+            caveats.append(
+                f"{what} is attributed to `{item['base']}` through `{item['via']}`: each "
+                f"`{item['base']}` row counts once in every value it relates to, so totals "
+                "across those values can exceed the overall total."
+            )
         rules = []
         for name, uses in sorted(trace.rules.items()):
             rule = g.rules[name]
@@ -183,7 +190,11 @@ class EvidenceBuilder:
                 "row_filters": _merge_row_filters(trace.row_filters),
                 "sensitive_data_blocked_for_agents": principal.is_agent,
             },
-            "lineage": {"models": compiled.models, "joins": trace.joins},
+            "lineage": {
+                "models": compiled.models,
+                "joins": trace.joins,
+                "one_to_many": trace.one_to_many,
+            },
             "sql": {"text": compiled.sql, "hash": sql_hash(compiled.sql)},
             "result": {
                 "row_count": table.num_rows,

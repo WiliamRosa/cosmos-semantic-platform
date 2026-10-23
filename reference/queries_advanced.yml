@@ -436,3 +436,57 @@ cases:
     user: { region: Sul }
     channel: mcp
     expect_error: PolicyError
+
+  # -- One-to-many attribution ---------------------------------------------
+  - id: A25
+    category: one-to-many
+    phase: 2
+    title: Order revenue by product category (each order once per category it contains)
+    request:
+      metrics: [revenue]
+      dimensions: [products.category]
+    sql: |
+      SELECT b.category AS products__category, SUM(o.amount) AS revenue
+      FROM public.orders o
+      LEFT JOIN (
+        SELECT DISTINCT i.order_id, p.category
+        FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+      ) b ON b.order_id = o.order_id
+      GROUP BY b.category
+
+  - id: A26
+    category: one-to-many
+    phase: 2
+    title: Revenue of orders containing a Casa item, by status (filter on the many side)
+    request:
+      metrics: [revenue, order_count]
+      dimensions: [orders.status]
+      filters: ["{products.category} = 'Casa'"]
+    sql: |
+      SELECT o.status AS orders__status, SUM(o.amount) AS revenue, COUNT(*) AS order_count
+      FROM public.orders o
+      WHERE EXISTS (
+        SELECT 1 FROM public.order_items i JOIN public.products p ON p.product_id = i.product_id
+        WHERE i.order_id = o.order_id AND p.category = 'Casa'
+      )
+      GROUP BY o.status
+
+  - id: A27
+    category: one-to-many
+    phase: 2
+    title: Customers who bought each category, with the user's row filter
+    request:
+      metrics: [customer_count]
+      dimensions: [products.category]
+    user: { region: Sudeste }
+    sql: |
+      SELECT b.category AS products__category, COUNT(DISTINCT c.customer_id) AS customer_count
+      FROM public.customers c
+      LEFT JOIN (
+        SELECT DISTINCT o.customer_id, p.category
+        FROM public.order_items i
+        JOIN public.orders o ON o.order_id = i.order_id
+        LEFT JOIN public.products p ON p.product_id = i.product_id
+      ) b ON b.customer_id = c.customer_id
+      WHERE c.region = 'Sudeste'
+      GROUP BY b.category

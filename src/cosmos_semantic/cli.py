@@ -302,7 +302,7 @@ def reference(
     ] = None,
     connections: ConnOpt = Path("examples/ecommerce/connections.yml"),
     source: SourceOpt = None,
-    phase: Annotated[int, typer.Option(help="Run cases up to this phase.")] = 1,
+    phase: Annotated[int, typer.Option(help="Run cases up to this phase.")] = 2,
 ) -> None:
     """Runs the reference queries and compares the engine with hand-written SQL."""
     from cosmos_semantic.reference import load_cases, run_case

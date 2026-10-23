@@ -92,6 +92,7 @@ class QueryTrace:
     rules: dict[str, set[str]] = field(default_factory=dict)
     row_filters: list[dict[str, Any]] = field(default_factory=list)
     joins: list[dict[str, str]] = field(default_factory=list)
+    one_to_many: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -263,10 +264,45 @@ class Planner:
         dims: list[DimensionRef],
         filters: list[Template],
         principal: Principal,
+        extra: list[tuple[str, str, str]] | None = None,
+        label: str | None = None,
     ) -> tuple[exp.Select, set[str]]:
+        """One aggregation CTE starting at ``group.model``.
+
+        Dimensions and filters the base cannot reach through many-to-one joins (for example,
+        product category for order revenue) go through a *bridge*: distinct pairs of the base
+        key and those dimensions, built from a model that reaches both sides. Each base row then
+        counts once per value it relates to, never once per child row.
+        """
         g = self.graph
         base = group.model
+        label = label or f"{base}_agg"
         joins: dict[str, JoinEdge] = {}
+        reach = g.reachable(base)
+
+        def resolve_request(r: str) -> DimensionRef:
+            return g.resolve_dimension(r, context=base if r.startswith("rule.") else None)
+
+        remote_dims = [d for d in dims if d.model not in reach]
+        local_filters, remote_filters = [], []
+        for template in filters:
+            models = set()
+            for r in template.refs:
+                try:
+                    models.add(resolve_request(r).model)
+                except QueryError:
+                    models.add(base)
+            outside = {m for m in models if m not in reach}
+            if outside and outside != models:
+                raise QueryError(
+                    f"filter `{template.text}` mixes members reachable from `{base}` with "
+                    "members that are not; split it into separate filters"
+                )
+            (remote_filters if outside else local_filters).append(template)
+        filters = local_filters
+        bridge = None
+        if remote_dims or remote_filters:
+            bridge = self._bridge(base, remote_dims, remote_filters, principal, label)
 
         def need(model: str) -> None:
             for edge in g.join_path(base, model):
@@ -308,8 +344,18 @@ class Planner:
                 resolve_condition=lambda r: resolver(r, True),
             )
 
-        dim_exprs = [dim_sql(d) for d in dims]
+        dim_exprs = [
+            exp.column(d.alias, table="bridge")
+            if bridge is not None and d in remote_dims
+            else dim_sql(d)
+            for d in dims
+        ]
         projections = [e.copy().as_(d.alias) for e, d in zip(dim_exprs, dims, strict=True)]
+        for alias, model, expr in extra or []:
+            need(model)
+            column = qualify(expr, model, self.dialect)
+            dim_exprs.append(column)
+            projections.append(column.copy().as_(alias))
         conditions = [fill(t, request_ref) for t in filters]
 
         for item, alias in group.inputs.items():
@@ -341,7 +387,7 @@ class Planner:
                             "name": row_filter.name,
                             "filter": row_filter.filter,
                             "user_fields": {f: principal.user.get(f) for f in template.user_fields},
-                            "applied_in": f"{base}_agg",
+                            "applied_in": label,
                         }
                     )
                     conditions.append(
@@ -351,7 +397,7 @@ class Planner:
         select = exp.select(*projections).from_(self._table(g.models[base].spec.table, base))
         for target, edge in _ordered(joins, base):
             self._trace.joins.append(
-                {"from": edge.source, "to": target, "entity": edge.entity, "in": f"{base}_agg"}
+                {"from": edge.source, "to": target, "entity": edge.entity, "in": label}
             )
             on = exp.EQ(
                 this=qualify(edge.source_expr, edge.source, self.dialect),
@@ -360,12 +406,79 @@ class Planner:
             select = select.join(
                 self._table(g.models[target].spec.table, target), on=on, join_type="left"
             )
+        if bridge is not None:
+            bridge_select, key_expr, inner = bridge
+            select = select.join(
+                bridge_select.subquery("bridge"),
+                on=exp.EQ(
+                    this=qualify(key_expr, base, self.dialect),
+                    expression=exp.column("__bridge_key", table="bridge"),
+                ),
+                join_type="inner" if inner else "left",
+            )
         if conditions:
             select = select.where(exp.and_(*conditions))
-        if dims:
+        if dim_exprs:
             # Group by expressions, not ordinals: SQL Server does not accept GROUP BY 1.
             select = select.group_by(*[e.copy() for e in dim_exprs])
         return select, {base, *joins}
+
+    def _bridge(
+        self,
+        base: str,
+        dims: list[DimensionRef],
+        filters: list[Template],
+        principal: Principal,
+        label: str,
+    ) -> tuple[exp.Select, str, bool]:
+        """Distinct (base key, dimensions) pairs from a model that reaches both sides."""
+        g = self.graph
+        targets = {d.model for d in dims}
+        for template in filters:
+            targets |= {g.resolve_dimension(r).model for r in template.refs}
+        targets.discard(base)
+        candidates = [
+            m
+            for m in g.models
+            if m != base and base in g.reachable(m) and targets <= g.reachable(m)
+        ]
+        names = ", ".join(sorted(f"{d.model}.{d.name}" for d in dims)) or "the filter"
+        if not candidates:
+            raise QueryError(
+                f"{names} is not reachable from `{base}`, and no model links them: one-to-many "
+                f"attribution needs a model that reaches both `{base}` and the dimension"
+            )
+        distance = {m: len(g.join_path(m, base)) for m in candidates}
+        best = min(distance.values())
+        closest = sorted(m for m in candidates if distance[m] == best)
+        if len(closest) > 1:
+            raise QueryError(
+                f"{names} can be attributed to `{base}` through several models "
+                f"({', '.join(closest)}); the attribution would be ambiguous"
+            )
+        via = closest[0]
+        key = next((e for e in g.models[base].entities.values() if e.type == "primary"), None)
+        if key is None:
+            raise QueryError(f"`{base}` has no primary entity; one-to-many attribution needs one")
+        key_expr = key.expr or key.name
+        bridge_select, _ = self._group_select(
+            _Group(via),
+            dims,
+            filters,
+            principal,
+            extra=[("__bridge_key", base, key_expr)],
+            label=f"{label} bridge via {via}",
+        )
+        self._trace.one_to_many.append(
+            {
+                "base": base,
+                "via": via,
+                "dimensions": [f"{d.model}.{d.name}" for d in dims],
+                "filters": [t.text for t in filters],
+                "in": label,
+            }
+        )
+        return bridge_select, key_expr, bool(filters)
 
     def _aggregate(
         self, measure: Measure, model: str, condition: exp.Expression | None

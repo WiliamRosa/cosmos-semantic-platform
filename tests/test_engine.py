@@ -133,8 +133,33 @@ def test_agent_cannot_filter_by_personal_data(graph):
 
 
 def test_unreachable_dimension_is_explained(graph):
-    request = QueryRequest(metrics=["revenue"], dimensions=["products.category"])
-    with pytest.raises(QueryError, match="many-to-one"):
+    # Nothing links payments to products: no model reaches both.
+    request = QueryRequest(metrics=["paid_value"], dimensions=["products.category"])
+    with pytest.raises(QueryError, match="no model links them"):
+        Planner(graph).plan(request)
+
+
+def test_one_to_many_dimension_goes_through_a_distinct_bridge(graph):
+    compiled = Planner(graph).plan(
+        QueryRequest(metrics=["revenue"], dimensions=["products.category"])
+    )
+    assert "AS bridge" in compiled.sql and "__bridge_key" in compiled.sql
+    [item] = compiled.trace.one_to_many
+    assert item == {
+        "base": "orders",
+        "via": "order_items",
+        "dimensions": ["products.category"],
+        "filters": [],
+        "in": "orders_agg",
+    }
+
+
+def test_filter_mixing_both_sides_is_refused(graph):
+    request = QueryRequest(
+        metrics=["revenue"],
+        filters=["{orders.status} = 'completed' OR {products.category} = 'Casa'"],
+    )
+    with pytest.raises(QueryError, match="split it"):
         Planner(graph).plan(request)
 
 
