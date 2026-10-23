@@ -141,6 +141,20 @@ Legacy SQL can read anything the database user can, bypassing row filters, so re
 
 With `--audit` (or `COSMOS_AUDIT_LOG`), the report adds the **consumers**: who queried any affected member, through which channel, how many times and when last. With `--changes-from <previous model>`, the command first finds the members whose definition changed (metrics, measures, dimensions, rules, glossary concepts and models, including removals) and reports their combined impact, which is what a reviewer needs on a pull request.
 
+## Model bootstrap
+
+`cosmos bootstrap -o draft.yml` drafts a semantic model from the database catalog (`information_schema`, available on DuckDB, Postgres and SQL Server), without AI:
+
+| Inference | How |
+| --- | --- |
+| Primary keys | Declared keys; otherwise a column named `id` or `<singular>_id`, confirmed unique and not null in the data |
+| Joins | A `<name>_id` column matching another table's key becomes a foreign entity; the report gives its coverage (rows without a match) |
+| Dimensions | Text, boolean and date columns; integer columns with few distinct values are also kept as dimensions, flagged for review |
+| Measures | Numeric columns as `sum` (`avg` for prices, rates and percentages), plus a row count per table |
+| LGPD | Suggested `sensitivity` for columns such as CPF, e-mail, phone, health plan, and names in tables of people |
+
+Every inference goes into the report (`--report report.json`); the draft is a starting point for review, never a published model. On the example database the draft finds the same keys and joins as the hand-written model and answers with the same numbers, including two-hop joins, and the whole path from raw database to the first governed query takes about 3 seconds. Real databases with less regular naming will need more review.
+
 ## MCP server tools
 
 | Tool | What it returns |
