@@ -1,0 +1,4 @@
+role 'Regional managers'
+	modelPermission: read
+
+	tablePermission Customers = Customers[region] = LOOKUPVALUE(Managers[region], Managers[email], USERPRINCIPALNAME())

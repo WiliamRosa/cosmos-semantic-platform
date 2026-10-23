@@ -1,0 +1,38 @@
+table Customers
+
+	measure 'Customer Count' = DISTINCTCOUNT(Customers[customer_id])
+
+	measure 'Midwest Or West Customers' = CALCULATE([Customer Count], Customers[region] IN {"Midwest", "West"})
+
+	column customer_id
+		dataType: int64
+		isHidden
+		sourceColumn: customer_id
+
+	column region
+		dataType: string
+		sourceColumn: region
+
+	/// Consumer, SMB or Enterprise
+	column Segment
+		dataType: string
+		sourceColumn: segment
+
+	column last_order_at
+		dataType: dateTime
+		sourceColumn: last_order_at
+
+	hierarchy Geography
+		level region
+			column: region
+
+	partition Customers = m
+		mode: import
+		source =
+				let
+				    Source = Databricks.Catalogs("adb.example.net", "/sql/1.0/warehouses/x"),
+				    s = Source{[Name="public",Kind="Schema"]}[Data],
+				    t = s{[Name="customers",Kind="Table"]}[Data]
+				in
+				    t
+

@@ -1,0 +1,8 @@
+table 'Top Products'
+
+	column category
+		dataType: string
+
+	partition 'Top Products' = calculated
+		source = TOPN(10, Products)
+

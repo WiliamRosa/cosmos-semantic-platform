@@ -1,0 +1,16 @@
+table Products
+
+	column product_id
+		dataType: int64
+		isHidden
+		sourceColumn: product_id
+
+	column category
+		dataType: string
+		sourceColumn: category
+
+	partition Products = m
+		mode: import
+		source =
+				let S = Sql.Database("w", "e"), p = S{[Item="products",Schema="public"]}[Data] in p
+

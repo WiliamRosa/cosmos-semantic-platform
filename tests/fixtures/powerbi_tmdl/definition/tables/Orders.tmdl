@@ -1,0 +1,76 @@
+/// Sales orders
+table Orders
+	lineageTag: 6f1c
+
+	/// Gross order value
+	measure Revenue = SUM(Orders[amount])
+		formatString: #,0.00
+
+	measure Discounts = SUM ( Orders[discount] )
+
+	measure 'Order Count' = COUNTROWS(Orders)
+
+	measure Buyers = DISTINCTCOUNT(Orders[customer_id])
+
+	measure 'Average Order Value' = DIVIDE([Revenue], [Order Count])
+
+	measure 'Completed Revenue' =
+			CALCULATE(
+			    [Revenue],
+			    Orders[Status] = "completed"
+			)
+		displayFolder: Revenue
+
+	measure 'Net Revenue' = [Revenue] - [Discounts] // after discounts
+
+	measure 'Revenue YTD' = TOTALYTD([Revenue], Orders[Order Date])
+
+	measure 'Discount Rate' = DIVIDE(SUM(Orders[discount]), [Revenue])
+
+	measure 'Big Order Revenue' = CALCULATE([Revenue], KEEPFILTERS(Orders[amount] >= 1000))
+
+	measure 'Last Order Date' = LASTDATE(Orders[Order Date])
+
+	measure 'Revenue With Var' = ```
+			VAR r = [Revenue]
+			RETURN r * 2
+			```
+
+	column order_id
+		dataType: int64
+		isHidden
+		sourceColumn: order_id
+
+	column customer_id
+		dataType: int64
+		isHidden
+		sourceColumn: customer_id
+
+	column 'Order Date'
+		dataType: dateTime
+		sourceColumn: ordered_at
+
+	column Status
+		dataType: string
+		sourceColumn: status
+
+	column amount
+		dataType: double
+		sourceColumn: amount
+
+	column discount
+		dataType: double
+		sourceColumn: discount
+
+	column 'Net Amount' = Orders[amount] - Orders[discount]
+		dataType: double
+
+	partition Orders = m
+		mode: import
+		source =
+				let
+				    Source = Sql.Database("warehouse", "ecommerce"),
+				    public_orders = Source{[Schema="public",Item="orders"]}[Data]
+				in
+				    public_orders
+

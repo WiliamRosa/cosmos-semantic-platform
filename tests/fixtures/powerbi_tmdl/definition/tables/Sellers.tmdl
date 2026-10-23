@@ -1,0 +1,16 @@
+table Sellers
+
+	column seller_id
+		dataType: int64
+		isHidden
+		sourceColumn: seller_id
+
+	column state
+		dataType: string
+		sourceColumn: state
+
+	partition Sellers = m
+		mode: import
+		source =
+				let S = Sql.Database("w", "e"), p = S{[Schema="public",Item="sellers"]}[Data] in p
+

@@ -69,6 +69,26 @@ Cube is the most adopted open source semantic layer, so importing from it is the
 
 Importing a Cube model and exporting it back must produce the same static YAML, except for what the report recorded as warnings; this becomes an automated test, as with Ossie.
 
+## Importing Power BI
+
+`cosmos import powerbi <model.bim | TMDL folder> -o semantic/powerbi.yml` reads a Power BI semantic model without running it ([ADR 0009](decisions/0009-business-context-as-phase-3-differentiator.md)). A `.bim` file (TMSL JSON) and a TMDL folder (the `definition/` of a PBIP project) give the same result.
+
+| Power BI | Cosmos |
+| --- | --- |
+| Table | Semantic model; the physical table comes from the partition: Power Query navigation (`Schema`/`Item`, or `Name`/`Kind` as in Databricks and Snowflake), `Value.NativeQuery` or a legacy query partition with a `SELECT * FROM` |
+| Column | Dimension (`sourceColumn` becomes `expr`); hidden columns, usually keys, only when a filter needs them |
+| Active relationship | Foreign entity on the many side, primary entity on the one side |
+| `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `DISTINCTCOUNT`, `COUNTROWS` | Measure |
+| `DIVIDE(a, b)` | Ratio metric |
+| `CALCULATE(m, T[c] = "x", T[d] IN {...}, KEEPFILTERS(...))` | Metric with `filter` |
+| `TOTALYTD`, `TOTALQTD`, `TOTALMTD` | Cumulative metric |
+| Arithmetic over measures | Derived metric |
+| Hierarchies | `custom_extensions` |
+
+Reported as warnings, never dropped silently: iterators (`SUMX` and similar), `FILTER`, `ALL`, variables, `LASTDATE` and other functions with no equivalent (with the measures that depend on them), calculated columns and tables, calculation groups, inactive (`USERELATIONSHIP`), bidirectional and many-to-many relationships, and row-level security roles, which must be recreated as `row_filters` with `$user` fields. One semantic difference is flagged per measure: a plain `CALCULATE` filter replaces the filter on that column in DAX, while Cosmos intersects it, as `KEEPFILTERS` does; numbers differ only when a query also groups or filters by that column.
+
+An equivalence test imports a Power BI version of the e-commerce example, in both formats, and checks that it returns the same numbers as the native model on DuckDB, Postgres and SQL Server.
+
 ## Risks
 
 - The standard is still a draft. The compiler isolates the mapping in its own layer, with tests per schema version.

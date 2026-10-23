@@ -1,0 +1,21 @@
+relationship r1
+	fromColumn: Orders.customer_id
+	toColumn: Customers.customer_id
+
+relationship r2
+	fromColumn: 'Order Items'.order_id
+	toColumn: Orders.order_id
+
+relationship r3
+	crossFilteringBehavior: bothDirections
+	fromColumn: Payments.order_id
+	toColumn: Orders.order_id
+
+relationship r4
+	fromColumn: 'Order Items'.product_id
+	toColumn: Products.product_id
+
+relationship r5
+	isActive: false
+	fromColumn: 'Order Items'.seller_id
+	toColumn: Sellers.seller_id

@@ -1,0 +1,39 @@
+table 'Order Items'
+
+	measure 'Items Sold' = SUM('Order Items'[quantity])
+
+	measure 'Items per Order' = DIVIDE([Items Sold], [Order Count])
+
+	measure 'Item Revenue' = SUMX('Order Items', 'Order Items'[quantity] * 'Order Items'[unit_price])
+
+	column order_item_id
+		dataType: int64
+		isHidden
+		sourceColumn: order_item_id
+
+	column order_id
+		dataType: int64
+		isHidden
+		sourceColumn: order_id
+
+	column product_id
+		dataType: int64
+		isHidden
+		sourceColumn: product_id
+
+	column seller_id
+		dataType: int64
+		isHidden
+		sourceColumn: seller_id
+
+	column quantity
+		dataType: int64
+		sourceColumn: quantity
+
+	column unit_price
+		dataType: double
+		sourceColumn: unit_price
+
+	partition 'Order Items' = query
+		query = SELECT * FROM public.order_items
+

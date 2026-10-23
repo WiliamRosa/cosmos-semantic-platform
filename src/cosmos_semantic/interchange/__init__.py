@@ -1,4 +1,4 @@
-"""Importing models from other tools (phase 1): dbt, Apache Ossie and Cube.
+"""Importing models from other tools: dbt, Apache Ossie and Cube (phase 1), Power BI (phase 3).
 
 No conversion loses information silently: whatever has no equivalent becomes a warning in the
 report or is kept in ``custom_extensions``.
@@ -54,4 +54,8 @@ def import_model(kind: str, path: str | Path, **options: Any) -> ImportResult:
         from cosmos_semantic.interchange.cube import import_cube
 
         return import_cube(path, **options)
-    raise ValueError(f"unknown format: {kind} (use dbt, ossie or cube)")
+    if kind == "powerbi":
+        from cosmos_semantic.interchange.powerbi import import_powerbi
+
+        return import_powerbi(path, **options)
+    raise ValueError(f"unknown format: {kind} (use dbt, ossie, cube or powerbi)")

@@ -68,6 +68,7 @@ uv run cosmos reference
 uv run cosmos import cube path/to/model -o semantic/imported.yml
 uv run cosmos import dbt path/to/dbt/models --schema analytics -o semantic/dbt.yml
 uv run cosmos import ossie model.yaml -o semantic/ossie.yml
+uv run cosmos import powerbi model.bim -o semantic/powerbi.yml   # or a TMDL folder
 ```
 
 ### REST API and MCP

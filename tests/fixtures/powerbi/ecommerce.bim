@@ -1,0 +1,152 @@
+{
+  "name": "Ecommerce",
+  "compatibilityLevel": 1567,
+  "model": {
+    "culture": "en-US",
+    "tables": [
+      {
+        "name": "Orders",
+        "description": "Sales orders",
+        "columns": [
+          { "name": "order_id", "dataType": "int64", "sourceColumn": "order_id", "isHidden": true },
+          { "name": "customer_id", "dataType": "int64", "sourceColumn": "customer_id", "isHidden": true },
+          { "name": "Order Date", "dataType": "dateTime", "sourceColumn": "ordered_at" },
+          { "name": "Status", "dataType": "string", "sourceColumn": "status" },
+          { "name": "amount", "dataType": "double", "sourceColumn": "amount", "summarizeBy": "sum" },
+          { "name": "discount", "dataType": "double", "sourceColumn": "discount" },
+          { "name": "Net Amount", "type": "calculated", "dataType": "double", "expression": "Orders[amount] - Orders[discount]" }
+        ],
+        "measures": [
+          { "name": "Revenue", "expression": "SUM(Orders[amount])", "description": "Gross order value" },
+          { "name": "Discounts", "expression": "SUM ( Orders[discount] )" },
+          { "name": "Order Count", "expression": "COUNTROWS(Orders)" },
+          { "name": "Buyers", "expression": "DISTINCTCOUNT(Orders[customer_id])" },
+          { "name": "Average Order Value", "expression": "DIVIDE([Revenue], [Order Count])" },
+          { "name": "Completed Revenue", "expression": ["CALCULATE(", "    [Revenue],", "    Orders[Status] = \"completed\"", ")"] },
+          { "name": "Net Revenue", "expression": "[Revenue] - [Discounts] // after discounts" },
+          { "name": "Revenue YTD", "expression": "TOTALYTD([Revenue], Orders[Order Date])" },
+          { "name": "Discount Rate", "expression": "DIVIDE(SUM(Orders[discount]), [Revenue])" },
+          { "name": "Big Order Revenue", "expression": "CALCULATE([Revenue], KEEPFILTERS(Orders[amount] >= 1000))" },
+          { "name": "Last Order Date", "expression": "LASTDATE(Orders[Order Date])" },
+          { "name": "Revenue With Var", "expression": "VAR r = [Revenue] RETURN r * 2" }
+        ],
+        "partitions": [
+          {
+            "name": "Orders",
+            "mode": "import",
+            "source": {
+              "type": "m",
+              "expression": [
+                "let",
+                "    Source = Sql.Database(\"warehouse\", \"ecommerce\"),",
+                "    public_orders = Source{[Schema=\"public\",Item=\"orders\"]}[Data]",
+                "in",
+                "    public_orders"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "Customers",
+        "columns": [
+          { "name": "customer_id", "dataType": "int64", "sourceColumn": "customer_id", "isHidden": true },
+          { "name": "region", "dataType": "string", "sourceColumn": "region" },
+          { "name": "Segment", "dataType": "string", "sourceColumn": "segment", "description": "Consumer, SMB or Enterprise" },
+          { "name": "last_order_at", "dataType": "dateTime", "sourceColumn": "last_order_at" }
+        ],
+        "measures": [
+          { "name": "Customer Count", "expression": "DISTINCTCOUNT(Customers[customer_id])" },
+          { "name": "Midwest Or West Customers", "expression": "CALCULATE([Customer Count], Customers[region] IN {\"Midwest\", \"West\"})" }
+        ],
+        "partitions": [
+          {
+            "name": "Customers",
+            "source": {
+              "type": "m",
+              "expression": "let\n    Source = Databricks.Catalogs(\"adb.example.net\", \"/sql/1.0/warehouses/x\"),\n    s = Source{[Name=\"public\",Kind=\"Schema\"]}[Data],\n    t = s{[Name=\"customers\",Kind=\"Table\"]}[Data]\nin\n    t"
+            }
+          }
+        ],
+        "hierarchies": [{ "name": "Geography", "levels": [{ "name": "region", "column": "region" }] }]
+      },
+      {
+        "name": "Order Items",
+        "columns": [
+          { "name": "order_item_id", "dataType": "int64", "sourceColumn": "order_item_id", "isHidden": true },
+          { "name": "order_id", "dataType": "int64", "sourceColumn": "order_id", "isHidden": true },
+          { "name": "product_id", "dataType": "int64", "sourceColumn": "product_id", "isHidden": true },
+          { "name": "seller_id", "dataType": "int64", "sourceColumn": "seller_id", "isHidden": true },
+          { "name": "quantity", "dataType": "int64", "sourceColumn": "quantity" },
+          { "name": "unit_price", "dataType": "double", "sourceColumn": "unit_price" }
+        ],
+        "measures": [
+          { "name": "Items Sold", "expression": "SUM('Order Items'[quantity])" },
+          { "name": "Items per Order", "expression": "DIVIDE([Items Sold], [Order Count])" },
+          { "name": "Item Revenue", "expression": "SUMX('Order Items', 'Order Items'[quantity] * 'Order Items'[unit_price])" }
+        ],
+        "partitions": [
+          { "name": "Order Items", "source": { "type": "query", "query": "SELECT * FROM public.order_items", "dataSource": "warehouse" } }
+        ]
+      },
+      {
+        "name": "Payments",
+        "columns": [
+          { "name": "payment_id", "dataType": "int64", "sourceColumn": "payment_id", "isHidden": true },
+          { "name": "order_id", "dataType": "int64", "sourceColumn": "order_id", "isHidden": true },
+          { "name": "method", "dataType": "string", "sourceColumn": "method" },
+          { "name": "value", "dataType": "double", "sourceColumn": "value" }
+        ],
+        "measures": [
+          { "name": "Paid Value", "expression": "SUM(Payments[value])" },
+          { "name": "Collection Gap", "expression": "[Net Revenue] - [Paid Value]" }
+        ],
+        "partitions": [
+          {
+            "name": "Payments",
+            "source": { "type": "m", "expression": "let Source = Value.NativeQuery(Sql.Database(\"w\", \"e\"), \"SELECT * FROM public.payments\") in Source" }
+          }
+        ]
+      },
+      {
+        "name": "Products",
+        "columns": [
+          { "name": "product_id", "dataType": "int64", "sourceColumn": "product_id", "isHidden": true },
+          { "name": "category", "dataType": "string", "sourceColumn": "category" }
+        ],
+        "partitions": [
+          { "name": "Products", "source": { "type": "m", "expression": "let S = Sql.Database(\"w\", \"e\"), p = S{[Item=\"products\",Schema=\"public\"]}[Data] in p" } }
+        ]
+      },
+      {
+        "name": "Sellers",
+        "columns": [
+          { "name": "seller_id", "dataType": "int64", "sourceColumn": "seller_id", "isHidden": true },
+          { "name": "state", "dataType": "string", "sourceColumn": "state" }
+        ],
+        "partitions": [
+          { "name": "Sellers", "source": { "type": "m", "expression": "let S = Sql.Database(\"w\", \"e\"), p = S{[Schema=\"public\",Item=\"sellers\"]}[Data] in p" } }
+        ]
+      },
+      {
+        "name": "Top Products",
+        "columns": [{ "name": "category", "dataType": "string" }],
+        "partitions": [{ "name": "Top Products", "source": { "type": "calculated", "expression": "TOPN(10, Products)" } }]
+      }
+    ],
+    "relationships": [
+      { "name": "r1", "fromTable": "Orders", "fromColumn": "customer_id", "toTable": "Customers", "toColumn": "customer_id" },
+      { "name": "r2", "fromTable": "Order Items", "fromColumn": "order_id", "toTable": "Orders", "toColumn": "order_id" },
+      { "name": "r3", "fromTable": "Payments", "fromColumn": "order_id", "toTable": "Orders", "toColumn": "order_id", "crossFilteringBehavior": "bothDirections" },
+      { "name": "r4", "fromTable": "Order Items", "fromColumn": "product_id", "toTable": "Products", "toColumn": "product_id" },
+      { "name": "r5", "fromTable": "Order Items", "fromColumn": "seller_id", "toTable": "Sellers", "toColumn": "seller_id", "isActive": false }
+    ],
+    "roles": [
+      {
+        "name": "Regional managers",
+        "modelPermission": "read",
+        "tablePermissions": [{ "name": "Customers", "filterExpression": "Customers[region] = LOOKUPVALUE(Managers[region], Managers[email], USERPRINCIPALNAME())" }]
+      }
+    ]
+  }
+}

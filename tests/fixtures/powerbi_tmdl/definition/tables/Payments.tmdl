@@ -1,0 +1,29 @@
+table Payments
+
+	measure 'Paid Value' = SUM(Payments[value])
+
+	measure 'Collection Gap' = [Net Revenue] - [Paid Value]
+
+	column payment_id
+		dataType: int64
+		isHidden
+		sourceColumn: payment_id
+
+	column order_id
+		dataType: int64
+		isHidden
+		sourceColumn: order_id
+
+	column method
+		dataType: string
+		sourceColumn: method
+
+	column value
+		dataType: double
+		sourceColumn: value
+
+	partition Payments = m
+		mode: import
+		source =
+				let Source = Value.NativeQuery(Sql.Database("w", "e"), "SELECT * FROM public.payments") in Source
+

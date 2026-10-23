@@ -709,17 +709,17 @@ def test_rules(model: ModelOpt = Path("semantic")) -> None:
 
 @app.command("import")
 def import_cmd(
-    kind: Annotated[str, typer.Argument(help="dbt, ossie or cube.")],
+    kind: Annotated[str, typer.Argument(help="dbt, ossie, cube or powerbi (.bim or TMDL folder).")],
     source: Annotated[Path, typer.Argument(help="Source file or folder.")],
     output: Annotated[Path, typer.Option("--output", "-o", help="Output .yml file.")],
     schema_name: Annotated[
-        str | None, typer.Option("--schema", help="Table schema (dbt and Cube).")
+        str | None, typer.Option("--schema", help="Table schema (dbt, Cube, Power BI fallback).")
     ] = None,
 ) -> None:
     """Imports a model from dbt (latest and legacy), Apache Ossie or Cube (static YAML)."""
     from cosmos_semantic.interchange import dump_project, import_model
 
-    options = {"schema": schema_name} if kind in ("dbt", "cube") and schema_name else {}
+    options = {"schema": schema_name} if kind in ("dbt", "cube", "powerbi") and schema_name else {}
     try:
         result = import_model(kind, source, **options)
         graph = compile_project(result.project, strict=False)
