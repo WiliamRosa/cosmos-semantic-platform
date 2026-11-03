@@ -68,7 +68,8 @@ CASES = [
     ids=["cube", "dbt-legacy", "dbt-latest"],
 )
 @pytest.mark.parametrize(
-    "source", ["duckdb_connector", "postgres_connector", "sqlserver_connector"]
+    "source",
+    ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"],
 )
 def test_imported_model_matches_native(kind, path, options, source, graph, request):
     connector = request.getfixturevalue(source)

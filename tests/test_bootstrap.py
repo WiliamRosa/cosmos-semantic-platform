@@ -8,7 +8,7 @@ from cosmos_semantic.bootstrap import _sensitivity, bootstrap
 from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
 
-SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector"]
+SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"]
 SUL = Principal(user={"region": "Midwest"})
 
 
@@ -117,3 +117,29 @@ def test_reports_review_points_and_timing(connector):
 )
 def test_sensitivity_heuristics(column, table, expected):
     assert _sensitivity(column, table) == expected
+
+
+@pytest.mark.parametrize(
+    "data_type,kind,integer",
+    [
+        ("BIGINT", "number", True),
+        ("LONG", "number", True),  # Databricks
+        ("SHORT", "number", True),
+        ("int4", "number", True),
+        ("DECIMAL(10,2)", "number", False),
+        ("double precision", "number", False),
+        ("TIMESTAMP_NTZ", "time", False),  # Databricks
+        ("timestamp without time zone", "time", False),
+        ("datetime2", "time", False),  # SQL Server
+        ("BOOLEAN", "boolean", False),
+        ("bit", "boolean", False),
+        ("STRING", "categorical", False),
+        ("longtext", "categorical", False),  # not a number, despite "long"
+        ("interval", "categorical", False),  # not an integer, despite "int"
+    ],
+)
+def test_column_types_from_every_catalog(data_type, kind, integer):
+    from cosmos_semantic.bootstrap import Column, _is_integer
+
+    assert Column("c", data_type).kind == kind
+    assert _is_integer(data_type) is integer

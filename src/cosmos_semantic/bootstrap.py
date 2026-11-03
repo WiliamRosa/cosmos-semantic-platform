@@ -45,9 +45,47 @@ PERSON_TABLE = re.compile(
 PERSON_NAME = re.compile(r"(^|_)(name|nome|first_name|last_name|sobrenome)($|_)")
 AVERAGE_LIKE = re.compile(r"(price|preco|rate|taxa|pct|percent|ratio|score|nota)")
 LOW_CARDINALITY = 12
-NUMBER_TYPES = ("int", "numeric", "decimal", "double", "float", "real", "money", "number")
-TIME_TYPES = ("date", "time")
-BOOL_TYPES = ("bool", "bit")
+# Base type names as information_schema reports them on DuckDB, Postgres, SQL Server and
+# Databricks (which says LONG, SHORT, BYTE and TIMESTAMP_NTZ).
+INTEGER_TYPES = {
+    "int",
+    "integer",
+    "bigint",
+    "smallint",
+    "tinyint",
+    "hugeint",
+    "long",
+    "short",
+    "byte",
+}
+NUMBER_TYPES = INTEGER_TYPES | {
+    "numeric",
+    "decimal",
+    "double",
+    "float",
+    "real",
+    "money",
+    "smallmoney",
+    "number",
+}
+TIME_TYPES = {
+    "date",
+    "time",
+    "timestamp",
+    "timestamptz",
+    "datetime",
+    "datetime2",
+    "smalldatetime",
+    "datetimeoffset",
+}
+BOOL_TYPES = {"bool", "boolean", "bit"}
+
+
+def _base_type(data_type: str) -> str:
+    """``BIGINT`` -> ``bigint``, ``DOUBLE PRECISION`` -> ``double``, ``TIMESTAMP_NTZ`` ->
+    ``timestamp``, ``DECIMAL(10,2)`` -> ``decimal``, ``int4`` -> ``int``."""
+    match = re.match(r"[a-z]+", data_type.strip().lower())
+    return match.group() if match else ""
 
 
 @dataclass
@@ -57,12 +95,12 @@ class Column:
 
     @property
     def kind(self) -> str:
-        t = self.data_type.lower()
-        if any(b in t for b in BOOL_TYPES):
+        base = _base_type(self.data_type)
+        if base in BOOL_TYPES:
             return "boolean"
-        if any(n in t for n in NUMBER_TYPES):
+        if base in NUMBER_TYPES:
             return "number"
-        if any(d in t for d in TIME_TYPES):
+        if base in TIME_TYPES:
             return "time"
         return "categorical"
 
@@ -90,8 +128,7 @@ def _ident(name: str) -> str:
 
 
 def _is_integer(data_type: str) -> bool:
-    t = data_type.lower()
-    return "int" in t and "interval" not in t
+    return _base_type(data_type) in INTEGER_TYPES
 
 
 class Bootstrapper:

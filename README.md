@@ -4,7 +4,7 @@
 
 A semantic layer for AI agents and applications, with **its own engine**: its own versioned YAML format with the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and a JSON Schema, SQL generation for each data source, and native interoperability with [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (formerly Open Semantic Interchange, OSI). [Cube](https://github.com/cube-js/cube) and dbt are **import sources and export targets**, not dependencies.
 
-**Status:** phases 0 and 1 are implemented; phase 2 (verifiable numbers) is in progress, with the evidence envelope, replay, reconciliation, impact analysis and model bootstrap done. The engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity and dbt, Ossie and Cube import are ready. Reference queries and a randomized cross-database test pass on DuckDB, Postgres and SQL Server; Databricks validation depends on a configured SQL warehouse. See the [roadmap](docs/roadmap.md).
+**Status:** phases 0 to 3 are implemented: the engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity, verifiable numbers (evidence, replay, reconciliation, impact, bootstrap) and business context (rule versions, usage and cost, knowledge graph, Power BI import, AI-assisted discovery, the retail pack, SKOS export). The whole test suite passes on DuckDB, Postgres, SQL Server and Databricks. See the [roadmap](docs/roadmap.md).
 
 ## In one sentence
 
@@ -107,7 +107,7 @@ Local Postgres: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml 
 
 Local SQL Server: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile sqlserver up -d` and `COSMOS_MSSQL_URI='mssql+pymssql://sa:Cosmos!Passw0rd@localhost:14330/master'`. Every data source accepts a `schema_map` in `connections.yml` (for example `public: dbo`) to use the same model with different schemas.
 
-Databricks: set `DATABRICKS_HTTP_PATH` (SQL warehouse) and `DATABRICKS_TOKEN` with `DATABRICKS_SERVER_HOSTNAME`, or `DATABRICKS_CONFIG_PROFILE` with a Databricks CLI profile.
+Databricks: set `DATABRICKS_HTTP_PATH` (SQL warehouse) and `DATABRICKS_TOKEN` with `DATABRICKS_SERVER_HOSTNAME`, or `DATABRICKS_CONFIG_PROFILE` with a Databricks CLI profile (`databricks auth login --profile <name>`). The tests load the example data into the catalog in `DATABRICKS_CATALOG` (default `cosmos_demo`, which must exist). On Git Bash for Windows, also set `MSYS_NO_PATHCONV=1`, or the shell rewrites `/sql/1.0/...` into a Windows path and the warehouse answers 404.
 
 Editors validate and autocomplete model files through the JSON Schema in [schema/](schema/), referenced on the first line of each file (`# yaml-language-server: $schema=...`). After changing `spec.py`, regenerate it with `uv run cosmos schema -o schema/cosmos-semantic.v1.schema.json`.
 

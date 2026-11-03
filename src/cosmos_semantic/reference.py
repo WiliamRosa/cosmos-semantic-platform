@@ -37,7 +37,16 @@ class ReferenceCase(BaseModel):
     expect_maps_to: str | None = None
 
     def sql_for(self, dialect: str) -> str | None:
-        return self.sql_by_dialect.get(dialect, self.sql)
+        """The reference SQL for a dialect. The shared ``sql`` is written in PostgreSQL;
+        Databricks (Spark SQL) rejects some of its syntax, such as ``DOUBLE PRECISION``, so it
+        gets a SQLGlot translation unless the case spells a Databricks version."""
+        if dialect in self.sql_by_dialect:
+            return self.sql_by_dialect[dialect]
+        if self.sql is not None and dialect == "databricks":
+            import sqlglot
+
+            return sqlglot.transpile(self.sql, read="postgres", write="databricks")[0]
+        return self.sql
 
 
 @dataclass
