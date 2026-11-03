@@ -77,6 +77,10 @@ cases:
         SELECT p.category, CAST(SUM(i.quantity) AS INTEGER) / CAST(COUNT(*) AS INTEGER)
         FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
         GROUP BY p.category
+      databricks: |
+        SELECT p.category, SUM(i.quantity) DIV COUNT(*)
+        FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+        GROUP BY p.category
     expect: { status: divergent, causes: [truncation] }
 
   - id: Z06

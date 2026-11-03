@@ -16,7 +16,7 @@ from cosmos_semantic.planner import Planner, Principal, QueryRequest
 from cosmos_semantic.service import SemanticService
 from cosmos_semantic.spec import BusinessRule, Project
 
-SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector"]
+SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"]
 MIDWEST = Principal(user={"region": "Midwest"}, channel="api", subject="ana@example.com")
 CHANGE = dt.date(2026, 7, 1)  # active_customer went from 60 to 90 days on this date
 

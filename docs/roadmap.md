@@ -1,6 +1,6 @@
 # Roadmap
 
-**Status on 2026-10-23:** phases 0 to 3 are implemented; phase 4 (connected BI and managed product) is paused. The 18 basic and 24 advanced reference queries return the same result as hand-written SQL on DuckDB, Postgres and SQL Server; 80 random requests return identical numbers across the three databases; and the 2 synonym-only questions resolve through the glossary. Databricks validation (gates 1 and 2) is deferred by decision ([ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md)); development continues on DuckDB, Postgres and SQL Server, and the gates stay formally open. Cube import moved into phase 1, with an equivalence test: the imported model returns the same numbers as the native one.
+**Status on 2026-11-02:** phases 0 to 3 are implemented; phase 4 (connected BI and managed product) is paused. The 18 basic and 24 advanced reference queries return the same result as hand-written SQL on DuckDB, Postgres, SQL Server and Databricks; 80 random requests return identical numbers across the four databases; and the 2 synonym-only questions resolve through the glossary. Databricks validation (gates 1 and 2) passed on 2026-11-02 on a serverless SQL warehouse: the whole suite, 439 tests, passes with all four databases, including evidence, reconciliation, bootstrap, Power BI import, the retail pack and rule versions. Cube import moved into phase 1, with an equivalence test: the imported model returns the same numbers as the native one.
 
 Durations are estimates for one person and must be recalibrated at the end of each phase. Project rule: one differentiator per phase, beyond the core.
 
@@ -13,7 +13,7 @@ Durations are estimates for one person and must be recalibrated at the end of ea
 
 **Exit criterion:** the prototype reproduces the single-model reference queries on Postgres and Databricks.
 
-## Phase 1: MVP (14–16 weeks) — implemented; Databricks validation pending
+## Phase 1: MVP (14–16 weeks) — done
 
 - Full planner: multi-hop inferred joins, the 4 metric types, per-grain aggregation to avoid row multiplication.
 - Data sources: Postgres, Databricks and SQL Server.
@@ -89,7 +89,7 @@ Not planned: governance of agent actions (it changes the product from reading to
 - [x] Connectors, data source order, identity and authoring format ([ADR 0007](decisions/0007-connectors-sources-identity-and-import.md)).
 - [x] Phase 2 differentiator: verifiable numbers ([ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md)).
 - [x] Phase 3 differentiator: business context; connected BI and managed product paused ([ADR 0009](decisions/0009-business-context-as-phase-3-differentiator.md)).
-- [ ] Databricks validation (gates 1 and 2): deferred, formally open.
+- [x] Databricks validation (gates 1 and 2): passed on 2026-11-02 (serverless SQL warehouse, Unity Catalog).
 - [ ] Free hosted edition limits and commercial pricing (to revisit later).
 - [ ] Result cache technology (phase 4).
 - [ ] Build the SQL endpoint, or keep export to Cube as the official BI path.

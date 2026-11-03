@@ -13,7 +13,7 @@ from cosmos_semantic.reconcile import check_zoo_case, load_zoo, reconcile_models
 from .conftest import ROOT
 
 ZOO = load_zoo(ROOT / "examples" / "ecommerce" / "divergence_zoo.yml")
-SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector"]
+SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"]
 
 
 @pytest.fixture(params=SOURCES)
