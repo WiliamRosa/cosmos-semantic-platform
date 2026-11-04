@@ -14,7 +14,13 @@ from cosmos_semantic.planner import Principal, QueryRequest
 from cosmos_semantic.service import SemanticService
 from cosmos_semantic.usage import usage_report
 
-SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"]
+SOURCES = [
+    "duckdb_connector",
+    "postgres_connector",
+    "sqlserver_connector",
+    "databricks_connector",
+    "snowflake_connector",
+]
 ANA = Principal(user={"region": "Midwest"}, channel="api", subject="ana@example.com")
 BOT = Principal(user={"region": "Midwest"}, channel="mcp", subject="sales-agent")
 RATES = CostRates(per_query=0.01, per_second=0.5, per_1k_rows=0.2, currency="USD")

@@ -23,7 +23,13 @@ from cosmos_semantic.errors import CosmosError
 from cosmos_semantic.interchange import dump_project
 from cosmos_semantic.spec import Project
 
-SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"]
+SOURCES = [
+    "duckdb_connector",
+    "postgres_connector",
+    "sqlserver_connector",
+    "databricks_connector",
+    "snowflake_connector",
+]
 
 
 def metric(name, type_, **fields):

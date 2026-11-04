@@ -29,7 +29,13 @@ FILTERS = [
     "{payments.installments} >= 3",
     "{customers.segment} IS NOT NULL",
 ]
-SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"]
+SOURCES = [
+    "duckdb_connector",
+    "postgres_connector",
+    "sqlserver_connector",
+    "databricks_connector",
+    "snowflake_connector",
+]
 
 
 @pytest.fixture(scope="module")

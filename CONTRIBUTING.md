@@ -35,6 +35,8 @@ Without the two variables, the database-specific tests are skipped and only Duck
 
 Databricks is optional and needs a SQL warehouse: set `DATABRICKS_HTTP_PATH`, plus `DATABRICKS_CONFIG_PROFILE` (after `databricks auth login --profile <name>`) or `DATABRICKS_TOKEN` with `DATABRICKS_SERVER_HOSTNAME`. The tests load the example data into the catalog in `DATABRICKS_CATALOG` (default `cosmos_demo`, which must exist). On Git Bash for Windows, also set `MSYS_NO_PATHCONV=1`.
 
+Snowflake is optional too: run [deploy/snowflake-setup.sql](deploy/snowflake-setup.sql) once with your public key, then set `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PRIVATE_KEY_FILE`, `SNOWFLAKE_ROLE` and `SNOWFLAKE_WAREHOUSE` (or `SNOWFLAKE_CONNECTION_NAME`). The tests load the example data into `SNOWFLAKE_DATABASE` (default `COSMOS_DEMO`).
+
 ## What every change needs
 
 - **Same number everywhere.** Any change to the planner, connectors or SQL generation must keep the reference queries (`reference/`), the divergence zoo and the randomized cross-database test passing on DuckDB, Postgres and SQL Server. A new feature that computes numbers needs a reference case with hand-written SQL.

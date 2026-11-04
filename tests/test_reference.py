@@ -43,6 +43,12 @@ def test_reference_databricks(case, graph, databricks_connector):
     _check(case, graph, databricks_connector)
 
 
+@pytest.mark.snowflake
+@pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
+def test_reference_snowflake(case, graph, snowflake_connector):
+    _check(case, graph, snowflake_connector)
+
+
 def test_there_are_twenty_cases():
     assert len(ALL) == 20
     assert len({c.id for c in ALL}) == 20

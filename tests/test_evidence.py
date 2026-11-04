@@ -13,7 +13,13 @@ from cosmos_semantic.expressions import remap_sql
 from cosmos_semantic.planner import Principal, QueryRequest
 from cosmos_semantic.service import SemanticService
 
-SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"]
+SOURCES = [
+    "duckdb_connector",
+    "postgres_connector",
+    "sqlserver_connector",
+    "databricks_connector",
+    "snowflake_connector",
+]
 SUDESTE = Principal(user={"region": "Northeast"}, channel="api", subject="ana@example.com")
 REQUEST = QueryRequest(
     metrics=["average_order_value", "customer_count"],

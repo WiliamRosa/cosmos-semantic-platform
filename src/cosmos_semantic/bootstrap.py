@@ -127,6 +127,12 @@ def _ident(name: str) -> str:
     return out if re.match(r"^[a-z_]", out) else f"t_{out}"
 
 
+def _folded(value: Any) -> Any:
+    """An all-upper-case catalog name is an unquoted name folded by the database (Snowflake);
+    the model writes it in lower case, as every other database reports it."""
+    return value.lower() if isinstance(value, str) and value.isupper() else value
+
+
 def _is_integer(data_type: str) -> bool:
     return _base_type(data_type) in INTEGER_TYPES
 
@@ -155,13 +161,24 @@ class Bootstrapper:
 
     def read_catalog(self, only: list[str] | None = None) -> list[Table]:
         schema = self._literal(self.physical_schema)
+        data_type = "data_type"
+        if self.connector.dialect == "snowflake":
+            # Snowflake folds unquoted names to upper case, so the catalog says PUBLIC.ORDERS
+            # for what the model writes as public.orders; and every integer is NUMBER(p, 0).
+            schema = f"UPPER({schema})"
+            data_type = (
+                "CASE WHEN data_type = 'NUMBER' AND numeric_scale = 0 THEN 'BIGINT' "
+                "ELSE data_type END"
+            )
         rows = self._query(
-            "SELECT table_name, column_name, data_type FROM information_schema.columns "
+            f"SELECT table_name, column_name, {data_type} AS data_type "
+            "FROM information_schema.columns "
             f"WHERE table_schema = {schema} ORDER BY table_name, ordinal_position"
         )
+        fold = self.connector.dialect == "snowflake"
         tables: dict[str, Table] = {}
         for row in rows:
-            values = list(row.values())
+            values = [_folded(v) if fold else v for v in row.values()]
             name = str(values[0])
             if only and name not in only:
                 continue
@@ -182,7 +199,7 @@ class Bootstrapper:
             keys = []
         per_table: dict[str, list[str]] = {}
         for row in keys:
-            values = list(row.values())
+            values = [_folded(v) if fold else v for v in row.values()]
             per_table.setdefault(str(values[0]), []).append(str(values[1]))
         for name, cols in per_table.items():
             if name in tables and len(cols) == 1:

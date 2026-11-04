@@ -9,6 +9,10 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Snowflake as a data source (`snowflake` extra, [ADR 0010](docs/decisions/0010-snowflake-as-a-data-source.md)):
+  key-pair, `connections.toml`, browser or password login, Arrow results, Monday weeks and ISO
+  week numbers. The whole suite passes on a Snowflake warehouse; `cosmos bootstrap` reads its
+  catalog.
 - Issue and pull request templates, a DCO check on pull requests, and the first issues marked
   `good first issue`.
 - `cosmos suggest` keeps each rejected suggestion, as the model sent it, in the report.

@@ -37,6 +37,15 @@ data_sources:
   #     http_path: ${DATABRICKS_HTTP_PATH}
   #     profile: ${DATABRICKS_CONFIG_PROFILE:-DEFAULT}  # `databricks auth login --profile <name>`
   #     catalog: ${DATABRICKS_CATALOG:-cosmos_demo}
+  #
+  # snowflake:
+  #   type: snowflake
+  #   options:
+  #     account: ${SNOWFLAKE_ACCOUNT}               # <org>-<account>
+  #     user: ${SNOWFLAKE_USER}
+  #     private_key_file: ${SNOWFLAKE_PRIVATE_KEY_FILE}  # key-pair login; never commit the key
+  #     warehouse: ${SNOWFLAKE_WAREHOUSE}
+  #     database: ${SNOWFLAKE_DATABASE:-COSMOS_DEMO}
 """
 
 

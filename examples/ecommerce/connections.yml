@@ -27,3 +27,14 @@ data_sources:
     cost:                # illustrative rates for `cosmos usage`; set your own
       per_second: 0.002  # warehouse time
       currency: USD
+
+  snowflake:
+    type: snowflake
+    options:
+      account: ${SNOWFLAKE_ACCOUNT:-}               # <org>-<account>
+      user: ${SNOWFLAKE_USER:-}
+      private_key_file: ${SNOWFLAKE_PRIVATE_KEY_FILE:-}  # key-pair login; never commit the key
+      connection_name: ${SNOWFLAKE_CONNECTION_NAME:-}    # alternative: ~/.snowflake/connections.toml
+      role: ${SNOWFLAKE_ROLE:-}
+      warehouse: ${SNOWFLAKE_WAREHOUSE:-}
+      database: ${SNOWFLAKE_DATABASE:-COSMOS_DEMO}

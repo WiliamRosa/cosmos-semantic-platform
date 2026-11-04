@@ -26,6 +26,7 @@ DIALECTS = {
     "postgres": "postgres",
     "duckdb": "duckdb",
     "databricks": "databricks",
+    "snowflake": "snowflake",
     "sqlserver": "tsql",
 }
 
@@ -44,10 +45,13 @@ class CostRates(BaseModel):
 class DataSourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["postgres", "duckdb", "databricks", "sqlserver"]
+    type: Literal["postgres", "duckdb", "databricks", "snowflake", "sqlserver"]
     driver: Literal["adbc", "sqlalchemy", "native"] | None = Field(
         None,
-        description="Default: adbc for postgres, native for duckdb and databricks, sqlalchemy for sqlserver.",
+        description=(
+            "Default: adbc for postgres, native for duckdb, databricks and snowflake, "
+            "sqlalchemy for sqlserver."
+        ),
     )
     uri: str | None = None
     path: str | None = Field(None, description="DuckDB database file.")
@@ -253,6 +257,78 @@ class DatabricksConnector(Connector):
         self._con.close()
 
 
+class SnowflakeConnector(Connector):
+    """Snowflake warehouse; the official connector fetches results as Arrow.
+
+    Authentication is whatever ``snowflake.connector.connect`` accepts in ``options``: a key pair
+    (``private_key_file``), a named connection from ``~/.snowflake/connections.toml``
+    (``connection_name``), an ``authenticator`` such as ``externalbrowser``, or a password.
+    """
+
+    # Session settings that make results match the other databases: weeks start on Monday and
+    # week numbers are ISO; a query never runs longer than the source's timeout.
+    _SESSION = {"WEEK_START": 1, "WEEK_OF_YEAR_POLICY": 1}
+
+    def __init__(self, config: DataSourceConfig) -> None:
+        super().__init__(config)
+        import snowflake.connector
+
+        opts = {k: v for k, v in config.options.items() if v not in (None, "")}
+        if not opts.get("connection_name"):
+            missing = [k for k in ("account", "user") if not opts.get(k)]
+            if missing:
+                raise ModelError(
+                    f"a snowflake source needs options: {', '.join(missing)} "
+                    "(or options.connection_name)"
+                )
+        if opts.get("private_key_file"):
+            opts["private_key_file"] = os.path.expanduser(opts["private_key_file"])
+        session = {
+            **self._SESSION,
+            "STATEMENT_TIMEOUT_IN_SECONDS": int(config.timeout_seconds),
+            **opts.pop("session_parameters", {}),
+        }
+        self._con = snowflake.connector.connect(session_parameters=session, **opts)
+
+    def _run(self, sql: str, fetch_limit: int) -> pa.Table:
+        with self._con.cursor() as cur:
+            cur.execute(sql)
+            batches, count = [], 0
+            for batch in cur.fetch_arrow_batches():
+                batches.append(batch)
+                count += batch.num_rows
+                if count >= fetch_limit:
+                    break
+            if batches:
+                table = pa.concat_tables(batches).slice(0, fetch_limit)
+            else:
+                table = _snowflake_empty(cur.description)
+        return _snowflake_names(table)
+
+    def run_script(self, sql: str) -> None:
+        with self._con.cursor() as cur:
+            for statement in sqlglot.transpile(sql, read="snowflake", write="snowflake"):
+                cur.execute(statement)
+
+    def close(self) -> None:
+        self._con.close()
+
+
+def _snowflake_names(table: pa.Table) -> pa.Table:
+    """Snowflake folds unquoted identifiers to upper case, so the aliases the planner writes
+    (``orders__status``) come back as ``ORDERS__STATUS``. Every alias the engine generates is
+    lower case, so an all-upper-case name is folded back; mixed-case names stay as they are."""
+    names = [n.lower() if n.isupper() else n for n in table.column_names]
+    return table.rename_columns(names)
+
+
+def _snowflake_empty(description) -> pa.Table:
+    """An empty result has no Arrow batch to take the schema from; build one with null-typed
+    columns that keep the names."""
+    names = [d.name for d in description or []]
+    return pa.table({n: pa.array([], type=pa.null()) for n in _unique_names(names)})
+
+
 class SQLAlchemyConnector(Connector):
     def __init__(self, config: DataSourceConfig) -> None:
         super().__init__(config)
@@ -359,6 +435,7 @@ def connect(config: DataSourceConfig) -> Connector:
             "postgres": "adbc",
             "duckdb": "native",
             "databricks": "native",
+            "snowflake": "native",
             "sqlserver": "sqlalchemy",
         }[config.type]
     )
@@ -368,6 +445,8 @@ def connect(config: DataSourceConfig) -> Connector:
         return ADBCPostgresConnector(config)
     if config.type == "databricks":
         return DatabricksConnector(config)
+    if config.type == "snowflake":
+        return SnowflakeConnector(config)
     if driver == "sqlalchemy":
         return SQLAlchemyConnector(config)
     raise ModelError(f"unsupported combination: {config.type} with {driver}")
