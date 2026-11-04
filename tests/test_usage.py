@@ -20,6 +20,9 @@ SOURCES = [
     "sqlserver_connector",
     "databricks_connector",
     "snowflake_connector",
+    "mysql_connector",
+    "mariadb_connector",
+    "oracle_connector",
 ]
 ANA = Principal(user={"region": "Midwest"}, channel="api", subject="ana@example.com")
 BOT = Principal(user={"region": "Midwest"}, channel="mcp", subject="sales-agent")

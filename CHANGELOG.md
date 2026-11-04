@@ -13,6 +13,13 @@ format or the API; such changes are listed under **Changed**.
   key-pair, `connections.toml`, browser or password login, Arrow results, Monday weeks and ISO
   week numbers. The whole suite passes on a Snowflake warehouse; `cosmos bootstrap` reads its
   catalog.
+- MySQL, MariaDB and Oracle as data sources (`mysql` and `oracle` extras,
+  [ADR 0011](docs/decisions/0011-mysql-mariadb-and-oracle-as-data-sources.md)): MySQL and
+  MariaDB through SQLAlchemy and PyMySQL, Oracle through python-oracledb in thin mode (no
+  Instant Client). Time grains, null-safe joins and date arithmetic use each database's own
+  functions, with weeks starting on Monday. The whole suite passes on MySQL 8.4, MariaDB 11.4
+  and Oracle Database 23ai Free, which CI now runs on every pull request; `cosmos bootstrap`
+  reads Oracle's catalog.
 - Issue and pull request templates, a DCO check on pull requests, and the first issues marked
   `good first issue`.
 - `cosmos suggest` keeps each rejected suggestion, as the model sent it, in the report.

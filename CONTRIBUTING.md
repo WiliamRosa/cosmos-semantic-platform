@@ -24,14 +24,20 @@ Requires Python 3.11+, [uv](https://docs.astral.sh/uv/) and Docker (for Postgres
 
 ```bash
 uv sync --all-extras
-docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile sqlserver up -d
+docker compose -p cosmos-semantic -f deploy/docker-compose.yml \
+  --profile sqlserver --profile mysql --profile mariadb --profile oracle up -d
+# once the Oracle container is healthy:
+docker exec -i cosmos-semantic-oracle-1 sqlplus -s system/cosmos@FREEPDB1 < deploy/oracle-setup.sql
 
 export COSMOS_PG_URI=postgresql://cosmos:cosmos@localhost:15432/cosmos
 export COSMOS_MSSQL_URI='mssql+pymssql://sa:Cosmos!Passw0rd@localhost:14330/master'
+export COSMOS_MYSQL_URI=mysql+pymysql://root:cosmos@127.0.0.1:13306/
+export COSMOS_MARIADB_URI=mysql+pymysql://root:cosmos@127.0.0.1:13307/
+export COSMOS_ORACLE_DSN=127.0.0.1:11521/FREEPDB1 COSMOS_ORACLE_PASSWORD=cosmos
 uv run pytest
 ```
 
-Without the two variables, the database-specific tests are skipped and only DuckDB runs; CI runs Postgres and SQL Server on every pull request. The Docker credentials are for local tests only.
+Without these variables, the database-specific tests are skipped and only DuckDB runs; CI runs Postgres, SQL Server, MySQL, MariaDB and Oracle on every pull request. The Docker credentials are for local tests only.
 
 Databricks is optional and needs a SQL warehouse: set `DATABRICKS_HTTP_PATH`, plus `DATABRICKS_CONFIG_PROFILE` (after `databricks auth login --profile <name>`) or `DATABRICKS_TOKEN` with `DATABRICKS_SERVER_HOSTNAME`. The tests load the example data into the catalog in `DATABRICKS_CATALOG` (default `cosmos_demo`, which must exist). On Git Bash for Windows, also set `MSYS_NO_PATHCONV=1`.
 
@@ -39,7 +45,7 @@ Snowflake is optional too: run [deploy/snowflake-setup.sql](deploy/snowflake-set
 
 ## What every change needs
 
-- **Same number everywhere.** Any change to the planner, connectors or SQL generation must keep the reference queries (`reference/`), the divergence zoo and the randomized cross-database test passing on DuckDB, Postgres and SQL Server. A new feature that computes numbers needs a reference case with hand-written SQL.
+- **Same number everywhere.** Any change to the planner, connectors or SQL generation must keep the reference queries (`reference/`), the divergence zoo and the randomized cross-database test passing on DuckDB, Postgres, SQL Server, MySQL, MariaDB and Oracle. A new feature that computes numbers needs a reference case with hand-written SQL.
 - **Formatting and lint:** `uv run ruff format src tests` and `uv run ruff check src tests`.
 - **Schema:** after changing `src/cosmos_semantic/spec.py`, regenerate `schema/cosmos-semantic.v1.schema.json` with `uv run cosmos schema -o schema/cosmos-semantic.v1.schema.json`.
 - **English** in code, comments, messages, tests and docs. Portuguese stays only where it is data (sample values, `pt` glossary labels).

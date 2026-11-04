@@ -24,6 +24,9 @@ SOURCES = [
     "sqlserver_connector",
     "databricks_connector",
     "snowflake_connector",
+    "mysql_connector",
+    "mariadb_connector",
+    "oracle_connector",
 ]
 EXAMPLE = Path(__file__).parents[1] / "examples" / "ecommerce" / "semantic"
 MIDWEST = Principal(user={"region": "Midwest"})

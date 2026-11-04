@@ -143,7 +143,7 @@ def test_one_to_many_dimension_goes_through_a_distinct_bridge(graph):
     compiled = Planner(graph).plan(
         QueryRequest(metrics=["revenue"], dimensions=["products.category"])
     )
-    assert "AS bridge" in compiled.sql and "__bridge_key" in compiled.sql
+    assert "AS bridge" in compiled.sql and "cosmos_bridge_key" in compiled.sql
     [item] = compiled.trace.one_to_many
     assert item == {
         "base": "orders",
@@ -173,7 +173,9 @@ def test_measures_from_different_models_never_join_before_aggregating(graph):
     assert "IS NOT DISTINCT FROM" in sql
 
 
-@pytest.mark.parametrize("dialect", ["postgres", "duckdb", "databricks", "snowflake", "tsql"])
+@pytest.mark.parametrize(
+    "dialect", ["postgres", "duckdb", "databricks", "snowflake", "tsql", "mysql", "oracle"]
+)
 def test_sql_is_generated_for_every_dialect(graph, dialect):
     compiled = Planner(graph, dialect).plan(
         QueryRequest(

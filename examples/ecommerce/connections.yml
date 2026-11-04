@@ -38,3 +38,19 @@ data_sources:
       role: ${SNOWFLAKE_ROLE:-}
       warehouse: ${SNOWFLAKE_WAREHOUSE:-}
       database: ${SNOWFLAKE_DATABASE:-COSMOS_DEMO}
+
+  mysql:
+    type: mysql
+    uri: ${COSMOS_MYSQL_URI:-mysql+pymysql://root:cosmos@127.0.0.1:13306/}
+
+  mariadb:
+    type: mariadb
+    uri: ${COSMOS_MARIADB_URI:-mysql+pymysql://root:cosmos@127.0.0.1:13307/}
+
+  oracle:
+    type: oracle
+    options:
+      dsn: ${COSMOS_ORACLE_DSN:-127.0.0.1:11521/FREEPDB1}
+      user: ${COSMOS_ORACLE_USER:-cosmos}
+      password: ${COSMOS_ORACLE_PASSWORD:-cosmos}
+    schema_map: { public: cosmos }   # in Oracle a schema is a user
