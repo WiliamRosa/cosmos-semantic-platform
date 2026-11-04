@@ -83,3 +83,32 @@ def databricks_connector(tables):
     demo_data.load(connector, tables)
     yield connector
     connector.close()
+
+
+@pytest.fixture(scope="session")
+def snowflake_connector(tables):
+    env = os.environ.get
+    if not env("SNOWFLAKE_CONNECTION_NAME") and not (
+        env("SNOWFLAKE_ACCOUNT") and env("SNOWFLAKE_USER")
+    ):
+        pytest.skip(
+            "set SNOWFLAKE_ACCOUNT and SNOWFLAKE_USER (with SNOWFLAKE_PRIVATE_KEY_FILE), "
+            "or SNOWFLAKE_CONNECTION_NAME"
+        )
+    connector = connect(
+        DataSourceConfig(
+            type="snowflake",
+            options={
+                "connection_name": env("SNOWFLAKE_CONNECTION_NAME"),
+                "account": env("SNOWFLAKE_ACCOUNT"),
+                "user": env("SNOWFLAKE_USER"),
+                "private_key_file": env("SNOWFLAKE_PRIVATE_KEY_FILE"),
+                "role": env("SNOWFLAKE_ROLE"),
+                "warehouse": env("SNOWFLAKE_WAREHOUSE"),
+                "database": env("SNOWFLAKE_DATABASE", "COSMOS_DEMO"),
+            },
+        )
+    )
+    demo_data.load(connector, tables)
+    yield connector
+    connector.close()

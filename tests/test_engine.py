@@ -173,7 +173,7 @@ def test_measures_from_different_models_never_join_before_aggregating(graph):
     assert "IS NOT DISTINCT FROM" in sql
 
 
-@pytest.mark.parametrize("dialect", ["postgres", "duckdb", "databricks", "tsql"])
+@pytest.mark.parametrize("dialect", ["postgres", "duckdb", "databricks", "snowflake", "tsql"])
 def test_sql_is_generated_for_every_dialect(graph, dialect):
     compiled = Planner(graph, dialect).plan(
         QueryRequest(

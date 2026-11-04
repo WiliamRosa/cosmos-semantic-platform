@@ -8,7 +8,13 @@ from cosmos_semantic.bootstrap import _sensitivity, bootstrap
 from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
 
-SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"]
+SOURCES = [
+    "duckdb_connector",
+    "postgres_connector",
+    "sqlserver_connector",
+    "databricks_connector",
+    "snowflake_connector",
+]
 SUL = Principal(user={"region": "Midwest"})
 
 
