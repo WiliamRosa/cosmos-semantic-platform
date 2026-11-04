@@ -1,0 +1,28 @@
+name: Feature request
+description: Something Cosmos Semantic should do, or do differently.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and where Cosmos Semantic gets in the way today. A real case helps more than a feature name.
+      placeholder: "Our dbt project uses conversion metrics, and the import drops them with a warning, so ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: How you would like it to work. An example of the YAML, the command or the expected output is welcome.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Workarounds you use today, or other tools that solve it.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I would like to work on this myself.

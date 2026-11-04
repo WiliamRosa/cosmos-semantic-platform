@@ -5,6 +5,13 @@ All notable changes to this project are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0, a minor version may change the authoring
 format or the API; such changes are listed under **Changed**.
 
+## [Unreleased]
+
+### Added
+
+- Issue and pull request templates, a DCO check on pull requests, and the first issues marked
+  `good first issue`.
+
 ## [0.1.0] - 2026-11-04
 
 First public release. The whole test suite passes on DuckDB, Postgres, SQL Server and Databricks,
@@ -64,4 +71,5 @@ and on the lowest dependency versions this release allows.
   `GET /v1/glossary`.
 - `cosmos init` creates a starter project with the e-commerce example and a local DuckDB source.
 
+[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.1.0
