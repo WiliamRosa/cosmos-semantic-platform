@@ -79,6 +79,7 @@ uv run cosmos graph --focus process:order_to_cash -m examples/ecommerce/semantic
 uv run cosmos impact system:payment_gateway -m examples/ecommerce/semantic
 
 # AI-assisted discovery: concepts, rules, metrics and descriptions, validated by the engine, for review
+# (repeat --source to require that each suggestion runs on every database the model serves)
 uv run cosmos suggest --source local -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml -o suggestions.yml
 
 # Industry pack mapped onto your tables by name (draft + report for review)
