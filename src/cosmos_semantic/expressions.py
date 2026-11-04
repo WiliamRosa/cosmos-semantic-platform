@@ -115,13 +115,36 @@ def substitute(
             if name.startswith(_REF_PREFIX):
                 ref = template.refs[int(name[len(_REF_PREFIX) :])]
                 if resolve_condition and _in_condition(node):
-                    return resolve_condition(ref)
-                return resolve_ref(ref)
+                    return _grouped(resolve_condition(ref), node)
+                return _grouped(resolve_ref(ref), node)
             if name.startswith(_USER_PREFIX):
-                return users[int(name[len(_USER_PREFIX) :])].copy()
+                return _grouped(users[int(name[len(_USER_PREFIX) :])].copy(), node)
         return node
 
     return tree.transform(swap, copy=False)
+
+
+# Operators: their operands are the only place where precedence decides the result. (In SQLGlot
+# AND and OR are also functions, so the check is on these classes, not on ``exp.Func``.)
+_OPERATORS = (exp.Binary, exp.Unary, exp.Predicate)
+
+
+def _is_operator(node: exp.Expression) -> bool:
+    return isinstance(node, _OPERATORS) and not isinstance(node, exp.Paren)
+
+
+def _grouped(value: exp.Expression, placeholder: exp.Expression) -> exp.Expression:
+    """Parenthesizes a resolved operator expression that is an operand of another operator.
+
+    SQLGlot prints the tree as it is and does not add parentheses for precedence, so a dimension
+    ``discount > 0`` used in ``{orders.has_discount} = true`` would print as
+    ``discount > 0 = TRUE``, ``{a} * 2`` with ``a = x + y`` as ``x + y * 2``, and
+    ``NOT {a}`` with ``a = p OR q`` as ``NOT p OR q``.
+    """
+    parent = placeholder.parent
+    if parent is not None and _is_operator(parent) and _is_operator(value):
+        return exp.Paren(this=value)
+    return value
 
 
 def _in_condition(node: exp.Expression) -> bool:

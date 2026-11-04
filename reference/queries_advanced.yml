@@ -490,3 +490,15 @@ cases:
       ) b ON b.customer_id = c.customer_id
       WHERE c.region = 'Northeast'
       GROUP BY b.category
+
+  - id: A28
+    category: tipos
+    phase: 3
+    title: Boolean dimension compared with false in a filter (a comparison inside a comparison)
+    request:
+      metrics: [order_count, revenue]
+      dimensions: [orders.status]
+      filters: ["{orders.has_discount} = false"]
+    sql: |
+      SELECT status AS orders__status, COUNT(*) AS order_count, SUM(amount) AS revenue
+      FROM public.orders WHERE NOT (discount > 0) GROUP BY status

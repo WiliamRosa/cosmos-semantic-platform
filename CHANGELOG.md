@@ -11,6 +11,15 @@ format or the API; such changes are listed under **Changed**.
 
 - Issue and pull request templates, a DCO check on pull requests, and the first issues marked
   `good first issue`.
+- `cosmos suggest` keeps each rejected suggestion, as the model sent it, in the report.
+
+### Fixed
+
+- A reference to a member whose expression is an operation is now parenthesized when it is an
+  operand of another operator. `{orders.has_discount} = false` (with `has_discount` defined as
+  `discount > 0`) printed `discount > 0 = FALSE`, a syntax error on DuckDB and Postgres;
+  `NOT {x}` with `x = p OR q` printed `NOT p OR q`, a wrong result. Found by the first run of
+  `cosmos suggest` against the Claude API.
 
 ## [0.1.0] - 2026-11-04
 

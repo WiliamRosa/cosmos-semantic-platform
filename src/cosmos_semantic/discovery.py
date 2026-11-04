@@ -274,7 +274,7 @@ class DiscoveryReport:
     rules: list[dict[str, Any]] = field(default_factory=list)
     metrics: list[dict[str, Any]] = field(default_factory=list)
     descriptions: list[dict[str, str]] = field(default_factory=list)
-    rejected: list[dict[str, str]] = field(default_factory=list)
+    rejected: list[dict[str, Any]] = field(default_factory=list)
 
     def project(self) -> Project:
         """The accepted suggestions as a model file of their own, for review."""
@@ -368,14 +368,17 @@ def discover(
     known = set(graph.metrics) | set(graph.measure_owner) | set(graph.rules)
     concepts = {c.concept for c in graph.project.glossary}
 
-    def reject(kind: str, name: str, reason: str) -> None:
-        report.rejected.append({"kind": kind, "name": name, "reason": reason})
+    def reject(kind: str, name: str, reason: str, suggestion: dict[str, Any]) -> None:
+        # The suggestion as the model sent it, so a reviewer can fix and keep it by hand.
+        report.rejected.append(
+            {"kind": kind, "name": name, "reason": reason, "suggestion": suggestion}
+        )
 
     # Rules first, then metrics, then concepts: later suggestions may build on earlier ones.
     for s in raw.get("rules", []):
         name = s.get("name", "?")
         if name in known:
-            reject("rule", name, "a member with this name already exists")
+            reject("rule", name, "a member with this name already exists", s)
             continue
         try:
             item = {
@@ -395,7 +398,7 @@ def discover(
             BusinessRule.model_validate(item)
             validator.try_add("business_rules", item, run)
         except (ValidationError, CosmosError, ValueError, KeyError) as exc:
-            reject("rule", name, _reason(exc))
+            reject("rule", name, _reason(exc), s)
             continue
         report.rules.append(item)
         known.add(name)
@@ -403,13 +406,13 @@ def discover(
     for s in raw.get("metrics", []):
         name = s.get("name", "?")
         if name in known:
-            reject("metric", name, "a member with this name already exists")
+            reject("metric", name, "a member with this name already exists", s)
             continue
         item = {k: v for k, v in s.items() if v is not None and k != "rationale"}
         try:
             validator.try_add("metrics", _metric(item), ([name], []))
         except (ValidationError, CosmosError, ValueError, KeyError) as exc:
-            reject("metric", name, _reason(exc))
+            reject("metric", name, _reason(exc), s)
             continue
         report.metrics.append(_metric(item))
         known.add(name)
@@ -417,7 +420,7 @@ def discover(
     for s in raw.get("concepts", []):
         name = s.get("concept", "?")
         if name in concepts:
-            reject("concept", name, "the concept already exists; extend it by hand")
+            reject("concept", name, "the concept already exists; extend it by hand", s)
             continue
         try:
             item = {
@@ -430,7 +433,7 @@ def discover(
             Concept.model_validate(item)
             validator.try_add("glossary", item, None)
         except (ValidationError, CosmosError, ValueError, KeyError) as exc:
-            reject("concept", name, _reason(exc))
+            reject("concept", name, _reason(exc), s)
             continue
         report.concepts.append(item)
         concepts.add(name)
@@ -439,7 +442,7 @@ def discover(
         member, text = s.get("member", ""), s.get("description", "")
         problem = _description_problem(graph, member)
         if problem:
-            reject("description", member, problem)
+            reject("description", member, problem, s)
         elif text.strip():
             report.descriptions.append({"member": member, "description": text.strip()})
     return report
