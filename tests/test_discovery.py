@@ -144,6 +144,9 @@ def test_suggestions_are_validated_by_running_them(graph, connector):
     assert "already exists" in rejected[("metric", "revenue")]
     assert ("concept", "phantom") in rejected and ("concept", "customer") in rejected
     assert rejected[("description", "measure:revenue")] == "already described"
+    # Each rejection keeps the suggestion as sent, for a reviewer to fix by hand.
+    ghost = next(r for r in report.rejected if r["name"] == "ghost_metric")
+    assert ghost["suggestion"]["name"] == "ghost_metric"
 
 
 def test_accepted_file_merges_into_the_model(graph):
