@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/SECURITY.md
+    about: Report it privately, as SECURITY.md describes, not in a public issue.
+  - name: Quickstart
+    url: https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md
+    about: From pip install to a governed metric and an AI agent over MCP.

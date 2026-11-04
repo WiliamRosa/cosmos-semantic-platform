@@ -1,5 +1,11 @@
 # Cosmos Semantic
 
+[![PyPI](https://img.shields.io/pypi/v/cosmos-semantic)](https://pypi.org/project/cosmos-semantic/)
+[![Python](https://img.shields.io/pypi/pyversions/cosmos-semantic)](https://pypi.org/project/cosmos-semantic/)
+[![CI](https://github.com/WiliamRosa/cosmos-semantic-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/WiliamRosa/cosmos-semantic-platform/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/LICENSE)
+[![Good first issues](https://img.shields.io/github/issues/WiliamRosa/cosmos-semantic-platform/good%20first%20issue)](https://github.com/WiliamRosa/cosmos-semantic-platform/labels/good%20first%20issue)
+
 > Repository: `cosmos-semantic-platform`. License: open core, with the core under Apache 2.0 ([ADR 0005](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/decisions/0005-open-core.md)).
 
 A semantic layer for AI agents and applications, with **its own engine**: its own versioned YAML format with the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and a JSON Schema, SQL generation for each data source, and native interoperability with [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (formerly Open Semantic Interchange, OSI). [Cube](https://github.com/cube-js/cube) and dbt are **import sources and export targets**, not dependencies.
