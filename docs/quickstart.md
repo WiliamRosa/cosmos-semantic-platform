@@ -95,8 +95,9 @@ OIDC provider instead of development keys.
 
 ## Next
 
-- Point `connections.yml` at Postgres, SQL Server, Databricks or Snowflake (extras `postgres`,
-  `sqlserver`, `databricks`, `snowflake`) and run the same model there.
+- Point `connections.yml` at Postgres, SQL Server, MySQL, MariaDB, Oracle, Databricks or
+  Snowflake (extras `postgres`, `sqlserver`, `mysql`, `oracle`, `databricks`, `snowflake`) and
+  run the same model there.
 - Draft a model of your own database with `cosmos bootstrap`, or import one with
   `cosmos import dbt|cube|ossie|powerbi`.
 - Read the [semantic model reference](semantic-model.md) and the [architecture](architecture.md).

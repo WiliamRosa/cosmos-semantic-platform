@@ -14,6 +14,9 @@ SOURCES = [
     "sqlserver_connector",
     "databricks_connector",
     "snowflake_connector",
+    "mysql_connector",
+    "mariadb_connector",
+    "oracle_connector",
 ]
 SUL = Principal(user={"region": "Midwest"})
 

@@ -10,7 +10,7 @@
 
 A semantic layer for AI agents and applications, with **its own engine**: its own versioned YAML format with the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and a JSON Schema, SQL generation for each data source, and native interoperability with [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (formerly Open Semantic Interchange, OSI). [Cube](https://github.com/cube-js/cube) and dbt are **import sources and export targets**, not dependencies.
 
-**Status:** phases 0 to 3 are implemented: the engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity, verifiable numbers (evidence, replay, reconciliation, impact, bootstrap) and business context (rule versions, usage and cost, knowledge graph, Power BI import, AI-assisted discovery, the retail pack, SKOS export). The whole test suite passes on DuckDB, Postgres, SQL Server, Databricks and Snowflake. See the [roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md).
+**Status:** phases 0 to 3 are implemented: the engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity, verifiable numbers (evidence, replay, reconciliation, impact, bootstrap) and business context (rule versions, usage and cost, knowledge graph, Power BI import, AI-assisted discovery, the retail pack, SKOS export). The whole test suite passes on DuckDB, Postgres, SQL Server, MySQL, MariaDB, Oracle, Databricks and Snowflake. See the [roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md).
 
 ## In one sentence
 
@@ -29,7 +29,7 @@ cosmos explain rule:active_customer
 That is a governed metric with its evidence (formula, rules, policies, `as_of` and hashes) in about
 a minute, on a local DuckDB file. The [quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) continues with business
 rules, row filters, personal data and connecting an AI agent over MCP. Extras: `duckdb`,
-`postgres`, `sqlserver`, `databricks`, `snowflake`, `server` (REST and MCP), `ai` (`cosmos suggest`), `testdata`.
+`postgres`, `sqlserver`, `mysql` (MySQL and MariaDB), `oracle`, `databricks`, `snowflake`, `server` (REST and MCP), `ai` (`cosmos suggest`), `testdata`.
 
 ## Development
 
@@ -128,6 +128,8 @@ Local Postgres: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml 
 
 Local SQL Server: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile sqlserver up -d` and `COSMOS_MSSQL_URI='mssql+pymssql://sa:Cosmos!Passw0rd@localhost:14330/master'`. Every data source accepts a `schema_map` in `connections.yml` (for example `public: dbo`) to use the same model with different schemas.
 
+Local MySQL, MariaDB and Oracle Database Free: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile mysql --profile mariadb --profile oracle up -d`, then `COSMOS_MYSQL_URI=mysql+pymysql://root:cosmos@127.0.0.1:13306/`, `COSMOS_MARIADB_URI=mysql+pymysql://root:cosmos@127.0.0.1:13307/`, `COSMOS_ORACLE_DSN=127.0.0.1:11521/FREEPDB1` and `COSMOS_ORACLE_PASSWORD=cosmos`. Once the Oracle container is healthy, run [deploy/oracle-setup.sql](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/deploy/oracle-setup.sql) as `SYSTEM` (the command is in the file). In Oracle a schema is a user, so an Oracle source maps the model's `public` to its owner (`schema_map: { public: cosmos }`).
+
 Databricks: set `DATABRICKS_HTTP_PATH` (SQL warehouse) and `DATABRICKS_TOKEN` with `DATABRICKS_SERVER_HOSTNAME`, or `DATABRICKS_CONFIG_PROFILE` with a Databricks CLI profile (`databricks auth login --profile <name>`). The tests load the example data into the catalog in `DATABRICKS_CATALOG` (default `cosmos_demo`, which must exist). On Git Bash for Windows, also set `MSYS_NO_PATHCONV=1`, or the shell rewrites `/sql/1.0/...` into a Windows path and the warehouse answers 404.
 
 Snowflake: set `SNOWFLAKE_ACCOUNT` (`<org>-<account>`), `SNOWFLAKE_USER` and `SNOWFLAKE_PRIVATE_KEY_FILE` (key-pair login), or `SNOWFLAKE_CONNECTION_NAME` with a connection from `~/.snowflake/connections.toml`; plus `SNOWFLAKE_ROLE` and `SNOWFLAKE_WAREHOUSE`. The tests load the example data into `SNOWFLAKE_DATABASE` (default `COSMOS_DEMO`). [deploy/snowflake-setup.sql](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/deploy/snowflake-setup.sql) creates the warehouse, database, role and service user they need.
@@ -154,7 +156,7 @@ Editors validate and autocomplete model files through the JSON Schema in [schema
 | [Interoperability](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/interoperability.md) | Mapping to Apache Ossie, and dbt and Cube import |
 | [Roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md) | Phases, MVP scope and exit criteria |
 | [Changelog](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md) | What changed in each release |
-| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source |
+| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source, 0011 adds MySQL, MariaDB and Oracle |
 
 ## Repository layout
 

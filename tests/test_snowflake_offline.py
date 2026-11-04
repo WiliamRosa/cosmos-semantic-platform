@@ -6,13 +6,13 @@ import pyarrow as pa
 import pytest
 
 from cosmos_semantic.bootstrap import _folded
-from cosmos_semantic.connectors import DataSourceConfig, _snowflake_names, connect
+from cosmos_semantic.connectors import DataSourceConfig, _fold_upper_names, connect
 from cosmos_semantic.errors import ModelError
 
 
 def test_upper_case_result_names_are_folded_back():
     table = pa.table({"ORDERS__STATUS": ["a"], "REVENUE": [1], "MixedCase": [2], "lower": [3]})
-    assert _snowflake_names(table).column_names == [
+    assert _fold_upper_names(table).column_names == [
         "orders__status",
         "revenue",
         "MixedCase",

@@ -58,6 +58,52 @@ def sqlserver_connector(tables):
     connector.close()
 
 
+def _uri_connector(kind: str, variable: str, tables, **config):
+    uri = os.environ.get(variable)
+    if not uri:
+        pytest.skip(f"set {variable} to run against {kind}")
+    connector = connect(DataSourceConfig(type=kind, uri=uri, **config))
+    demo_data.load(connector, tables)
+    return connector
+
+
+@pytest.fixture(scope="session")
+def mysql_connector(tables):
+    connector = _uri_connector("mysql", "COSMOS_MYSQL_URI", tables)
+    yield connector
+    connector.close()
+
+
+@pytest.fixture(scope="session")
+def mariadb_connector(tables):
+    connector = _uri_connector("mariadb", "COSMOS_MARIADB_URI", tables)
+    yield connector
+    connector.close()
+
+
+@pytest.fixture(scope="session")
+def oracle_connector(tables):
+    env = os.environ.get
+    if not env("COSMOS_ORACLE_DSN"):
+        pytest.skip("set COSMOS_ORACLE_DSN (with COSMOS_ORACLE_USER and COSMOS_ORACLE_PASSWORD)")
+    user = env("COSMOS_ORACLE_USER", "cosmos")
+    connector = connect(
+        DataSourceConfig(
+            type="oracle",
+            options={
+                "dsn": env("COSMOS_ORACLE_DSN"),
+                "user": user,
+                "password": env("COSMOS_ORACLE_PASSWORD"),
+            },
+            # `public` is a reserved word in Oracle; the demo tables live in the user's schema.
+            schema_map={"public": user},
+        )
+    )
+    demo_data.load(connector, tables)
+    yield connector
+    connector.close()
+
+
 @pytest.fixture(scope="session")
 def databricks_connector(tables):
     env = os.environ.get

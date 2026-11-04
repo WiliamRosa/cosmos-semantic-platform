@@ -296,12 +296,14 @@ def load_sql(
             f"IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = '{schema}') "
             f"EXEC('CREATE SCHEMA {schema}')"
         )
-    else:
+    elif dialect != "oracle":  # in Oracle a schema is a user, created with the database
         run(f"CREATE SCHEMA IF NOT EXISTS {schema}")
     for name, table in tables.items():
         run(f"DROP TABLE IF EXISTS {schema}.{name}")
-        cols = ", ".join(f"{f.name} {_ARROW_TO_SQL[f.type]}" for f in table.schema)
-        run(f"CREATE TABLE {schema}.{name} ({cols})")
+        # Types are written straight in the target dialect: read as DuckDB, VARCHAR(200) loses
+        # its length and becomes TEXT/CLOB, which Oracle cannot group by.
+        cols = ", ".join(f"{f.name} {_column_type(f.type, dialect)}" for f in table.schema)
+        connector.run_script(f"CREATE TABLE {schema}.{name} ({cols})")
         rows = table.to_pylist()
         for start in range(0, len(rows), chunk):
             values = [
@@ -310,6 +312,16 @@ def load_sql(
             ]
             insert = exp.insert(exp.Values(expressions=values), f"{schema}.{name}")
             connector.run_script(insert.sql(dialect=dialect))
+
+
+def _column_type(arrow_type: pa.DataType, dialect: str) -> str:
+    from sqlglot import exp
+
+    if dialect == "oracle" and arrow_type == pa.float64():
+        # Oracle's DOUBLE PRECISION is a decimal NUMBER: sums of the same values could group
+        # differently than on the other databases. BINARY_DOUBLE is IEEE 754, like float64.
+        return "BINARY_DOUBLE"
+    return exp.DataType.build(_ARROW_TO_SQL[arrow_type]).sql(dialect=dialect)
 
 
 def _sql_literal(value):

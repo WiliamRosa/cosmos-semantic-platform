@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 
+from cosmos_semantic import dialects
 from cosmos_semantic.compiler import DimensionRef, JoinEdge, SemanticGraph
 from cosmos_semantic.errors import PolicyError, QueryError
 from cosmos_semantic.expressions import (
@@ -144,10 +145,7 @@ class Planner:
         return dt.datetime.now(zone).replace(tzinfo=None, microsecond=0)
 
     def _trunc(self, value: exp.Expression, grain: str) -> exp.Expression:
-        unit = grain.upper()
-        if unit == "WEEK" and self.dialect == "tsql":
-            unit = "ISO_WEEK"  # SQL Server weeks depend on DATEFIRST; ISO weeks start on Monday
-        return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit))
+        return dialects.trunc(value, grain, self.dialect)
 
     def _table(self, name: str, alias: str) -> exp.Table:
         return table_ref(name, self.dialect, self.schema_map).as_(alias)
@@ -201,7 +199,7 @@ class Planner:
             OutputColumn(m, "metric", m) for m in request.metrics
         ]
         return CompiledQuery(
-            sql=final.sql(dialect=self.dialect, pretty=True),
+            sql=dialects.adapt(final, self.dialect).sql(dialect=self.dialect, pretty=True),
             dialect=self.dialect,
             columns=columns,
             data_source=next(iter(data_sources)) if data_sources else None,
@@ -432,7 +430,7 @@ class Planner:
                 bridge_select.subquery("bridge"),
                 on=exp.EQ(
                     this=qualify(key_expr, base, self.dialect),
-                    expression=exp.column("__bridge_key", table="bridge"),
+                    expression=exp.column("cosmos_bridge_key", table="bridge"),
                 ),
                 join_type="inner" if inner else "left",
             )
@@ -486,7 +484,7 @@ class Planner:
             dims,
             filters,
             principal,
-            extra=[("__bridge_key", base, key_expr)],
+            extra=[("cosmos_bridge_key", base, key_expr)],
             label=f"{label} bridge via {via}",
         )
         self._trace.one_to_many.append(

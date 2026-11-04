@@ -19,6 +19,9 @@ SOURCES = [
     "sqlserver_connector",
     "databricks_connector",
     "snowflake_connector",
+    "mysql_connector",
+    "mariadb_connector",
+    "oracle_connector",
 ]
 SUDESTE = Principal(user={"region": "Northeast"}, channel="api", subject="ana@example.com")
 REQUEST = QueryRequest(

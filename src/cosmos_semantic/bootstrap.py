@@ -128,7 +128,8 @@ def _ident(name: str) -> str:
 
 
 def _folded(value: Any) -> Any:
-    """An all-upper-case catalog name is an unquoted name folded by the database (Snowflake);
+    """An all-upper-case catalog name is an unquoted name folded by the database (Snowflake,
+    Oracle);
     the model writes it in lower case, as every other database reports it."""
     return value.lower() if isinstance(value, str) and value.isupper() else value
 
@@ -161,21 +162,46 @@ class Bootstrapper:
 
     def read_catalog(self, only: list[str] | None = None) -> list[Table]:
         schema = self._literal(self.physical_schema)
-        data_type = "data_type"
-        if self.connector.dialect == "snowflake":
-            # Snowflake folds unquoted names to upper case, so the catalog says PUBLIC.ORDERS
-            # for what the model writes as public.orders; and every integer is NUMBER(p, 0).
+        dialect = self.connector.dialect
+        # Snowflake and Oracle fold unquoted names to upper case, so the catalog says
+        # PUBLIC.ORDERS for what the model writes as public.orders; and every integer is
+        # NUMBER(p, 0).
+        fold = dialect in ("snowflake", "oracle")
+        if fold:
             schema = f"UPPER({schema})"
-            data_type = (
-                "CASE WHEN data_type = 'NUMBER' AND numeric_scale = 0 THEN 'BIGINT' "
-                "ELSE data_type END"
+        if dialect == "oracle":
+            columns_sql = (
+                "SELECT table_name, column_name, CASE WHEN data_type = 'NUMBER' AND data_scale = 0 "
+                "THEN 'BIGINT' WHEN data_type IN ('BINARY_DOUBLE', 'BINARY_FLOAT') THEN 'DOUBLE' "
+                "ELSE data_type END AS data_type FROM all_tab_columns "
+                f"WHERE owner = {schema} ORDER BY table_name, column_id"
             )
-        rows = self._query(
-            f"SELECT table_name, column_name, {data_type} AS data_type "
-            "FROM information_schema.columns "
-            f"WHERE table_schema = {schema} ORDER BY table_name, ordinal_position"
-        )
-        fold = self.connector.dialect == "snowflake"
+            keys_sql = (
+                "SELECT k.table_name, k.column_name FROM all_constraints c "
+                "JOIN all_cons_columns k ON k.owner = c.owner "
+                "AND k.constraint_name = c.constraint_name "
+                f"WHERE c.constraint_type = 'P' AND c.owner = {schema}"
+            )
+        else:
+            data_type = "data_type"
+            if dialect == "snowflake":
+                data_type = (
+                    "CASE WHEN data_type = 'NUMBER' AND numeric_scale = 0 THEN 'BIGINT' "
+                    "ELSE data_type END"
+                )
+            columns_sql = (
+                f"SELECT table_name, column_name, {data_type} AS data_type "
+                "FROM information_schema.columns "
+                f"WHERE table_schema = {schema} ORDER BY table_name, ordinal_position"
+            )
+            keys_sql = (
+                "SELECT k.table_name, k.column_name FROM information_schema.table_constraints c "
+                "JOIN information_schema.key_column_usage k "
+                "ON k.constraint_name = c.constraint_name AND k.table_schema = c.table_schema "
+                f"AND k.table_name = c.table_name WHERE c.constraint_type = 'PRIMARY KEY' "
+                f"AND c.table_schema = {schema}"
+            )
+        rows = self._query(columns_sql)
         tables: dict[str, Table] = {}
         for row in rows:
             values = [_folded(v) if fold else v for v in row.values()]
@@ -188,13 +214,7 @@ class Bootstrapper:
         if not tables:
             raise QueryError(f"no tables found in schema `{self.physical_schema}`")
         try:
-            keys = self._query(
-                "SELECT k.table_name, k.column_name FROM information_schema.table_constraints c "
-                "JOIN information_schema.key_column_usage k "
-                "ON k.constraint_name = c.constraint_name AND k.table_schema = c.table_schema "
-                f"AND k.table_name = c.table_name WHERE c.constraint_type = 'PRIMARY KEY' "
-                f"AND c.table_schema = {schema}"
-            )
+            keys = self._query(keys_sql)
         except CosmosError:
             keys = []
         per_table: dict[str, list[str]] = {}

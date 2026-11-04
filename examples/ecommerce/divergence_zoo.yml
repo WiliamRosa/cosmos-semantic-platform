@@ -19,6 +19,12 @@ cases:
       tsql: |
         SELECT DATETRUNC(month, ordered_at), SUM(amount) FROM public.orders
         GROUP BY DATETRUNC(month, ordered_at)
+      mysql: |
+        SELECT CAST(DATE_FORMAT(ordered_at, '%Y-%m-01') AS DATETIME), SUM(amount) FROM public.orders
+        GROUP BY CAST(DATE_FORMAT(ordered_at, '%Y-%m-01') AS DATETIME)
+      oracle: |
+        SELECT TRUNC(ordered_at, 'MM'), SUM(amount) FROM public.orders
+        GROUP BY TRUNC(ordered_at, 'MM')
     expect: { status: divergent, causes: [filter_difference] }
 
   - id: Z02
@@ -32,6 +38,12 @@ cases:
       tsql: |
         SELECT DATETRUNC(month, ordered_at), SUM(amount - discount) FROM public.orders
         GROUP BY DATETRUNC(month, ordered_at)
+      mysql: |
+        SELECT CAST(DATE_FORMAT(ordered_at, '%Y-%m-01') AS DATETIME), SUM(amount - discount) FROM public.orders
+        GROUP BY CAST(DATE_FORMAT(ordered_at, '%Y-%m-01') AS DATETIME)
+      oracle: |
+        SELECT TRUNC(ordered_at, 'MM'), SUM(amount - discount) FROM public.orders
+        GROUP BY TRUNC(ordered_at, 'MM')
     expect: { status: divergent, causes: [different_metric] }
 
   - id: Z03
@@ -57,6 +69,12 @@ cases:
       tsql: |
         SELECT DATETRUNC(day, DATEADD(hour, 5, ordered_at)), SUM(amount) FROM public.orders
         GROUP BY DATETRUNC(day, DATEADD(hour, 5, ordered_at))
+      mysql: |
+        SELECT DATE(ordered_at + INTERVAL 5 HOUR), SUM(amount) FROM public.orders
+        GROUP BY DATE(ordered_at + INTERVAL 5 HOUR)
+      oracle: |
+        SELECT TRUNC(ordered_at + INTERVAL '5' HOUR, 'DD'), SUM(amount) FROM public.orders
+        GROUP BY TRUNC(ordered_at + INTERVAL '5' HOUR, 'DD')
     expect: { status: divergent, causes: [time_shift] }
 
   - id: Z05
@@ -82,6 +100,14 @@ cases:
         FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
         GROUP BY p.category
       snowflake: |
+        SELECT p.category, TRUNC(SUM(i.quantity) / COUNT(*))
+        FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+        GROUP BY p.category
+      mysql: |
+        SELECT p.category, SUM(i.quantity) DIV COUNT(*)
+        FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
+        GROUP BY p.category
+      oracle: |
         SELECT p.category, TRUNC(SUM(i.quantity) / COUNT(*))
         FROM public.order_items i LEFT JOIN public.products p ON p.product_id = i.product_id
         GROUP BY p.category

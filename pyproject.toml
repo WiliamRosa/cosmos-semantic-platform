@@ -14,6 +14,9 @@ keywords = [
     "ai agents",
     "databricks",
     "snowflake",
+    "oracle",
+    "mysql",
+    "mariadb",
     "duckdb",
     "postgres",
     "sql server",
@@ -47,6 +50,8 @@ postgres = ["adbc-driver-postgresql>=1.4", "adbc-driver-manager>=1.4"]
 databricks = ["databricks-sql-connector>=4.0", "databricks-sdk>=0.50"]
 snowflake = ["snowflake-connector-python>=3.12"]
 sqlserver = ["sqlalchemy>=2.0", "pymssql>=2.3"]
+mysql = ["sqlalchemy>=2.0", "pymysql>=1.1"]
+oracle = ["oracledb>=3.1"]
 testdata = ["faker>=30.0"]
 server = ["fastapi>=0.115", "uvicorn>=0.30", "pyjwt[crypto]>=2.9", "httpx>=0.27", "mcp>=2.0,<3"]
 ai = ["anthropic>=2.0,<3"]
@@ -81,6 +86,9 @@ markers = [
     "sqlserver: precisa de um SQL Server em COSMOS_MSSQL_URI",
     "databricks: needs a configured Databricks SQL warehouse",
     "snowflake: needs a configured Snowflake account and warehouse",
+    "mysql: needs a MySQL server at COSMOS_MYSQL_URI",
+    "mariadb: needs a MariaDB server at COSMOS_MARIADB_URI",
+    "oracle: needs an Oracle Database at COSMOS_ORACLE_DSN",
 ]
 
 [tool.ruff]
