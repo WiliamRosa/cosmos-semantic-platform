@@ -43,7 +43,7 @@ body:
     attributes:
       label: Version
       description: Output of `pip show cosmos-semantic` (or the commit, if you run from source).
-      placeholder: "0.1.0"
+      placeholder: "0.2.0"
     validations:
       required: true
   - type: textarea

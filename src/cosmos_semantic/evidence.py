@@ -36,7 +36,7 @@ REPRODUCIBILITY_CAVEAT = (
 )
 
 
-def _engine_version() -> str:
+def engine_version() -> str:
     try:
         return version("cosmos-semantic")
     except PackageNotFoundError:
@@ -186,7 +186,7 @@ class EvidenceBuilder:
         return {
             "query_id": query_id or new_query_id(),
             "generated_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
-            "engine_version": _engine_version(),
+            "engine_version": engine_version(),
             "model_hash": self.model_hash,
             "as_of": compiled.as_of.isoformat() if compiled.as_of else None,
             "rules_as_of": compiled.rules_as_of.isoformat() if compiled.rules_as_of else None,

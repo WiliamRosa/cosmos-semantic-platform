@@ -21,6 +21,7 @@ from cosmos_semantic.errors import (
     PolicyError,
     QueryError,
 )
+from cosmos_semantic.evidence import engine_version
 from cosmos_semantic.planner import Principal, QueryRequest
 from cosmos_semantic.service import SemanticService
 
@@ -114,7 +115,7 @@ def create_app(
 
     app = FastAPI(
         title="Cosmos Semantic",
-        version="0.1.0",
+        version=engine_version(),
         description="Semantic layer with its own engine: metrics, business rules and glossary.",
         lifespan=lifespan,
     )
