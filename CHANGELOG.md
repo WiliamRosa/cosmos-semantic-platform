@@ -7,6 +7,12 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-04
+
+Four more data sources: the whole test suite now passes on eight databases (DuckDB,
+Postgres, SQL Server, MySQL, MariaDB, Oracle, Databricks and Snowflake), and CI runs the six
+that fit in a container on every pull request.
+
 ### Added
 
 - Snowflake as a data source (`snowflake` extra, [ADR 0010](docs/decisions/0010-snowflake-as-a-data-source.md)):
@@ -23,6 +29,14 @@ format or the API; such changes are listed under **Changed**.
 - Issue and pull request templates, a DCO check on pull requests, and the first issues marked
   `good first issue`.
 - `cosmos suggest` keeps each rejected suggestion, as the model sent it, in the report.
+
+### Changed
+
+- The REST API and the MCP server report the installed package version instead of a fixed
+  `0.1.0`.
+- `cosmos demo-data` writes column types in the target database's dialect (for example
+  `VARCHAR(200)` instead of `STRING` on Databricks), and loads `float64` as `BINARY_DOUBLE` on
+  Oracle.
 
 ### Fixed
 
@@ -91,5 +105,6 @@ and on the lowest dependency versions this release allows.
   `GET /v1/glossary`.
 - `cosmos init` creates a starter project with the e-commerce example and a local DuckDB source.
 
-[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.2.0
 [0.1.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.1.0

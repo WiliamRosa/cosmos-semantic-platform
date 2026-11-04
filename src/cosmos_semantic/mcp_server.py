@@ -14,6 +14,7 @@ from mcp.server.mcpserver import Context, MCPServer
 
 from cosmos_semantic.auth import Authenticator, AuthError
 from cosmos_semantic.errors import CosmosError
+from cosmos_semantic.evidence import engine_version
 from cosmos_semantic.planner import Principal, QueryRequest
 from cosmos_semantic.service import SemanticService
 
@@ -35,7 +36,7 @@ MAX_ROWS_FOR_AGENTS = 200
 
 
 def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> MCPServer:
-    mcp = MCPServer(name="cosmos-semantic", instructions=INSTRUCTIONS, version="0.1.0")
+    mcp = MCPServer(name="cosmos-semantic", instructions=INSTRUCTIONS, version=engine_version())
 
     def principal(ctx: Context) -> Principal:
         headers = ctx.headers
