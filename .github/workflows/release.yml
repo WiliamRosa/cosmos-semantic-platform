@@ -1,0 +1,73 @@
+name: release
+
+# Pushing a tag `vX.Y.Z` builds the package, checks it, publishes it to PyPI through Trusted
+# Publishing (no stored token: PyPI trusts this workflow and the `pypi` environment) and creates
+# the GitHub release with the matching CHANGELOG section as notes.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Tag matches the package version
+        run: |
+          version=$(uv run --no-project python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != version $version"; exit 1; }
+          grep -q "^## \[$version\]" CHANGELOG.md || { echo "CHANGELOG.md has no [$version] section"; exit 1; }
+      - run: uv sync --all-extras
+      - run: uv run ruff check src tests
+      - run: uv run pytest -q
+      - run: uv build
+      - run: uvx twine check --strict dist/*
+      - name: The wheel installs and runs the quickstart
+        run: |
+          python -m venv /tmp/qs && /tmp/qs/bin/pip install -q "$(ls dist/*.whl)[duckdb,testdata]"
+          cd "$(mktemp -d)"
+          /tmp/qs/bin/cosmos init demo && cd demo
+          /tmp/qs/bin/cosmos demo-data
+          /tmp/qs/bin/cosmos query revenue average_order_value --by orders.status --evidence
+          /tmp/qs/bin/cosmos explain rule:active_customer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/cosmos-semantic/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v h="## [$version]" 'index($0, h) == 1 {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md > notes.md
+          test -s notes.md
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --title "Cosmos Semantic $GITHUB_REF_NAME" --notes-file notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}

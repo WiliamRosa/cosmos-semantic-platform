@@ -154,7 +154,7 @@ class ClaudeSuggestionModel:
                 import anthropic
             except ImportError as exc:
                 raise CosmosError(
-                    "AI discovery needs the optional `anthropic` package: uv sync --extra ai"
+                    'AI discovery needs the optional `anthropic` package: pip install "cosmos-semantic[ai]"'
                 ) from exc
             # Credentials come from ANTHROPIC_API_KEY or an `ant auth login` profile.
             client = anthropic.Anthropic()

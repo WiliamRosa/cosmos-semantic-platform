@@ -86,6 +86,57 @@ AgentOpt = Annotated[bool, typer.Option(help="Query as an AI agent (MCP channel)
 
 
 @app.command()
+def init(
+    directory: Annotated[Path, typer.Argument(help="Where to create the project.")] = Path("."),
+    force: Annotated[bool, typer.Option(help="Overwrite existing files.")] = False,
+) -> None:
+    """Creates a starter project with the e-commerce example model and a local DuckDB source."""
+    from cosmos_semantic.starter import write_starter
+
+    try:
+        written = write_starter(directory, force=force)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    for path in written:
+        typer.echo(f"  created {path}")
+    where = "" if directory == Path(".") else f"cd {directory} && "
+    typer.secho("next steps:", bold=True)
+    typer.echo(f"  {where}cosmos demo-data            # synthetic data into data/ecommerce.duckdb")
+    typer.echo("  cosmos query revenue --by orders.status --evidence")
+    typer.echo("  cosmos explain rule:active_customer")
+
+
+@app.command()
+def explain(
+    name: Annotated[
+        str,
+        typer.Argument(
+            help="metric:x, rule:x, concept:x, team:x, system:x, process:x or a dimension."
+        ),
+    ],
+    model: ModelOpt = Path("semantic"),
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Explains a member of the model: definition, owner, source systems, processes and logic."""
+    from cosmos_semantic.catalog import Catalog
+
+    try:
+        out = Catalog(compile_project(load_project(model))).explain(name)
+    except errors.CosmosError as exc:
+        _fail(exc)
+    if as_json:
+        typer.echo(json.dumps(out, default=str, ensure_ascii=False, indent=2))
+        return
+    typer.secho(f"{out.get('kind')} {out.get('name')}", bold=True)
+    for key, value in out.items():
+        if key in ("kind", "name") or value in (None, [], {}, ""):
+            continue
+        if isinstance(value, dict | list):
+            value = json.dumps(value, default=str, ensure_ascii=False)
+        typer.echo(f"  {key:15} {value}")
+
+
+@app.command()
 def validate(model: ModelOpt = Path("semantic")) -> None:
     """Validates the model: references, entities, join paths and row filters."""
     try:
@@ -638,7 +689,7 @@ def suggest(
 ) -> None:
     """Asks Claude for glossary concepts, rules, metrics and descriptions, validates each one
     with the engine and writes the accepted ones for review. Nothing is applied to the model.
-    Needs `uv sync --extra ai` and ANTHROPIC_API_KEY (or an `ant auth login` profile)."""
+    Needs `pip install "cosmos-semantic[ai]"` (or `uv sync --extra ai`) and ANTHROPIC_API_KEY (or an `ant auth login` profile)."""
     from cosmos_semantic.discovery import ClaudeSuggestionModel, discover
     from cosmos_semantic.interchange import dump_project
 
@@ -893,7 +944,7 @@ def import_cmd(
         str | None, typer.Option("--schema", help="Table schema (dbt, Cube, Power BI fallback).")
     ] = None,
 ) -> None:
-    """Imports a model from dbt (latest and legacy), Apache Ossie or Cube (static YAML)."""
+    """Imports a model from dbt (latest and legacy), Apache Ossie, Cube (static YAML) or Power BI (.bim or TMDL)."""
     from cosmos_semantic.interchange import dump_project, import_model
 
     options = {"schema": schema_name} if kind in ("dbt", "cube", "powerbi") and schema_name else {}
