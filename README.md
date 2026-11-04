@@ -1,18 +1,33 @@
 # Cosmos Semantic
 
-> Repository: `cosmos-semantic-platform`. License: open core, with the core under Apache 2.0 ([ADR 0005](docs/decisions/0005-open-core.md)).
+> Repository: `cosmos-semantic-platform`. License: open core, with the core under Apache 2.0 ([ADR 0005](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/decisions/0005-open-core.md)).
 
 A semantic layer for AI agents and applications, with **its own engine**: its own versioned YAML format with the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and a JSON Schema, SQL generation for each data source, and native interoperability with [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (formerly Open Semantic Interchange, OSI). [Cube](https://github.com/cube-js/cube) and dbt are **import sources and export targets**, not dependencies.
 
-**Status:** phases 0 to 3 are implemented: the engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity, verifiable numbers (evidence, replay, reconciliation, impact, bootstrap) and business context (rule versions, usage and cost, knowledge graph, Power BI import, AI-assisted discovery, the retail pack, SKOS export). The whole test suite passes on DuckDB, Postgres, SQL Server and Databricks. See the [roadmap](docs/roadmap.md).
+**Status:** phases 0 to 3 are implemented: the engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity, verifiable numbers (evidence, replay, reconciliation, impact, bootstrap) and business context (rule versions, usage and cost, knowledge graph, Power BI import, AI-assisted discovery, the retail pack, SKOS export). The whole test suite passes on DuckDB, Postgres, SQL Server and Databricks. See the [roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md).
 
 ## In one sentence
 
 Define entities, metrics, business concepts and business rules once, and any AI agent or application queries the same number, with SQL generated and run directly on your data source, and the model portable to Ossie, Cube and dbt.
 
-## Getting started
+## Quickstart
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+```bash
+pip install "cosmos-semantic[duckdb,testdata]"
+cosmos init demo && cd demo
+cosmos demo-data
+cosmos query revenue average_order_value --by orders.status --evidence
+cosmos explain rule:active_customer
+```
+
+That is a governed metric with its evidence (formula, rules, policies, `as_of` and hashes) in about
+a minute, on a local DuckDB file. The [quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) continues with business
+rules, row filters, personal data and connecting an AI agent over MCP. Extras: `duckdb`,
+`postgres`, `sqlserver`, `databricks`, `server` (REST and MCP), `ai` (`cosmos suggest`), `testdata`.
+
+## Development
+
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). From a clone of this repository:
 
 ```bash
 uv sync --all-extras
@@ -109,7 +124,7 @@ Local SQL Server: `docker compose -p cosmos-semantic -f deploy/docker-compose.ym
 
 Databricks: set `DATABRICKS_HTTP_PATH` (SQL warehouse) and `DATABRICKS_TOKEN` with `DATABRICKS_SERVER_HOSTNAME`, or `DATABRICKS_CONFIG_PROFILE` with a Databricks CLI profile (`databricks auth login --profile <name>`). The tests load the example data into the catalog in `DATABRICKS_CATALOG` (default `cosmos_demo`, which must exist). On Git Bash for Windows, also set `MSYS_NO_PATHCONV=1`, or the shell rewrites `/sql/1.0/...` into a Windows path and the warehouse answers 404.
 
-Editors validate and autocomplete model files through the JSON Schema in [schema/](schema/), referenced on the first line of each file (`# yaml-language-server: $schema=...`). After changing `spec.py`, regenerate it with `uv run cosmos schema -o schema/cosmos-semantic.v1.schema.json`.
+Editors validate and autocomplete model files through the JSON Schema in [schema/](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/schema/), referenced on the first line of each file (`# yaml-language-server: $schema=...`). After changing `spec.py`, regenerate it with `uv run cosmos schema -o schema/cosmos-semantic.v1.schema.json`.
 
 ## Principles
 
@@ -124,12 +139,14 @@ Editors validate and autocomplete model files through the JSON Schema in [schema
 
 | Document | Contents |
 | --- | --- |
-| [Product vision](docs/product-vision.md) | Problem, audience, positioning, free and paid editions |
-| [Architecture](docs/architecture.md) | Components, query planner, cross-database guarantees, security, deployment |
-| [Semantic model](docs/semantic-model.md) | The authoring format, the generated SQL and the exports |
-| [Interoperability](docs/interoperability.md) | Mapping to Apache Ossie, and dbt and Cube import |
-| [Roadmap](docs/roadmap.md) | Phases, MVP scope and exit criteria |
-| [Architecture decisions](docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product |
+| [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) | From `pip install` to a governed metric, business rules, policies and an AI agent over MCP |
+| [Product vision](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/product-vision.md) | Problem, audience, positioning, free and paid editions |
+| [Architecture](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/architecture.md) | Components, query planner, cross-database guarantees, security, deployment |
+| [Semantic model](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/semantic-model.md) | The authoring format, the generated SQL and the exports |
+| [Interoperability](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/interoperability.md) | Mapping to Apache Ossie, and dbt and Cube import |
+| [Roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md) | Phases, MVP scope and exit criteria |
+| [Changelog](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md) | What changed in each release |
+| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product |
 
 ## Repository layout
 
@@ -166,4 +183,4 @@ docs/                documentation and ADRs
 
 ## License and contributing
 
-The core is licensed under [Apache 2.0](LICENSE) ([ADR 0005](docs/decisions/0005-open-core.md)). Contributions are welcome under the Developer Certificate of Origin; see [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+The core is licensed under [Apache 2.0](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/LICENSE) ([ADR 0005](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/decisions/0005-open-core.md)). Contributions are welcome under the Developer Certificate of Origin; see [CONTRIBUTING.md](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/SECURITY.md).

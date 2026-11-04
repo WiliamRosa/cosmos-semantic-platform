@@ -402,7 +402,7 @@ wheels = [
 
 [[package]]
 name = "cosmos-semantic"
-version = "0.1.0.dev0"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pyarrow" },
@@ -451,25 +451,25 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "adbc-driver-manager", marker = "extra == 'postgres'", specifier = ">=1.0" },
-    { name = "adbc-driver-postgresql", marker = "extra == 'postgres'", specifier = ">=1.0" },
-    { name = "anthropic", marker = "extra == 'ai'", specifier = ">=1.0" },
-    { name = "databricks-sdk", marker = "extra == 'databricks'", specifier = ">=0.30" },
-    { name = "databricks-sql-connector", marker = "extra == 'databricks'", specifier = ">=3.0" },
-    { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.0" },
-    { name = "faker", marker = "extra == 'testdata'", specifier = ">=25.0" },
-    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.110" },
+    { name = "adbc-driver-manager", marker = "extra == 'postgres'", specifier = ">=1.4" },
+    { name = "adbc-driver-postgresql", marker = "extra == 'postgres'", specifier = ">=1.4" },
+    { name = "anthropic", marker = "extra == 'ai'", specifier = ">=2.0,<3" },
+    { name = "databricks-sdk", marker = "extra == 'databricks'", specifier = ">=0.50" },
+    { name = "databricks-sql-connector", marker = "extra == 'databricks'", specifier = ">=4.0" },
+    { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.2" },
+    { name = "faker", marker = "extra == 'testdata'", specifier = ">=30.0" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'server'", specifier = ">=0.27" },
-    { name = "mcp", marker = "extra == 'server'", specifier = ">=1.2" },
-    { name = "pyarrow", specifier = ">=15.0" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'server'", specifier = ">=2.8" },
+    { name = "mcp", marker = "extra == 'server'", specifier = ">=2.0,<3" },
+    { name = "pyarrow", specifier = ">=17.0" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'server'", specifier = ">=2.9" },
     { name = "pymssql", marker = "extra == 'sqlserver'", specifier = ">=2.3" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sqlalchemy", marker = "extra == 'sqlserver'", specifier = ">=2.0" },
-    { name = "sqlglot", specifier = ">=25.0" },
-    { name = "typer", specifier = ">=0.12" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.29" },
+    { name = "sqlglot", specifier = ">=30.0,<31" },
+    { name = "typer", specifier = ">=0.15" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
 ]
 provides-extras = ["duckdb", "postgres", "databricks", "sqlserver", "testdata", "server", "ai"]
 
