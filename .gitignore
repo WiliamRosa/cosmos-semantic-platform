@@ -10,3 +10,8 @@ build/
 *.duckdb
 *.duckdb.wal
 /data/
+# Console (ADR 0012): sources in console/, the built export ships inside the package
+/console/node_modules/
+/console/.next/
+/console/out/
+/src/cosmos_semantic/console_dist/

@@ -589,7 +589,9 @@ class ZooCase(BaseModel):
     user: dict[str, Any] = {}
     sql: str
     sql_by_dialect: dict[str, str] = {}
-    expect: ZooExpectation
+    # Without an expectation, a case passes when the legacy SQL matches the governed metric:
+    # the usual case outside the zoo, where a team checks its own reports.
+    expect: ZooExpectation | None = None
 
     def sql_for(self, dialect: str) -> str:
         return self.sql_by_dialect.get(dialect, self.sql)
@@ -610,5 +612,6 @@ def check_zoo_case(
         graph, connector, case.request, case.sql_for(connector.dialect), principal
     )
     found = {c["code"] for c in report["causes"]}
-    ok = report["status"] == case.expect.status and set(case.expect.causes) <= found
+    expect = case.expect or ZooExpectation(status="match")
+    ok = report["status"] == expect.status and set(expect.causes) <= found
     return ok, report
