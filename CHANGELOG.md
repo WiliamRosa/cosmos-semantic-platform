@@ -7,6 +7,16 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+### Added
+
+- `cosmos suggest` takes `--source` more than once and accepts a suggestion only if it runs on
+  every source given, so SQL that one database accepts and another rejects is caught.
+
+### Fixed
+
+- `cosmos suggest` runs classification and derived rules as dimensions of their model, instead
+  of only compiling them; a rule bound to a column the table does not have is now rejected.
+
 ## [0.2.0] - 2026-11-04
 
 Four more data sources: the whole test suite now passes on eight databases (DuckDB,

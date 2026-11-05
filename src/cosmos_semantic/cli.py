@@ -675,8 +675,13 @@ def suggest(
         Path, typer.Option("--output", "-o", help="YAML with the accepted suggestions.")
     ] = Path("suggestions.yml"),
     source: Annotated[
-        str | None,
-        typer.Option(help="Data source to validate suggestions by running them; default: none."),
+        list[str] | None,
+        typer.Option(
+            help=(
+                "Data source to validate suggestions by running them; repeat it for every "
+                "source the model serves (samples come from the first). Default: none."
+            )
+        ),
     ] = None,
     samples: Annotated[
         bool,
@@ -693,14 +698,15 @@ def suggest(
     from cosmos_semantic.discovery import ClaudeSuggestionModel, discover
     from cosmos_semantic.interchange import dump_project
 
-    if samples and source is None:
+    if samples and not source:
         _fail(ValueError("--samples needs --source"))
     try:
         compiled = compile_project(load_project(model))
-        connector = None
-        if source is not None:
-            connector = Engine(compiled, load_connections(connections)).connector(source)
-        report = discover(compiled, ClaudeSuggestionModel(llm), connector, samples=samples)
+        connectors = []
+        if source:
+            engine = Engine(compiled, load_connections(connections))
+            connectors = [engine.connector(name) for name in source]
+        report = discover(compiled, ClaudeSuggestionModel(llm), connectors, samples=samples)
     except errors.CosmosError as exc:
         _fail(exc)
     header = (
