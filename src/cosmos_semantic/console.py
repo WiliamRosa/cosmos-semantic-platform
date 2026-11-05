@@ -275,6 +275,8 @@ class Console:
 
     def graph_view(self, focus: str | None = None) -> dict[str, Any]:
         """The knowledge graph (or the part around ``focus``) with health and usage per node."""
+        from cosmos_semantic.knowledge import owner_of
+
         kg = self._knowledge.focus(focus) if focus else self._knowledge
         health = self._health()
         usage = Counter(
@@ -290,6 +292,8 @@ class Console:
                 item["state"], item["reasons"] = "unchecked", []
             if node["kind"] in ("metric", "measure"):
                 item["queries"] = usage.get(node["name"], 0)
+            if "owner" not in item and (owner := owner_of(self.graph, node["id"])):
+                item["owner"] = owner  # measures and dimensions inherit their model's owner
             nodes.append(item)
         return {"focus": focus, "nodes": nodes, "edges": kg.edges}
 
@@ -385,12 +389,13 @@ class Console:
                 out["impact"] = None
         runs = self._runs()
         if kind in ("metric", "measure"):
-            out["reconciliations"] = [
-                {"at": run["at"], "run_id": run["run_id"], **case}
-                for run in runs[-10:]
-                for case in run["reconciliations"]
-                if detail["name"] in case["metrics"]
-            ]
+            # The latest result of each case: the run history lives on the checks page.
+            latest: dict[str, dict[str, Any]] = {}
+            for run in runs:
+                for case in run["reconciliations"]:
+                    if detail["name"] in case["metrics"]:
+                        latest[case["id"]] = {"at": run["at"], "run_id": run["run_id"], **case}
+            out["reconciliations"] = list(latest.values())
         recent = [
             r
             for r in reversed(self._audit())

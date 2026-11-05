@@ -17,7 +17,7 @@ import {
   ReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { endpoints, type GraphData, type GraphNode } from "@/lib/api";
 import { type Key, useI18n } from "@/lib/i18n";
 import { useLoad } from "@/lib/session";
@@ -85,7 +85,8 @@ function layout(graph: GraphData, selected: string | null) {
     markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
     style: { stroke: "#94a3b8" },
   }));
-  return { nodes, edges: flowEdges };
+  const { width = 1, height = 1 } = g.graph();
+  return { nodes, edges: flowEdges, width, height };
 }
 
 export function ProcessGraph({ focus }: { focus?: string }) {
@@ -95,10 +96,8 @@ export function ProcessGraph({ focus }: { focus?: string }) {
   return (
     <Loader loaded={loaded}>
       {(graph) => (
-        <div className="grid gap-4 xl:grid-cols-[1fr_300px]">
-          <div className="h-[640px] rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-            <Flow graph={graph} selected={selected} onSelect={setSelected} />
-          </div>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+          <Flow graph={graph} selected={selected} onSelect={setSelected} />
           <aside className="rounded-xl border border-slate-200 bg-white p-4 text-sm dark:border-slate-800 dark:bg-slate-900">
             {selected ? (
               <NodePanel node={graph.nodes.find((n) => n.id === selected)!} />
@@ -121,9 +120,32 @@ function Flow({
   selected: string | null;
   onSelect: (id: string) => void;
 }) {
-  const { nodes, edges } = useMemo(() => layout(graph, selected), [graph, selected]);
+  const { nodes, edges, width, height } = useMemo(
+    () => layout(graph, selected),
+    [graph, selected],
+  );
+  // The box follows the drawing's shape, so a wide, shallow process is not lost in empty
+  // space: its height comes from the width it actually has, between 300 and 640 pixels.
+  const box = useRef<HTMLDivElement>(null);
+  const [boxWidth, setBoxWidth] = useState(0);
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setBoxWidth(entry.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const boxHeight = boxWidth
+    ? Math.min(640, Math.max(300, (boxWidth * (height + 80)) / (width + 80)))
+    : 480;
   return (
+    <div
+      ref={box}
+      className="min-w-0 rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
+      style={{ height: boxHeight }}
+    >
     <ReactFlow
+      key={Math.round(boxHeight)} // refit when the box changes size
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
@@ -137,11 +159,12 @@ function Flow({
       <Background gap={20} color="#e2e8f0" />
       <Controls showInteractive={false} />
     </ReactFlow>
+    </div>
   );
 }
 
 function NodePanel({ node }: { node: GraphNode }) {
-  const { t } = useI18n();
+  const { t, count } = useI18n();
   const tracked = ["metric", "measure", "rule"].includes(node.kind);
   return (
     <div className="space-y-3">
@@ -163,7 +186,7 @@ function NodePanel({ node }: { node: GraphNode }) {
       </div>
       {typeof node.queries === "number" && (
         <div className="text-slate-600 dark:text-slate-400">
-          {node.queries} {t("common.queries")}
+          {count(node.queries, "common.query", "common.queries")}
         </div>
       )}
       {(tracked || ["process", "system"].includes(node.kind)) && (

@@ -34,7 +34,9 @@ Each run does two things and appends one line to the log:
 - it runs every business rule's tests;
 - it compares each reconciliation case (a legacy report's SQL) with the governed metric.
 
-It exits with 1 when a test fails or a report diverges. A case without an `expect` passes only when the numbers match. See [examples/ecommerce/reconciliations.yml](../examples/ecommerce/reconciliations.yml).
+It exits with 1 when a test fails or a report diverges.
+
+With a DuckDB file as the data source, run `cosmos check` while `cosmos serve` is stopped. DuckDB lets only one process open a file, and both commands open it. Server databases (Postgres, SQL Server, Databricks, Snowflake and the others) have no such limit. A case without an `expect` passes only when the numbers match. See [examples/ecommerce/reconciliations.yml](../examples/ecommerce/reconciliations.yml).
 
 ## What each view answers
 
