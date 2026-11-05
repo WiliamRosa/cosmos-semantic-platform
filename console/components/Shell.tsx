@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { type Key, useI18n } from "@/lib/i18n";
 import { useSession } from "@/lib/session";
 
@@ -86,18 +86,29 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
 function SignIn() {
   const { t } = useI18n();
-  const { signIn } = useSession();
+  const { signIn, dismissAuth } = useSession();
   const [value, setValue] = useState("");
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && dismissAuth();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dismissAuth]);
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-slate-900/40 p-4">
+    <div
+      className="fixed inset-0 z-30 grid place-items-center bg-slate-900/40 p-4"
+      onClick={(e) => e.target === e.currentTarget && dismissAuth()}
+    >
       <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sign-in-title"
         onSubmit={(e) => {
           e.preventDefault();
           if (value.trim()) signIn(value);
         }}
         className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900"
       >
-        <h2 className="text-lg font-semibold">{t("auth.title")}</h2>
+        <h2 id="sign-in-title" className="text-lg font-semibold">{t("auth.title")}</h2>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{t("auth.help")}</p>
         <input
           autoFocus
@@ -107,12 +118,22 @@ function SignIn() {
           placeholder={t("auth.placeholder")}
           className="mt-4 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-800"
         />
-        <button
-          type="submit"
-          className="mt-4 w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900"
-        >
-          {t("auth.save")}
-        </button>
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={dismissAuth}
+            className="flex-1 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800"
+          >
+            {t("auth.cancel")}
+          </button>
+          <button
+            type="submit"
+            className="flex-1 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50 dark:bg-white dark:text-slate-900"
+            disabled={!value.trim()}
+          >
+            {t("auth.save")}
+          </button>
+        </div>
       </form>
     </div>
   );

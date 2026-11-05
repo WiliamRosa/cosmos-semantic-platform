@@ -11,6 +11,7 @@ interface Session {
   needsAuth: boolean;
   hasCredential: boolean;
   requireAuth: () => void;
+  dismissAuth: () => void;
   signIn: (credential: string) => void;
   signOut: () => void;
 }
@@ -25,6 +26,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => setHasCredential(Boolean(getCredential())), [version]);
 
   const requireAuth = useCallback(() => setNeedsAuth(true), []);
+  const dismissAuth = useCallback(() => setNeedsAuth(false), []);
   const signIn = useCallback((credential: string) => {
     setCredential(credential.trim());
     setNeedsAuth(false);
@@ -37,7 +39,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <Context.Provider value={{ version, needsAuth, hasCredential, requireAuth, signIn, signOut }}>
+    <Context.Provider value={{ version, needsAuth, hasCredential, requireAuth, dismissAuth, signIn, signOut }}>
       {children}
     </Context.Provider>
   );
