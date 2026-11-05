@@ -1,6 +1,6 @@
 [project]
 name = "cosmos-semantic"
-version = "0.2.0"
+version = "0.3.0"
 description = "A semantic layer with its own engine: governed metrics, business rules and a glossary for AI agents and BI, with verifiable numbers"
 readme = "README.md"
 requires-python = ">=3.11"

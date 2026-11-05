@@ -7,29 +7,42 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
+A read-only console for people who decide, and a live demo of it that needs no install. AI
+suggestions are now validated on every database the model serves.
+
 ### Added
 
-- A public demo of the console on GitHub Pages (https://wiliamrosa.github.io/cosmos-semantic-platform/),
-  rebuilt on every change to `main`. It needs no server: `console/demo/snapshot.py` runs the
-  example model on synthetic data and writes each console view as JSON, and the console's demo
-  build reads those files.
-- `cosmos-semantic` as a second name for the `cosmos` command, so `uvx cosmos-semantic mcp ...`
-  works, and a `server.json` for the official MCP registry.
-- A read-only console at `/console` ([ADR 0012](docs/decisions/0012-read-only-console.md), [docs](docs/console.md)),
-  in English and Brazilian Portuguese, for people who decide:
-  - metric health and ownership;
+- A read-only console at `/console` ([ADR 0012](docs/decisions/0012-read-only-console.md),
+  [docs](docs/console.md)), in English and Brazilian Portuguese, for people who decide rather
+  than build:
+  - metric health and ownership, with each number linking to the list behind it;
   - business processes as graphs colored by health;
   - the catalog with definitions, rule versions, reconciliations and impact;
   - audited answers with replay;
   - check history;
-  - usage and cost (admins, `COSMOS_CONSOLE_ADMINS`).
+  - usage and cost (admins only, `COSMOS_CONSOLE_ADMINS`).
 
-  Built with Next.js, React and Tailwind CSS as a static export that the wheel ships; served by `cosmos serve`.
-- `cosmos check` runs the rule tests and reconciliation cases, appends the run to
-  `COSMOS_RUNS_LOG` and exits with 1 when something fails. Reconciliation cases no longer need
-  `expect`: without it, a case passes when the legacy numbers match.
+  Built with Next.js, React and Tailwind CSS as a static export that the wheel ships, and served
+  by `cosmos serve`; installing is still one `pip install`.
+- A public demo of the console on GitHub Pages (https://wiliamrosa.github.io/cosmos-semantic-platform/),
+  rebuilt on every change to `main`. It needs no server: `console/demo/snapshot.py` runs the
+  example model on synthetic data and writes each console view as JSON, and the demo build reads
+  those files.
+- `cosmos check` runs the rule tests and the reconciliation cases, appends the run to
+  `COSMOS_RUNS_LOG`, and exits with 1 when something fails, so CI or cron can schedule it.
+  `examples/ecommerce/reconciliations.yml` has four realistic cases, two of which diverge on
+  purpose.
 - `cosmos suggest` takes `--source` more than once and accepts a suggestion only if it runs on
   every source given, so SQL that one database accepts and another rejects is caught.
+- `cosmos-semantic` as a second name for the `cosmos` command, so `uvx cosmos-semantic mcp ...`
+  works, and a `server.json` for the official MCP registry.
+
+### Changed
+
+- Reconciliation cases no longer need `expect`: without it, a case passes when the legacy numbers
+  match the governed metric.
 
 ### Fixed
 
@@ -134,6 +147,7 @@ and on the lowest dependency versions this release allows.
   `GET /v1/glossary`.
 - `cosmos init` creates a starter project with the e-commerce example and a local DuckDB source.
 
-[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.3.0
 [0.2.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.2.0
 [0.1.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.1.0
