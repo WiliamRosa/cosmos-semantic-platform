@@ -69,7 +69,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 function AnswerBody({ a }: { a: AnswerDetail }) {
-  const { t, date, number } = useI18n();
+  const { t, date, number, count } = useI18n();
   const [replay, setReplay] = useState<{ verdict: string } | { error: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -87,7 +87,7 @@ function AnswerBody({ a }: { a: AnswerDetail }) {
   return (
     <div className="space-y-6">
       <div>
-        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{a.query_id}</div>
+        <div className="font-mono text-xs text-slate-500">{a.query_id}</div>
         <h1 className="text-2xl font-semibold tracking-tight">{a.metrics.join(", ")}</h1>
         <div className="mt-1 text-sm text-slate-600 dark:text-slate-400">
           {a.subject} · {a.channel} · {date(a.at)}
@@ -134,7 +134,7 @@ function AnswerBody({ a }: { a: AnswerDetail }) {
           </Row>
           <Row label={t("answers.result")}>
             {a.outcome === "ok"
-              ? `${number(a.row_count)} ${t("answers.rows")} · ${number(a.duration_ms)} ms · ${a.data_source ?? ""}`
+              ? `${count(a.row_count, "answers.row", "answers.rows")} · ${number(a.duration_ms)} ms · ${a.data_source ?? ""}`
               : <span className="text-rose-700 dark:text-rose-300">{a.error}</span>}
           </Row>
         </dl>
@@ -170,11 +170,24 @@ function AnswerBody({ a }: { a: AnswerDetail }) {
             </button>
           }
         >
-          <dl className="grid gap-2 text-sm sm:grid-cols-3">
+          <dl className="grid gap-3 text-sm sm:grid-cols-3">
             {Object.entries(a.hashes).map(([k, v]) => (
-              <div key={k}>
+              <div key={k} className="min-w-0">
                 <dt className="text-xs text-slate-500">{k.replace("_hash", "")}</dt>
-                <dd className="font-mono text-xs">{v ?? "—"}</dd>
+                <dd className="font-mono text-xs break-all">
+                  {v ? (
+                    <button
+                      type="button"
+                      title={`${v}\n${t("answers.copy")}`}
+                      onClick={() => navigator.clipboard?.writeText(v)}
+                      className="rounded px-1 py-0.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800"
+                    >
+                      {v.slice(0, 16)}…
+                    </button>
+                  ) : (
+                    "—"
+                  )}
+                </dd>
               </div>
             ))}
           </dl>
