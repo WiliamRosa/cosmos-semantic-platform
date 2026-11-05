@@ -45,10 +45,22 @@ function OverviewBody({ o }: { o: Overview }) {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat label={t("overview.metrics")} value={o.counts.metrics} hint={t("overview.measures", { n: o.counts.measures })} />
-        <Stat label={t("overview.rules")} value={o.counts.rules} />
-        <Stat label={t("overview.concepts")} value={o.counts.concepts} />
-        <Stat label={t("overview.processes")} value={o.counts.processes} />
+        <Stat
+          label={t("overview.metrics")}
+          value={o.counts.metrics}
+          href="/catalog/?kind=metric"
+          hint={
+            <Link
+              href="/catalog/?kind=measure"
+              className="hover:text-sky-700 hover:underline dark:hover:text-sky-400"
+            >
+              {t("overview.measures", { n: o.counts.measures })}
+            </Link>
+          }
+        />
+        <Stat label={t("overview.rules")} value={o.counts.rules} href="/catalog/?kind=rule" />
+        <Stat label={t("overview.concepts")} value={o.counts.concepts} href="/catalog/?kind=concept" />
+        <Stat label={t("overview.processes")} value={o.counts.processes} href="/processes/" />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -104,12 +116,19 @@ function OverviewBody({ o }: { o: Overview }) {
           </div>
           <ul className="mt-4 space-y-2 text-sm">
             {STATES.map((s) => (
-              <li key={s} className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <span className={`h-2.5 w-2.5 rounded-full ${STATE_STYLE[s].dot}`} />
-                  {stateLabel(s)}
-                </span>
-                <span className="tabular-nums text-slate-600 dark:text-slate-400">{g.metric_health[s]}</span>
+              <li key={s}>
+                <Link
+                  href={`/catalog/?kind=metric&state=${s}`}
+                  className="-mx-2 flex items-center justify-between rounded-md px-2 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-800"
+                >
+                  <span className="flex items-center gap-2">
+                    <span className={`h-2.5 w-2.5 rounded-full ${STATE_STYLE[s].dot}`} />
+                    {stateLabel(s)}
+                  </span>
+                  <span className="tabular-nums text-slate-600 dark:text-slate-400">
+                    {g.metric_health[s]} →
+                  </span>
+                </Link>
               </li>
             ))}
           </ul>

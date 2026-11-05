@@ -101,18 +101,48 @@ export function Stat({
   label,
   value,
   hint,
+  href,
 }: {
   label: string;
   value: React.ReactNode;
   hint?: React.ReactNode;
+  /** Makes the number a link to the list behind it. */
+  href?: string;
 }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-      <div className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</div>
+  const box =
+    "rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900";
+  const body = (
+    <>
+      <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
+        {label}
+        {href && (
+          <span aria-hidden className="text-slate-400 group-hover:text-sky-600">
+            →
+          </span>
+        )}
+      </div>
       <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-900 dark:text-slate-50">
         {value}
       </div>
-      {hint && <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{hint}</div>}
+    </>
+  );
+  if (!href) {
+    return (
+      <div className={box}>
+        {body}
+        {hint && <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{hint}</div>}
+      </div>
+    );
+  }
+  // The whole card is the link; a hint that is a link of its own sits above it.
+  return (
+    <div className={`group relative transition hover:border-sky-300 hover:shadow-md ${box}`}>
+      <Link href={href} className="block before:absolute before:inset-0">
+        {body}
+      </Link>
+      {hint && (
+        <div className="relative mt-1 text-xs text-slate-500 dark:text-slate-400">{hint}</div>
+      )}
     </div>
   );
 }
