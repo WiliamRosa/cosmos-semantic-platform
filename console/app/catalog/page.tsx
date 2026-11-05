@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
 import { AnswerList } from "@/components/AnswerList";
 import { ReconciliationTable } from "@/components/ReconciliationTable";
@@ -15,7 +15,7 @@ import {
   Reasons,
   StateBadge,
 } from "@/components/ui";
-import { type CatalogItem, endpoints, type Labels, type Member } from "@/lib/api";
+import { type CatalogItem, endpoints, type Labels, type Member, type State } from "@/lib/api";
 import { type Key, useI18n } from "@/lib/i18n";
 import { useLoad } from "@/lib/session";
 
@@ -33,12 +33,27 @@ function Catalog() {
 }
 
 const KINDS = ["metric", "measure", "rule", "concept"] as const;
+const STATES: State[] = ["failing", "attention", "unchecked", "healthy"];
 
 function CatalogList() {
-  const { t, label } = useI18n();
+  const { t, label, state: stateLabel } = useI18n();
   const loaded = useLoad(endpoints.catalog, "catalog");
+  const params = useSearchParams();
+  const router = useRouter();
   const [query, setQuery] = useState("");
-  const [kind, setKind] = useState<string>("all");
+  // Kind and state live in the URL, so the overview can link to a filtered list.
+  const kind = KINDS.find((k) => k === params.get("kind")) ?? "all";
+  const state = STATES.find((s) => s === params.get("state")) ?? null;
+  const go = (next: { kind?: string; state?: string | null }) => {
+    const q = new URLSearchParams();
+    const k = next.kind ?? kind;
+    const s = next.state === undefined ? state : next.state;
+    if (k !== "all") q.set("kind", k);
+    if (s) q.set("state", s);
+    const search = q.toString();
+    router.replace(`/catalog/${search ? `?${search}` : ""}`, { scroll: false });
+  };
+  const setKind = (k: string) => go({ kind: k });
   return (
     <>
       <PageHeader title={t("catalog.title")} lead={t("catalog.lead")} />
@@ -62,10 +77,19 @@ function CatalogList() {
             {k === "all" ? t("common.all") : t(`kind.${k}` as Key)}
           </button>
         ))}
+        {state && (
+          <button
+            onClick={() => go({ state: null })}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-sky-50 px-3 py-1.5 text-sm text-sky-800 ring-1 ring-sky-200 hover:bg-sky-100 dark:bg-sky-950 dark:text-sky-200 dark:ring-sky-800"
+            title={t("catalog.clearState")}
+          >
+            {stateLabel(state)} <span aria-hidden>×</span>
+          </button>
+        )}
       </div>
       <Loader loaded={loaded}>
         {({ items }) => (
-          <Filtered items={items} query={query} kind={kind} label={label} />
+          <Filtered items={items} query={query} kind={kind} state={state} label={label} />
         )}
       </Loader>
     </>
@@ -76,11 +100,13 @@ function Filtered({
   items,
   query,
   kind,
+  state,
   label,
 }: {
   items: CatalogItem[];
   query: string;
   kind: string;
+  state: State | null;
   label: (l: Labels | undefined, f: string) => string;
 }) {
   const { t, count } = useI18n();
@@ -89,12 +115,13 @@ function Filtered({
     return items.filter(
       (i) =>
         (kind === "all" || i.kind === kind) &&
+        (!state || i.state === state) &&
         (!q ||
           [i.name, i.owner, i.description, label(i.label, ""), ...(i.concepts ?? [])]
             .filter(Boolean)
             .some((v) => String(v).toLowerCase().includes(q))),
     );
-  }, [items, query, kind, label]);
+  }, [items, query, kind, state, label]);
   if (!shown.length) return <Empty>{t("common.none")}</Empty>;
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
