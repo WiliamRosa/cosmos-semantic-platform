@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { DEMO } from "@/lib/api";
 import { type Key, useI18n } from "@/lib/i18n";
 import { useSession } from "@/lib/session";
 
@@ -52,6 +53,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <Languages className="h-4 w-4" />
               {t("lang.switch")}
             </button>
+            {!DEMO && (
             <button
               onClick={hasCredential ? signOut : requireAuth}
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
@@ -59,6 +61,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <KeyRound className="h-4 w-4" />
               {hasCredential ? t("auth.signout") : t("auth.change")}
             </button>
+            )}
           </div>
         </div>
         <nav className="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-4 pb-2">
@@ -78,6 +81,22 @@ export function Shell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
       </header>
+      {DEMO && (
+        <div className="border-b border-sky-200 bg-sky-50 text-sm text-sky-900 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-100">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2">
+            <span className="font-medium">{t("demo.banner")}</span>
+            <code className="rounded bg-white/70 px-1.5 py-0.5 font-mono text-xs dark:bg-slate-900/60">
+              pip install "cosmos-semantic[duckdb,testdata,server]"
+            </code>
+            <a
+              href="https://github.com/WiliamRosa/cosmos-semantic-platform"
+              className="font-medium underline underline-offset-2"
+            >
+              GitHub →
+            </a>
+          </div>
+        </div>
+      )}
       <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
       {needsAuth && <SignIn />}
     </div>

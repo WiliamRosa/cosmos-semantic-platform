@@ -6,15 +6,28 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/LICENSE)
 [![Good first issues](https://img.shields.io/github/issues/WiliamRosa/cosmos-semantic-platform/good%20first%20issue)](https://github.com/WiliamRosa/cosmos-semantic-platform/labels/good%20first%20issue)
 
-> Repository: `cosmos-semantic-platform`. License: open core, with the core under Apache 2.0 ([ADR 0005](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/decisions/0005-open-core.md)).
+**An open-source semantic layer with an ontology at its core, so AI agents and apps get the same number on every database, with the proof in every answer.**
 
-A semantic layer for AI agents and applications, with **its own engine**: its own versioned YAML format with the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and a JSON Schema, SQL generation for each data source, and native interoperability with [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (formerly Open Semantic Interchange, OSI). [Cube](https://github.com/cube-js/cube) and dbt are **import sources and export targets**, not dependencies.
+<!-- mcp-name: io.github.WiliamRosa/cosmos-semantic -->
 
-**Status:** phases 0 to 3 are implemented: the engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity, verifiable numbers (evidence, replay, reconciliation, impact, bootstrap) and business context (rule versions, usage and cost, knowledge graph, Power BI import, AI-assisted discovery, the retail pack, SKOS export). The whole test suite passes on DuckDB, Postgres, SQL Server, MySQL, MariaDB, Oracle, Databricks and Snowflake. See the [roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md).
+**[Live demo of the console](https://wiliamrosa.github.io/cosmos-semantic-platform/)** · [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) · [Docs](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs) · [Article](https://wiliamrosa.github.io/articles/cosmos-semantic-camada-semantica-numeros-verificaveis/) (Portuguese)
 
-## In one sentence
+[![The read-only console: metric health, a business process as a graph colored by health, and a metric that diverges from a legacy report](https://raw.githubusercontent.com/WiliamRosa/cosmos-semantic-platform/main/docs/assets/console-tour.gif)](https://wiliamrosa.github.io/cosmos-semantic-platform/)
 
-Define entities, metrics, business concepts and business rules once, and any AI agent or application queries the same number, with SQL generated and run directly on your data source, and the model portable to Ossie, Cube and dbt.
+AI agents that write SQL over raw tables return numbers that look right and that nobody can explain: "revenue" has three definitions, "active customer" means 60 days to one team and 90 to another. Cosmos Semantic defines metrics, business rules and concepts once, serves them to agents over MCP instead of letting them guess SQL, and attaches evidence to every answer.
+
+| | |
+| --- | --- |
+| **Multi-database** | One model, the same number on Databricks, Snowflake, Oracle, SQL Server, Postgres, MySQL, MariaDB and DuckDB, checked by the test suite on every change |
+| **Ontology** | A bilingual business glossary (SKOS), versioned business rules with owners and tests, and a knowledge graph of teams, systems and processes |
+| **Built for AI agents** | A native MCP server: agents find the concept, ask for a governed metric and get deterministic SQL; personal data never reaches them |
+| **Verifiable numbers** | Every answer carries the expanded formula, rules, row filters, reference date and hashes; `cosmos replay` tells whether a number changed and why |
+| **Reconciliation** | Compares a governed metric with the legacy SQL a team already uses and names the likely cause of each divergence |
+| **Open, no lock-in** | Apache 2.0, its own engine, and import from dbt, Power BI, Cube and [Apache Ossie](https://github.com/open-semantic-interchange/OSI) |
+
+The YAML format uses the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and ships a JSON Schema; [Cube](https://github.com/cube-js/cube) and dbt are import sources and export targets, not dependencies. The core is Apache 2.0 within an open-core model ([ADR 0005](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/decisions/0005-open-core.md)).
+
+**Status:** phases 0 to 3 are implemented: the engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity, verifiable numbers (evidence, replay, reconciliation, impact, bootstrap), business context (rule versions, usage and cost, knowledge graph, Power BI import, AI-assisted discovery, the retail pack, SKOS export) and the read-only console. See the [roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md).
 
 ## Quickstart
 

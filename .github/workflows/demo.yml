@@ -1,0 +1,56 @@
+name: demo
+
+# The public console demo on GitHub Pages (ADR 0012): a static build that reads JSON snapshots
+# of the example model with synthetic data, regenerated on every change to main.
+on:
+  push:
+    branches: [main]
+    paths: ["console/**", "src/**", "examples/**", ".github/workflows/demo.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: uv sync --extra duckdb --extra testdata
+      - name: Snapshot the example model
+        run: uv run python console/demo/snapshot.py console/public/demo-data
+      - name: Build the demo
+        working-directory: console
+        env:
+          NEXT_PUBLIC_COSMOS_DEMO: "1"
+          NEXT_PUBLIC_BASE_PATH: /cosmos-semantic-platform
+        run: |
+          npm ci
+          npx next build
+          node scripts/flatten-segments.mjs out
+          touch out/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: console/out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

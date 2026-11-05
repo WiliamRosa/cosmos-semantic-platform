@@ -9,6 +9,12 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- A public demo of the console on GitHub Pages (https://wiliamrosa.github.io/cosmos-semantic-platform/),
+  rebuilt on every change to `main`. It needs no server: `console/demo/snapshot.py` runs the
+  example model on synthetic data and writes each console view as JSON, and the console's demo
+  build reads those files.
+- `cosmos-semantic` as a second name for the `cosmos` command, so `uvx cosmos-semantic mcp ...`
+  works, and a `server.json` for the official MCP registry.
 - A read-only console at `/console` ([ADR 0012](docs/decisions/0012-read-only-console.md), [docs](docs/console.md)),
   in English and Brazilian Portuguese, for people who decide:
   - metric health and ownership;

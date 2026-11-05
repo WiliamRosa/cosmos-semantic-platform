@@ -64,6 +64,8 @@ Issues = "https://github.com/WiliamRosa/cosmos-semantic-platform/issues"
 
 [project.scripts]
 cosmos = "cosmos_semantic.cli:app"
+# Same command under the package name, so `uvx cosmos-semantic ...` works (MCP registry).
+cosmos-semantic = "cosmos_semantic.cli:app"
 
 [dependency-groups]
 dev = [
