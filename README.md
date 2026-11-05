@@ -10,7 +10,7 @@
 
 <!-- mcp-name: io.github.WiliamRosa/cosmos-semantic -->
 
-**[Live demo of the console](https://wiliamrosa.github.io/cosmos-semantic-platform/)** · [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) · [Docs](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs) · [Article](https://dev.to/wiliamrosa/cosmos-semantic-an-open-source-semantic-layer-that-makes-ai-agents-get-the-number-right-and-prove-1c06) ([em português](https://wiliamrosa.github.io/articles/cosmos-semantic-camada-semantica-numeros-verificaveis/))
+**[Live demo of the console](https://wiliamrosa.github.io/cosmos-semantic-platform/)** · [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) · [Docs](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs) · [Article](https://dev.to/wiliamrosa/cosmos-semantic-an-open-source-semantic-layer-that-makes-ai-agents-get-the-number-right-and-prove-1c06) 
 
 [![The read-only console: metric health, a business process as a graph colored by health, and a metric that diverges from a legacy report](https://raw.githubusercontent.com/WiliamRosa/cosmos-semantic-platform/main/docs/assets/console-tour.gif)](https://wiliamrosa.github.io/cosmos-semantic-platform/)
 
