@@ -6,7 +6,7 @@ become entities. DAX measures are translated when they map onto the Cosmos metri
 
 | DAX | Cosmos |
 | --- | --- |
-| ``SUM``, ``AVERAGE``, ``MIN``, ``MAX``, ``COUNT``, ``DISTINCTCOUNT``, ``COUNTROWS`` | measure |
+| ``SUM``, ``AVERAGE``, ``MIN``, ``MAX``, ``COUNT``, ``DISTINCTCOUNT``, ``DISTINCTCOUNTNOBLANK``, ``COUNTROWS`` | measure |
 | ``DIVIDE(a, b)`` | ratio metric |
 | ``CALCULATE(m, T[c] = "x", ...)`` with simple column filters | metric with ``filter`` |
 | ``TOTALYTD``, ``TOTALQTD``, ``TOTALMTD`` | cumulative metric |
@@ -48,6 +48,7 @@ _AGGS = {
     "COUNT": "count",
     "COUNTA": "count",
     "DISTINCTCOUNT": "count_distinct",
+    "DISTINCTCOUNTNOBLANK": "count_distinct",
 }
 _TO_DATE = {"TOTALYTD": "year", "TOTALQTD": "quarter", "TOTALMTD": "month"}
 
@@ -676,6 +677,13 @@ class _Translator:
         kind = tree[0]
 
         if kind == "call" and (tree[1] in _AGGS or tree[1] == "COUNTROWS"):
+            if tree[1] == "DISTINCTCOUNT":
+                self.warnings.append(
+                    f"measure `{pbi_name}`: in DAX a DISTINCTCOUNT counts BLANK as a value, "
+                    "while Cosmos `count_distinct` ignores nulls; the imported measure is "
+                    "one lower than Power BI whenever the column has nulls. Use "
+                    "DISTINCTCOUNTNOBLANK in Power BI to match, or accept the difference"
+                )
             self.done[pbi_name] = self.aggregation(tree, name, description)
             return
         if kind == "call" and tree[1] == "DIVIDE":
