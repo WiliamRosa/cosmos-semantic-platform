@@ -6,7 +6,7 @@ import type { AnswerRow } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 export function AnswerList({ answers }: { answers: AnswerRow[] }) {
-  const { t, date, number } = useI18n();
+  const { t, date, number, count } = useI18n();
   return (
     <ul className="divide-y divide-slate-100 dark:divide-slate-800">
       {answers.map((a) => {
@@ -33,7 +33,7 @@ export function AnswerList({ answers }: { answers: AnswerRow[] }) {
               <div className="shrink-0 text-right text-xs">
                 {a.outcome === "ok" ? (
                   <span className="tabular-nums text-slate-600 dark:text-slate-400">
-                    {number(a.row_count)} {t("answers.rows")} · {number(a.duration_ms)} ms
+                    {count(a.row_count, "answers.row", "answers.rows")} · {number(a.duration_ms)} ms
                   </span>
                 ) : (
                   <span className="text-rose-700 dark:text-rose-300">{t("answers.failed")}</span>
