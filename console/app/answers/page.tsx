@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { AnswerList } from "@/components/AnswerList";
-import { Card, Code, Empty, Loader, MemberLink, PageHeader } from "@/components/ui";
+import { Card, Code, Empty, Loader, MemberLink, PageHeader, Rich } from "@/components/ui";
 import { type AnswerDetail, ApiError, endpoints } from "@/lib/api";
 import { type Key, useI18n } from "@/lib/i18n";
 import { useLoad } from "@/lib/session";
@@ -78,7 +78,8 @@ function AnswerBody({ a }: { a: AnswerDetail }) {
     try {
       setReplay(await endpoints.replay(a.query_id));
     } catch (err) {
-      setReplay({ error: err instanceof ApiError ? err.message : String(err) });
+      if (err instanceof ApiError && err.status === 501) setReplay({ error: t("answers.demoReplay") });
+      else setReplay({ error: err instanceof ApiError ? err.message : String(err) });
     } finally {
       setBusy(false);
     }
@@ -199,7 +200,7 @@ function AnswerBody({ a }: { a: AnswerDetail }) {
                   : "bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200"
               }`}
             >
-              {"verdict" in replay ? t(`answers.verdict.${replay.verdict}` as Key) : replay.error}
+              {"verdict" in replay ? t(`answers.verdict.${replay.verdict}` as Key) : <Rich text={replay.error} />}
             </div>
           )}
         </Card>

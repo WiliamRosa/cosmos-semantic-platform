@@ -19,6 +19,8 @@ const en = {
   "nav.usage": "Usage and cost",
   "lang.switch": "Português",
   "auth.title": "Sign in to the console",
+  "demo.banner": "Live demo of the read-only console, with synthetic data from the example model.",
+  "answers.demoReplay": "Replaying runs the query again on the data source; try it with `cosmos serve`.",
   "auth.help":
     "Paste an API key or an access token from your identity provider. It stays in this browser only.",
   "auth.placeholder": "API key or token",
@@ -202,6 +204,8 @@ const pt: Record<Key, string> = {
   "nav.usage": "Uso e custo",
   "lang.switch": "English",
   "auth.title": "Entrar no console",
+  "demo.banner": "Demonstração do console de leitura, com dados sintéticos do modelo de exemplo.",
+  "answers.demoReplay": "Reproduzir roda a consulta de novo na fonte de dados; experimente com o `cosmos serve`.",
   "auth.help":
     "Cole uma chave de API ou um token de acesso do seu provedor de identidade. Ele fica só neste navegador.",
   "auth.placeholder": "Chave de API ou token",

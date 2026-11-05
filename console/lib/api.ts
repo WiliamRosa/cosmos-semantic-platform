@@ -225,7 +225,22 @@ function headers(): HeadersInit {
 
 const BASE = process.env.NEXT_PUBLIC_COSMOS_API ?? "";
 
+/** The public demo has no server: it reads JSON snapshots made by console/demo/snapshot.py. */
+export const DEMO = process.env.NEXT_PUBLIC_COSMOS_DEMO === "1";
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "/console";
+
+/** Same rule as `slug` in console/demo/snapshot.py. */
+function slug(path: string): string {
+  return decodeURIComponent(path).replace(/^\/+|\/+$/g, "").replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  if (DEMO) {
+    if (init?.method && init.method !== "GET") throw new ApiError(501, "demo");
+    const response = await fetch(`${BASE_PATH}/demo-data/${slug(path)}.json`);
+    if (!response.ok) throw new ApiError(404, "not in the demo");
+    return response.json() as Promise<T>;
+  }
   const response = await fetch(`${BASE}${path}`, {
     ...init,
     headers: { ...headers(), ...(init?.headers ?? {}) },

@@ -58,6 +58,20 @@ Health always uses the same four states:
 | Healthy | Its tests pass and, for a metric, its last reconciliation matched |
 | Not verified | Nothing verifies it yet |
 
+## Public demo
+
+[wiliamrosa.github.io/cosmos-semantic-platform](https://wiliamrosa.github.io/cosmos-semantic-platform/) is the console on the example model with synthetic data. The `demo` workflow rebuilds it on every change to `main`, and it needs no server:
+
+1. `console/demo/snapshot.py` runs the example model on an in-memory DuckDB, answers a set of questions as people and as agents, records a check run, and writes each console view as JSON.
+2. The demo build (`NEXT_PUBLIC_COSMOS_DEMO=1`) reads those files instead of calling the API.
+
+Replaying an answer needs a data source, so the demo explains that instead.
+
+```bash
+uv run python console/demo/snapshot.py console/public/demo-data
+cd console && NEXT_PUBLIC_COSMOS_DEMO=1 NEXT_PUBLIC_BASE_PATH=/cosmos-semantic-platform npx next build
+```
+
 ## Develop it
 
 The sources are in `console/`: Next.js 16 (static export), React 19, TypeScript, Tailwind CSS 4, React Flow and Recharts.
