@@ -22,7 +22,20 @@ jobs:
       - run: uv sync --all-extras
       - run: uv run ruff check src tests
       - run: uv run pytest -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: Build the console (ADR 0012)
+        working-directory: console
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
       - run: uv build
+      - name: The wheel ships the console
+        run: python -c "import glob, sys, zipfile; names = zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist(); sys.exit(0 if any(n.endswith('console_dist/index.html') for n in names) else 'console missing from the wheel')"
       - run: uvx twine check --strict dist/*
       - name: The wheel installs and runs the quickstart
         run: |

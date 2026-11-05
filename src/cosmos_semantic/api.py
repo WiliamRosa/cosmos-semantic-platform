@@ -7,6 +7,8 @@ that metadata, so clients such as Claude can discover the identity provider and 
 """
 
 import json
+import os
+from pathlib import Path
 from typing import Annotated, Any
 
 import anyio
@@ -215,4 +217,95 @@ def create_app(
             "data_source": compiled.data_source,
         }
 
+    _add_console(app, service, User)
     return app
+
+
+CONSOLE_DIST = Path(__file__).parent / "console_dist"
+
+
+def _console_files(directory: Path = CONSOLE_DIST):
+    """Static files for the console. Next.js prefetches route segments as
+    ``__next.<route>.<segment>.txt`` while its static export writes them as
+    ``__next.<route>/<segment>.txt``; the dotted name is mapped to the file."""
+    from fastapi.staticfiles import StaticFiles
+
+    class ConsoleFiles(StaticFiles):
+        def lookup_path(self, path: str):
+            found = super().lookup_path(path)
+            # Starlette hands over an OS path (backslashes on Windows).
+            head, _, name = path.replace("\\", "/").rpartition("/")
+            if found[1] is None and name.startswith("__next.") and name.endswith(".txt"):
+                parts = name[: -len(".txt")].split(".")
+                if len(parts) > 2:
+                    nested = "/".join([f"{parts[0]}.{parts[1]}", *parts[2:]]) + ".txt"
+                    return super().lookup_path(f"{head}/{nested}" if head else nested)
+            return found
+
+    return ConsoleFiles(directory=directory, html=True)
+
+
+def _add_console(app: FastAPI, service: SemanticService, User: Any) -> None:
+    """Read-only console views (ADR 0012) under /v1/console, and the built web app at /console."""
+    from cosmos_semantic.console import Console
+
+    console = Console(service)
+
+    @app.get("/v1/console/overview", summary="Console: model, governance, health and usage")
+    def console_overview(user: User) -> dict[str, Any]:
+        return console.overview(user)
+
+    @app.get("/v1/console/processes", summary="Console: business processes and their health")
+    def console_processes(_user: User) -> list[dict[str, Any]]:
+        return console.processes()
+
+    @app.get("/v1/console/graph", summary="Console: knowledge graph with health per node")
+    def console_graph(_user: User, focus: str | None = None) -> dict[str, Any]:
+        return console.graph_view(focus)
+
+    @app.get("/v1/console/catalog", summary="Console: metrics, rules and concepts with status")
+    def console_catalog(_user: User) -> dict[str, Any]:
+        return console.catalog()
+
+    @app.get("/v1/console/members/{member_id:path}", summary="Console: one member in detail")
+    def console_member(member_id: str, user: User) -> dict[str, Any]:
+        return console.member(member_id, user)
+
+    @app.get("/v1/console/answers", summary="Console: recent audited answers")
+    def console_answers(user: User, limit: int = 50, metric: str | None = None) -> dict[str, Any]:
+        return console.answers(user, limit=min(limit, 500), metric=metric)
+
+    @app.get("/v1/console/answers/{query_id}", summary="Console: one audited answer")
+    def console_answer(query_id: str, user: User) -> dict[str, Any]:
+        return console.answer(query_id, user)
+
+    @app.get("/v1/console/usage", summary="Console: usage and estimated cost (admins)")
+    def console_usage(user: User) -> dict[str, Any]:
+        return console.usage(user)
+
+    @app.get("/v1/console/runs", summary="Console: check runs (rule tests, reconciliations)")
+    def console_runs(_user: User, limit: int = 30) -> dict[str, Any]:
+        return console.runs(limit=min(limit, 500))
+
+    if (CONSOLE_DIST / "index.html").exists():
+        app.mount("/console", _console_files(), name="console")
+    else:
+
+        @app.get("/console", include_in_schema=False)
+        def console_missing() -> Response:
+            return Response(
+                "<p>The console is not built in this installation. From a source checkout run "
+                "<code>npm ci &amp;&amp; npm run build</code> in <code>console/</code>.</p>",
+                media_type="text/html",
+            )
+
+    origins = [o.strip() for o in os.environ.get("COSMOS_CORS_ORIGINS", "").split(",") if o]
+    if origins:  # for the console's dev server (`npm run dev`) on another port
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization", "X-API-Key", "Content-Type"],
+        )

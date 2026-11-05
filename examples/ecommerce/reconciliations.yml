@@ -1,0 +1,56 @@
+# Reconciliation cases for `cosmos check` (ADR 0012): the legacy reports a team already uses,
+# each compared with the governed metric on every run. Unlike the divergence zoo, these cases
+# carry no expectation: a case passes when the legacy numbers match the governed ones, and the
+# console shows the likely cause when they do not.
+#
+#   cosmos check -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml \
+#     --cases examples/ecommerce/reconciliations.yml --log runs.jsonl
+#
+# Legacy columns are matched by position: dimensions first, then the value.
+
+cases:
+  - id: FIN-01
+    title: Finance monthly revenue report (counts every order, canceled ones included)
+    request:
+      metrics: [completed_revenue]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      SELECT DATE_TRUNC('month', ordered_at), SUM(amount) FROM public.orders GROUP BY 1
+    sql_by_dialect:
+      tsql: |
+        SELECT DATETRUNC(month, ordered_at), SUM(amount) FROM public.orders
+        GROUP BY DATETRUNC(month, ordered_at)
+      mysql: |
+        SELECT CAST(DATE_FORMAT(ordered_at, '%Y-%m-01') AS DATETIME), SUM(amount)
+        FROM public.orders GROUP BY CAST(DATE_FORMAT(ordered_at, '%Y-%m-01') AS DATETIME)
+      oracle: |
+        SELECT TRUNC(ordered_at, 'MM'), SUM(amount) FROM public.orders
+        GROUP BY TRUNC(ordered_at, 'MM')
+
+  - id: OPS-02
+    title: Operations dashboard, orders by status
+    request:
+      metrics: [order_count]
+      dimensions: [orders.status]
+    sql: |
+      SELECT status, COUNT(*) FROM public.orders GROUP BY status
+
+  - id: SAL-03
+    title: Sales scorecard, revenue by status
+    request:
+      metrics: [revenue]
+      dimensions: [orders.status]
+    sql: |
+      SELECT status, SUM(amount) FROM public.orders GROUP BY status
+
+  - id: SAL-04
+    title: Midwest sales scorecard, buyers by segment (counts order rows, not customers)
+    request:
+      metrics: [buyers]
+      dimensions: [customers.segment]
+    user: { region: Midwest }   # customers have a row filter by region
+    sql: |
+      SELECT c.segment, COUNT(o.customer_id)
+      FROM public.orders o JOIN public.customers c ON c.customer_id = o.customer_id
+      WHERE c.region = 'Midwest'
+      GROUP BY c.segment

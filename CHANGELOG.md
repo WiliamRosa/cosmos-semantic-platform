@@ -9,6 +9,19 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- A read-only console at `/console` ([ADR 0012](docs/decisions/0012-read-only-console.md), [docs](docs/console.md)),
+  in English and Brazilian Portuguese, for people who decide:
+  - metric health and ownership;
+  - business processes as graphs colored by health;
+  - the catalog with definitions, rule versions, reconciliations and impact;
+  - audited answers with replay;
+  - check history;
+  - usage and cost (admins, `COSMOS_CONSOLE_ADMINS`).
+
+  Built with Next.js, React and Tailwind CSS as a static export that the wheel ships; served by `cosmos serve`.
+- `cosmos check` runs the rule tests and reconciliation cases, appends the run to
+  `COSMOS_RUNS_LOG` and exits with 1 when something fails. Reconciliation cases no longer need
+  `expect`: without it, a case passes when the legacy numbers match.
 - `cosmos suggest` takes `--source` more than once and accepts a suggestion only if it runs on
   every source given, so SQL that one database accepts and another rejects is caught.
 
