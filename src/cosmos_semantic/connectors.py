@@ -26,7 +26,11 @@ DIALECTS = {
     "postgres": "postgres",
     "duckdb": "duckdb",
     "databricks": "databricks",
+    "snowflake": "snowflake",
     "sqlserver": "tsql",
+    "mysql": "mysql",
+    "mariadb": "mysql",  # SQLGlot has no MariaDB dialect; the MySQL one covers what we generate
+    "oracle": "oracle",
 }
 
 
@@ -44,10 +48,15 @@ class CostRates(BaseModel):
 class DataSourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["postgres", "duckdb", "databricks", "sqlserver"]
+    type: Literal[
+        "postgres", "duckdb", "databricks", "snowflake", "sqlserver", "mysql", "mariadb", "oracle"
+    ]
     driver: Literal["adbc", "sqlalchemy", "native"] | None = Field(
         None,
-        description="Default: adbc for postgres, native for duckdb and databricks, sqlalchemy for sqlserver.",
+        description=(
+            "Default: adbc for postgres, native for duckdb, databricks, snowflake and oracle, "
+            "sqlalchemy for sqlserver, mysql and mariadb."
+        ),
     )
     uri: str | None = None
     path: str | None = Field(None, description="DuckDB database file.")
@@ -253,6 +262,140 @@ class DatabricksConnector(Connector):
         self._con.close()
 
 
+class SnowflakeConnector(Connector):
+    """Snowflake warehouse; the official connector fetches results as Arrow.
+
+    Authentication is whatever ``snowflake.connector.connect`` accepts in ``options``: a key pair
+    (``private_key_file``), a named connection from ``~/.snowflake/connections.toml``
+    (``connection_name``), an ``authenticator`` such as ``externalbrowser``, or a password.
+    """
+
+    # Session settings that make results match the other databases: weeks start on Monday and
+    # week numbers are ISO; a query never runs longer than the source's timeout.
+    _SESSION = {"WEEK_START": 1, "WEEK_OF_YEAR_POLICY": 1}
+
+    def __init__(self, config: DataSourceConfig) -> None:
+        super().__init__(config)
+        import snowflake.connector
+
+        opts = {k: v for k, v in config.options.items() if v not in (None, "")}
+        if not opts.get("connection_name"):
+            missing = [k for k in ("account", "user") if not opts.get(k)]
+            if missing:
+                raise ModelError(
+                    f"a snowflake source needs options: {', '.join(missing)} "
+                    "(or options.connection_name)"
+                )
+        if opts.get("private_key_file"):
+            opts["private_key_file"] = os.path.expanduser(opts["private_key_file"])
+        session = {
+            **self._SESSION,
+            "STATEMENT_TIMEOUT_IN_SECONDS": int(config.timeout_seconds),
+            **opts.pop("session_parameters", {}),
+        }
+        self._con = snowflake.connector.connect(session_parameters=session, **opts)
+
+    def _run(self, sql: str, fetch_limit: int) -> pa.Table:
+        with self._con.cursor() as cur:
+            cur.execute(sql)
+            batches, count = [], 0
+            for batch in cur.fetch_arrow_batches():
+                batches.append(batch)
+                count += batch.num_rows
+                if count >= fetch_limit:
+                    break
+            if batches:
+                table = pa.concat_tables(batches).slice(0, fetch_limit)
+            else:
+                table = _empty_table([d.name for d in cur.description or []])
+        return _fold_upper_names(table)
+
+    def run_script(self, sql: str) -> None:
+        with self._con.cursor() as cur:
+            for statement in sqlglot.transpile(sql, read="snowflake", write="snowflake"):
+                cur.execute(statement)
+
+    def close(self) -> None:
+        self._con.close()
+
+
+class OracleConnector(Connector):
+    """Oracle Database through python-oracledb in thin mode: pure Python, no Instant Client.
+
+    ``options`` go to ``oracledb.connect``: ``user``, ``password`` and ``dsn``
+    (``host:port/service`` or a TNS alias). Wallet options (``config_dir``, ``wallet_location``,
+    ``wallet_password``) pass through as well, but only Oracle Database Free is tested.
+    """
+
+    # Session settings that make literals and sorting behave like the other databases.
+    _SESSION = (
+        "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS' "
+        "NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF' "
+        "NLS_NUMERIC_CHARACTERS = '.,' NLS_SORT = BINARY NLS_COMP = BINARY"
+    )
+
+    def __init__(self, config: DataSourceConfig) -> None:
+        super().__init__(config)
+        import oracledb
+
+        opts = {k: v for k, v in config.options.items() if v not in (None, "")}
+        missing = [k for k in ("user", "dsn") if not opts.get(k)]
+        if missing:
+            raise ModelError(f"an oracle source needs options: {', '.join(missing)}")
+        for key in ("config_dir", "wallet_location"):
+            if opts.get(key):
+                opts[key] = os.path.expanduser(opts[key])
+        self._con = oracledb.connect(**opts)
+        self._con.call_timeout = int(config.timeout_seconds) * 1000
+        with self._con.cursor() as cur:
+            cur.execute(self._SESSION)
+
+    @property
+    def connection(self):
+        return self._con
+
+    def _run(self, sql: str, fetch_limit: int) -> pa.Table:
+        with self._con.cursor() as cur:
+            cur.arraysize = min(fetch_limit, 10_000)
+            cur.execute(sql)
+            names = _unique_names([d[0] for d in cur.description or []])
+            rows = cur.fetchmany(fetch_limit)
+        if not rows:
+            return _fold_upper_names(_empty_table(names))
+        return _fold_upper_names(
+            pa.table({n: [_oracle_value(r[i]) for r in rows] for i, n in enumerate(names)})
+        )
+
+    def run_script(self, sql: str) -> None:
+        with self._con.cursor() as cur:
+            cur.execute(sql)
+        self._con.commit()
+
+    def close(self) -> None:
+        self._con.close()
+
+
+def _oracle_value(value: Any) -> Any:
+    """LOBs arrive as handles; read them so Arrow sees plain values."""
+    if hasattr(value, "read"):
+        return value.read()
+    return value
+
+
+def _fold_upper_names(table: pa.Table) -> pa.Table:
+    """Snowflake and Oracle fold unquoted identifiers to upper case, so the aliases the planner
+    writes (``orders__status``) come back as ``ORDERS__STATUS``. Every alias the engine generates
+    is lower case, so an all-upper-case name is folded back; mixed-case names stay as they are."""
+    names = [n.lower() if n.isupper() else n for n in table.column_names]
+    return table.rename_columns(names)
+
+
+def _empty_table(names: list[str]) -> pa.Table:
+    """An empty result has no data to take the types from; build a table with null-typed
+    columns that keep the names."""
+    return pa.table({n: pa.array([], type=pa.null()) for n in _unique_names(names)})
+
+
 class SQLAlchemyConnector(Connector):
     def __init__(self, config: DataSourceConfig) -> None:
         super().__init__(config)
@@ -261,6 +404,17 @@ class SQLAlchemyConnector(Connector):
         if not config.uri:
             raise ModelError(f"a {config.type} source using sqlalchemy needs `uri`")
         self._engine = sa.create_engine(config.uri)
+        setup = _session_setup(config)
+        if setup:
+
+            @sa.event.listens_for(self._engine, "connect")
+            def _on_connect(dbapi_con, _record) -> None:
+                cur = dbapi_con.cursor()
+                try:
+                    for statement in setup:
+                        cur.execute(statement)
+                finally:
+                    cur.close()
 
     def _run(self, sql: str, fetch_limit: int) -> pa.Table:
         import sqlalchemy as sa
@@ -279,6 +433,22 @@ class SQLAlchemyConnector(Connector):
 
     def close(self) -> None:
         self._engine.dispose()
+
+
+def _session_setup(config: DataSourceConfig) -> list[str]:
+    """Per-connection settings for SQLAlchemy sources. MySQL and MariaDB: ``||`` concatenates
+    (as in standard SQL) and queries stop at the source's timeout."""
+    if config.type == "mysql":
+        return [
+            "SET SESSION sql_mode = CONCAT(@@sql_mode, ',PIPES_AS_CONCAT')",
+            f"SET SESSION max_execution_time = {int(config.timeout_seconds) * 1000}",
+        ]
+    if config.type == "mariadb":
+        return [
+            "SET SESSION sql_mode = CONCAT(@@sql_mode, ',PIPES_AS_CONCAT')",
+            f"SET SESSION max_statement_time = {int(config.timeout_seconds)}",
+        ]
+    return []
 
 
 def _unique_names(names: list[str]) -> list[str]:
@@ -359,7 +529,11 @@ def connect(config: DataSourceConfig) -> Connector:
             "postgres": "adbc",
             "duckdb": "native",
             "databricks": "native",
+            "snowflake": "native",
+            "oracle": "native",
             "sqlserver": "sqlalchemy",
+            "mysql": "sqlalchemy",
+            "mariadb": "sqlalchemy",
         }[config.type]
     )
     if config.type == "duckdb":
@@ -368,6 +542,10 @@ def connect(config: DataSourceConfig) -> Connector:
         return ADBCPostgresConnector(config)
     if config.type == "databricks":
         return DatabricksConnector(config)
+    if config.type == "snowflake":
+        return SnowflakeConnector(config)
+    if config.type == "oracle":
+        return OracleConnector(config)
     if driver == "sqlalchemy":
         return SQLAlchemyConnector(config)
     raise ModelError(f"unsupported combination: {config.type} with {driver}")

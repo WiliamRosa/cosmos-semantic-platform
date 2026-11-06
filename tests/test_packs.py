@@ -18,7 +18,16 @@ from cosmos_semantic.packs import PACKS_DIR, apply_pack, available, map_tables
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
 from cosmos_semantic.spec import Project
 
-SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"]
+SOURCES = [
+    "duckdb_connector",
+    "postgres_connector",
+    "sqlserver_connector",
+    "databricks_connector",
+    "snowflake_connector",
+    "mysql_connector",
+    "mariadb_connector",
+    "oracle_connector",
+]
 EXAMPLE = Path(__file__).parents[1] / "examples" / "ecommerce" / "semantic"
 MIDWEST = Principal(user={"region": "Midwest"})
 

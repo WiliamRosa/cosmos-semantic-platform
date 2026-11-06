@@ -507,6 +507,78 @@ def reconcile(
     _print_reconciliation(report)
 
 
+@app.command()
+def check(
+    model: ModelOpt = Path("semantic"),
+    connections: ConnOpt = Path("connections.yml"),
+    source: SourceOpt = None,
+    cases: Annotated[
+        Path | None,
+        typer.Option(
+            "--cases",
+            help="Reconciliation cases (legacy SQL per metric); without it only rule tests run.",
+        ),
+    ] = None,
+    log: Annotated[
+        Path | None,
+        typer.Option("--log", help="Runs log to append to; default: COSMOS_RUNS_LOG."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Runs the rule tests and the reconciliation cases and records the run, so the console
+    shows health over time. Exits with 1 when a test or a reconciliation fails (for CI)."""
+    import os
+
+    from cosmos_semantic.checks import append_run, run_checks, run_ok
+    from cosmos_semantic.evidence import EvidenceBuilder
+    from cosmos_semantic.reconcile import load_zoo
+
+    connector = None
+    try:
+        graph = compile_project(load_project(model))
+        loaded = load_zoo(cases) if cases else []
+        name = None
+        if loaded:
+            conns = load_connections(connections)
+            name = source or conns.default or next(iter(conns.data_sources))
+            connector = connect(conns.data_sources[name])
+        run = run_checks(
+            graph,
+            model_hash=EvidenceBuilder(graph).model_hash,
+            connector=connector,
+            source=name,
+            cases=loaded,
+        )
+    except (errors.CosmosError, KeyError) as exc:
+        _fail(exc)
+    finally:
+        if connector is not None:
+            connector.close()
+    path = log or os.environ.get("COSMOS_RUNS_LOG")
+    if path:
+        append_run(path, run)
+    if as_json:
+        typer.echo(json.dumps(run, default=str, ensure_ascii=False, indent=2))
+    else:
+        tests = run["rule_tests"]
+        typer.echo(f"rule tests       {tests['passed']}/{tests['total']} pass")
+        for failure in tests["failures"]:
+            typer.secho(
+                f"  FAIL {failure['rule']} #{failure['test']}: {failure['detail']}", fg="red"
+            )
+        for case in run["reconciliations"]:
+            causes = ", ".join(c["code"] for c in case.get("causes", [])) or "-"
+            ok = case["outcome"] == "pass"
+            typer.secho(
+                f"{case['id']:6} {case['outcome']:7} {case.get('status', ''):9} {causes:30} "
+                f"{case['title']}",
+                fg=typer.colors.GREEN if ok else typer.colors.RED,
+            )
+        typer.echo(f"recorded in {path}" if path else "not recorded (set COSMOS_RUNS_LOG or --log)")
+    if not run_ok(run):
+        raise typer.Exit(1)
+
+
 def _print_reconciliation(report: dict) -> None:
     color = typer.colors.GREEN if report["status"] == "match" else typer.colors.YELLOW
     typer.secho(f"{report['status']}: {report['metric']}", fg=color, bold=True)
@@ -708,8 +780,13 @@ def suggest(
         Path, typer.Option("--output", "-o", help="YAML with the accepted suggestions.")
     ] = Path("suggestions.yml"),
     source: Annotated[
-        str | None,
-        typer.Option(help="Data source to validate suggestions by running them; default: none."),
+        list[str] | None,
+        typer.Option(
+            help=(
+                "Data source to validate suggestions by running them; repeat it for every "
+                "source the model serves (samples come from the first). Default: none."
+            )
+        ),
     ] = None,
     samples: Annotated[
         bool,
@@ -726,14 +803,15 @@ def suggest(
     from cosmos_semantic.discovery import ClaudeSuggestionModel, discover
     from cosmos_semantic.interchange import dump_project
 
-    if samples and source is None:
+    if samples and not source:
         _fail(ValueError("--samples needs --source"))
     try:
         compiled = compile_project(load_project(model))
-        connector = None
-        if source is not None:
-            connector = Engine(compiled, load_connections(connections)).connector(source)
-        report = discover(compiled, ClaudeSuggestionModel(llm), connector, samples=samples)
+        connectors = []
+        if source:
+            engine = Engine(compiled, load_connections(connections))
+            connectors = [engine.connector(name) for name in source]
+        report = discover(compiled, ClaudeSuggestionModel(llm), connectors, samples=samples)
     except errors.CosmosError as exc:
         _fail(exc)
     header = (

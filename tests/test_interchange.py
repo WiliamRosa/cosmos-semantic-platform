@@ -69,7 +69,16 @@ CASES = [
 )
 @pytest.mark.parametrize(
     "source",
-    ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"],
+    [
+        "duckdb_connector",
+        "postgres_connector",
+        "sqlserver_connector",
+        "databricks_connector",
+        "snowflake_connector",
+        "mysql_connector",
+        "mariadb_connector",
+        "oracle_connector",
+    ],
 )
 def test_imported_model_matches_native(kind, path, options, source, graph, request):
     connector = request.getfixturevalue(source)

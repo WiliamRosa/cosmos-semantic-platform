@@ -7,10 +7,86 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
+A read-only console for people who decide, and a live demo of it that needs no install. AI
+suggestions are now validated on every database the model serves.
+
 ### Added
 
+- A read-only console at `/console` ([ADR 0012](docs/decisions/0012-read-only-console.md),
+  [docs](docs/console.md)), in English and Brazilian Portuguese, for people who decide rather
+  than build:
+  - metric health and ownership, with each number linking to the list behind it;
+  - business processes as graphs colored by health;
+  - the catalog with definitions, rule versions, reconciliations and impact;
+  - audited answers with replay;
+  - check history;
+  - usage and cost (admins only, `COSMOS_CONSOLE_ADMINS`).
+
+  Built with Next.js, React and Tailwind CSS as a static export that the wheel ships, and served
+  by `cosmos serve`; installing is still one `pip install`.
+- A public demo of the console on GitHub Pages (https://wiliamrosa.github.io/cosmos-semantic-platform/),
+  rebuilt on every change to `main`. It needs no server: `console/demo/snapshot.py` runs the
+  example model on synthetic data and writes each console view as JSON, and the demo build reads
+  those files.
+- `cosmos check` runs the rule tests and the reconciliation cases, appends the run to
+  `COSMOS_RUNS_LOG`, and exits with 1 when something fails, so CI or cron can schedule it.
+  `examples/ecommerce/reconciliations.yml` has four realistic cases, two of which diverge on
+  purpose.
+- `cosmos suggest` takes `--source` more than once and accepts a suggestion only if it runs on
+  every source given, so SQL that one database accepts and another rejects is caught.
+- `cosmos-semantic` as a second name for the `cosmos` command, so `uvx cosmos-semantic mcp ...`
+  works, and a `server.json` for the official MCP registry.
+
+### Changed
+
+- Reconciliation cases no longer need `expect`: without it, a case passes when the legacy numbers
+  match the governed metric.
+
+### Fixed
+
+- `cosmos suggest` runs classification and derived rules as dimensions of their model, instead
+  of only compiling them; a rule bound to a column the table does not have is now rejected.
+
+## [0.2.0] - 2026-11-04
+
+Four more data sources: the whole test suite now passes on eight databases (DuckDB,
+Postgres, SQL Server, MySQL, MariaDB, Oracle, Databricks and Snowflake), and CI runs the six
+that fit in a container on every pull request.
+
+### Added
+
+- Snowflake as a data source (`snowflake` extra, [ADR 0010](docs/decisions/0010-snowflake-as-a-data-source.md)):
+  key-pair, `connections.toml`, browser or password login, Arrow results, Monday weeks and ISO
+  week numbers. The whole suite passes on a Snowflake warehouse; `cosmos bootstrap` reads its
+  catalog.
+- MySQL, MariaDB and Oracle as data sources (`mysql` and `oracle` extras,
+  [ADR 0011](docs/decisions/0011-mysql-mariadb-and-oracle-as-data-sources.md)): MySQL and
+  MariaDB through SQLAlchemy and PyMySQL, Oracle through python-oracledb in thin mode (no
+  Instant Client). Time grains, null-safe joins and date arithmetic use each database's own
+  functions, with weeks starting on Monday. The whole suite passes on MySQL 8.4, MariaDB 11.4
+  and Oracle Database 23ai Free, which CI now runs on every pull request; `cosmos bootstrap`
+  reads Oracle's catalog.
 - Issue and pull request templates, a DCO check on pull requests, and the first issues marked
   `good first issue`.
+- `cosmos suggest` keeps each rejected suggestion, as the model sent it, in the report.
+
+### Changed
+
+- The REST API and the MCP server report the installed package version instead of a fixed
+  `0.1.0`.
+- `cosmos demo-data` writes column types in the target database's dialect (for example
+  `VARCHAR(200)` instead of `STRING` on Databricks), and loads `float64` as `BINARY_DOUBLE` on
+  Oracle.
+
+### Fixed
+
+- A reference to a member whose expression is an operation is now parenthesized when it is an
+  operand of another operator. `{orders.has_discount} = false` (with `has_discount` defined as
+  `discount > 0`) printed `discount > 0 = FALSE`, a syntax error on DuckDB and Postgres;
+  `NOT {x}` with `x = p OR q` printed `NOT p OR q`, a wrong result. Found by the first run of
+  `cosmos suggest` against the Claude API.
 
 ## [0.1.0] - 2026-11-04
 
@@ -71,5 +147,7 @@ and on the lowest dependency versions this release allows.
   `GET /v1/glossary`.
 - `cosmos init` creates a starter project with the e-commerce example and a local DuckDB source.
 
-[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.3.0
+[0.2.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.2.0
 [0.1.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.1.0

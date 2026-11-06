@@ -27,5 +27,46 @@ services:
     ports:
       - "14330:1433"
 
+  # Optional: ... --profile mysql up -d
+  mysql:
+    image: mysql:8.4
+    profiles: [mysql]
+    environment:
+      MYSQL_ROOT_PASSWORD: cosmos
+    ports:
+      - "13306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pcosmos"]
+      interval: 2s
+      retries: 60
+
+  # Optional: ... --profile mariadb up -d
+  mariadb:
+    image: mariadb:11.4
+    profiles: [mariadb]
+    environment:
+      MARIADB_ROOT_PASSWORD: cosmos
+    ports:
+      - "13307:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      retries: 60
+
+  # Optional: ... --profile oracle up -d  (Oracle Database 23ai Free)
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    profiles: [oracle]
+    environment:
+      ORACLE_PASSWORD: cosmos
+      APP_USER: cosmos
+      APP_USER_PASSWORD: cosmos
+    ports:
+      - "11521:1521"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 5s
+      retries: 60
+
 volumes:
   cosmos-pg:

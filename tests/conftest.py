@@ -16,6 +16,14 @@ EXAMPLE = ROOT / "examples" / "ecommerce" / "semantic"
 CASES = ROOT / "reference" / "queries.yml"
 
 
+def pytest_configure(config):
+    """CLI help as plain, unwrapped text everywhere. Typer forces a Rich terminal when it sees
+    GITHUB_ACTIONS (colour codes, 80-column wrapping), so a test reading `--help` would pass
+    locally and fail on CI. Runs before test modules import Typer."""
+    os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
+    os.environ.setdefault("TERMINAL_WIDTH", "200")
+
+
 @pytest.fixture(scope="session")
 def tables():
     return demo_data.generate(600, seed=7, anchor=dt.date.today())
@@ -58,6 +66,52 @@ def sqlserver_connector(tables):
     connector.close()
 
 
+def _uri_connector(kind: str, variable: str, tables, **config):
+    uri = os.environ.get(variable)
+    if not uri:
+        pytest.skip(f"set {variable} to run against {kind}")
+    connector = connect(DataSourceConfig(type=kind, uri=uri, **config))
+    demo_data.load(connector, tables)
+    return connector
+
+
+@pytest.fixture(scope="session")
+def mysql_connector(tables):
+    connector = _uri_connector("mysql", "COSMOS_MYSQL_URI", tables)
+    yield connector
+    connector.close()
+
+
+@pytest.fixture(scope="session")
+def mariadb_connector(tables):
+    connector = _uri_connector("mariadb", "COSMOS_MARIADB_URI", tables)
+    yield connector
+    connector.close()
+
+
+@pytest.fixture(scope="session")
+def oracle_connector(tables):
+    env = os.environ.get
+    if not env("COSMOS_ORACLE_DSN"):
+        pytest.skip("set COSMOS_ORACLE_DSN (with COSMOS_ORACLE_USER and COSMOS_ORACLE_PASSWORD)")
+    user = env("COSMOS_ORACLE_USER", "cosmos")
+    connector = connect(
+        DataSourceConfig(
+            type="oracle",
+            options={
+                "dsn": env("COSMOS_ORACLE_DSN"),
+                "user": user,
+                "password": env("COSMOS_ORACLE_PASSWORD"),
+            },
+            # `public` is a reserved word in Oracle; the demo tables live in the user's schema.
+            schema_map={"public": user},
+        )
+    )
+    demo_data.load(connector, tables)
+    yield connector
+    connector.close()
+
+
 @pytest.fixture(scope="session")
 def databricks_connector(tables):
     env = os.environ.get
@@ -77,6 +131,35 @@ def databricks_connector(tables):
                 "access_token": env("DATABRICKS_TOKEN"),
                 "profile": env("DATABRICKS_CONFIG_PROFILE"),
                 "catalog": env("DATABRICKS_CATALOG", "cosmos_demo"),
+            },
+        )
+    )
+    demo_data.load(connector, tables)
+    yield connector
+    connector.close()
+
+
+@pytest.fixture(scope="session")
+def snowflake_connector(tables):
+    env = os.environ.get
+    if not env("SNOWFLAKE_CONNECTION_NAME") and not (
+        env("SNOWFLAKE_ACCOUNT") and env("SNOWFLAKE_USER")
+    ):
+        pytest.skip(
+            "set SNOWFLAKE_ACCOUNT and SNOWFLAKE_USER (with SNOWFLAKE_PRIVATE_KEY_FILE), "
+            "or SNOWFLAKE_CONNECTION_NAME"
+        )
+    connector = connect(
+        DataSourceConfig(
+            type="snowflake",
+            options={
+                "connection_name": env("SNOWFLAKE_CONNECTION_NAME"),
+                "account": env("SNOWFLAKE_ACCOUNT"),
+                "user": env("SNOWFLAKE_USER"),
+                "private_key_file": env("SNOWFLAKE_PRIVATE_KEY_FILE"),
+                "role": env("SNOWFLAKE_ROLE"),
+                "warehouse": env("SNOWFLAKE_WAREHOUSE"),
+                "database": env("SNOWFLAKE_DATABASE", "COSMOS_DEMO"),
             },
         )
     )

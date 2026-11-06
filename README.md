@@ -6,15 +6,28 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/LICENSE)
 [![Good first issues](https://img.shields.io/github/issues/WiliamRosa/cosmos-semantic-platform/good%20first%20issue)](https://github.com/WiliamRosa/cosmos-semantic-platform/labels/good%20first%20issue)
 
-> Repository: `cosmos-semantic-platform`. License: open core, with the core under Apache 2.0 ([ADR 0005](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/decisions/0005-open-core.md)).
+**An open-source semantic layer with an ontology at its core, so AI agents and apps get the same number on every database, with the proof in every answer.**
 
-A semantic layer for AI agents and applications, with **its own engine**: its own versioned YAML format with the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and a JSON Schema, SQL generation for each data source, and native interoperability with [Apache Ossie](https://github.com/open-semantic-interchange/OSI) (formerly Open Semantic Interchange, OSI). [Cube](https://github.com/cube-js/cube) and dbt are **import sources and export targets**, not dependencies.
+<!-- mcp-name: io.github.WiliamRosa/cosmos-semantic -->
 
-**Status:** phases 0 to 3 are implemented: the engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity, verifiable numbers (evidence, replay, reconciliation, impact, bootstrap) and business context (rule versions, usage and cost, knowledge graph, Power BI import, AI-assisted discovery, the retail pack, SKOS export). The whole test suite passes on DuckDB, Postgres, SQL Server and Databricks. See the [roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md).
+**[Live demo of the console](https://wiliamrosa.github.io/cosmos-semantic-platform/)** · [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) · [Docs](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs) · [Article](https://dev.to/wiliamrosa/cosmos-semantic-an-open-source-semantic-layer-that-makes-ai-agents-get-the-number-right-and-prove-1c06) ([em português](https://wiliamrosa.github.io/articles/cosmos-semantic-camada-semantica-numeros-verificaveis/))
 
-## In one sentence
+[![The read-only console: metric health, a business process as a graph colored by health, and a metric that diverges from a legacy report](https://raw.githubusercontent.com/WiliamRosa/cosmos-semantic-platform/main/docs/assets/console-tour.gif)](https://wiliamrosa.github.io/cosmos-semantic-platform/)
 
-Define entities, metrics, business concepts and business rules once, and any AI agent or application queries the same number, with SQL generated and run directly on your data source, and the model portable to Ossie, Cube and dbt.
+AI agents that write SQL over raw tables return numbers that look right and that nobody can explain: "revenue" has three definitions, "active customer" means 60 days to one team and 90 to another. Cosmos Semantic defines metrics, business rules and concepts once, serves them to agents over MCP instead of letting them guess SQL, and attaches evidence to every answer.
+
+| | |
+| --- | --- |
+| **Multi-database** | One model, the same number on Databricks, Snowflake, Oracle, SQL Server, Postgres, MySQL, MariaDB and DuckDB, checked by the test suite on every change |
+| **Ontology** | A bilingual business glossary (SKOS), versioned business rules with owners and tests, and a knowledge graph of teams, systems and processes |
+| **Built for AI agents** | A native MCP server: agents find the concept, ask for a governed metric and get deterministic SQL; personal data never reaches them |
+| **Verifiable numbers** | Every answer carries the expanded formula, rules, row filters, reference date and hashes; `cosmos replay` tells whether a number changed and why |
+| **Reconciliation** | Compares a governed metric with the legacy SQL a team already uses and names the likely cause of each divergence |
+| **Open, no lock-in** | Apache 2.0, its own engine, and import from dbt, Power BI, Cube and [Apache Ossie](https://github.com/open-semantic-interchange/OSI) |
+
+The YAML format uses the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) vocabulary and ships a JSON Schema; [Cube](https://github.com/cube-js/cube) and dbt are import sources and export targets, not dependencies. The core is Apache 2.0 within an open-core model ([ADR 0005](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/decisions/0005-open-core.md)).
+
+**Status:** phases 0 to 3 are implemented: the engine, the ontology (glossary and business rules), the REST API, the MCP server, OIDC identity, verifiable numbers (evidence, replay, reconciliation, impact, bootstrap), business context (rule versions, usage and cost, knowledge graph, Power BI import, AI-assisted discovery, the retail pack, SKOS export) and the read-only console. See the [roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md).
 
 ## Quickstart
 
@@ -29,7 +42,19 @@ cosmos explain rule:active_customer
 That is a governed metric with its evidence (formula, rules, policies, `as_of` and hashes) in about
 a minute, on a local DuckDB file. The [quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) continues with business
 rules, row filters, personal data and connecting an AI agent over MCP. Extras: `duckdb`,
-`postgres`, `sqlserver`, `databricks`, `server` (REST and MCP), `ai` (`cosmos suggest`), `testdata`.
+`postgres`, `sqlserver`, `mysql` (MySQL and MariaDB), `oracle`, `databricks`, `snowflake`, `server` (REST and MCP), `ai` (`cosmos suggest`), `testdata`.
+
+## Console
+
+`cosmos serve` also serves a read-only [console](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/console.md) at `/console`, in English or Portuguese, for people who decide rather than build:
+
+- metric health and ownership;
+- business processes as graphs colored by health;
+- the catalog in business words;
+- every audited answer, with a button to reproduce it;
+- usage and cost per agent.
+
+`cosmos check` records rule tests and reconciliations against legacy reports, so the console shows health over time.
 
 ## Development
 
@@ -83,6 +108,7 @@ uv run cosmos graph --focus process:order_to_cash -m examples/ecommerce/semantic
 uv run cosmos impact system:payment_gateway -m examples/ecommerce/semantic
 
 # AI-assisted discovery: concepts, rules, metrics and descriptions, validated by the engine, for review
+# (repeat --source to require that each suggestion runs on every database the model serves)
 uv run cosmos suggest --source local -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml -o suggestions.yml
 
 # Industry pack mapped onto your tables by name (draft + report for review)
@@ -132,7 +158,11 @@ Local Postgres: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml 
 
 Local SQL Server: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile sqlserver up -d` and `COSMOS_MSSQL_URI='mssql+pymssql://sa:Cosmos!Passw0rd@localhost:14330/master'`. Every data source accepts a `schema_map` in `connections.yml` (for example `public: dbo`) to use the same model with different schemas.
 
+Local MySQL, MariaDB and Oracle Database Free: `docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile mysql --profile mariadb --profile oracle up -d`, then `COSMOS_MYSQL_URI=mysql+pymysql://root:cosmos@127.0.0.1:13306/`, `COSMOS_MARIADB_URI=mysql+pymysql://root:cosmos@127.0.0.1:13307/`, `COSMOS_ORACLE_DSN=127.0.0.1:11521/FREEPDB1` and `COSMOS_ORACLE_PASSWORD=cosmos`. Once the Oracle container is healthy, run [deploy/oracle-setup.sql](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/deploy/oracle-setup.sql) as `SYSTEM` (the command is in the file). In Oracle a schema is a user, so an Oracle source maps the model's `public` to its owner (`schema_map: { public: cosmos }`).
+
 Databricks: set `DATABRICKS_HTTP_PATH` (SQL warehouse) and `DATABRICKS_TOKEN` with `DATABRICKS_SERVER_HOSTNAME`, or `DATABRICKS_CONFIG_PROFILE` with a Databricks CLI profile (`databricks auth login --profile <name>`). The tests load the example data into the catalog in `DATABRICKS_CATALOG` (default `cosmos_demo`, which must exist). On Git Bash for Windows, also set `MSYS_NO_PATHCONV=1`, or the shell rewrites `/sql/1.0/...` into a Windows path and the warehouse answers 404.
+
+Snowflake: set `SNOWFLAKE_ACCOUNT` (`<org>-<account>`), `SNOWFLAKE_USER` and `SNOWFLAKE_PRIVATE_KEY_FILE` (key-pair login), or `SNOWFLAKE_CONNECTION_NAME` with a connection from `~/.snowflake/connections.toml`; plus `SNOWFLAKE_ROLE` and `SNOWFLAKE_WAREHOUSE`. The tests load the example data into `SNOWFLAKE_DATABASE` (default `COSMOS_DEMO`). [deploy/snowflake-setup.sql](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/deploy/snowflake-setup.sql) creates the warehouse, database, role and service user they need.
 
 Editors validate and autocomplete model files through the JSON Schema in [schema/](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/schema/), referenced on the first line of each file (`# yaml-language-server: $schema=...`). After changing `spec.py`, regenerate it with `uv run cosmos schema -o schema/cosmos-semantic.v1.schema.json`.
 
@@ -150,13 +180,14 @@ Editors validate and autocomplete model files through the JSON Schema in [schema
 | Document | Contents |
 | --- | --- |
 | [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) | From `pip install` to a governed metric, business rules, policies and an AI agent over MCP |
+| [Console](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/console.md) | The read-only web console: views, `cosmos check`, access and development |
 | [Product vision](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/product-vision.md) | Problem, audience, positioning, free and paid editions |
 | [Architecture](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/architecture.md) | Components, query planner, cross-database guarantees, security, deployment |
 | [Semantic model](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/semantic-model.md) | The authoring format, the generated SQL and the exports |
 | [Interoperability](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/interoperability.md) | Mapping to Apache Ossie, and dbt and Cube import |
 | [Roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md) | Phases, MVP scope and exit criteria |
 | [Changelog](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md) | What changed in each release |
-| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product |
+| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source, 0011 adds MySQL, MariaDB and Oracle, 0012 adds the read-only console |
 
 ## Repository layout
 
@@ -167,7 +198,8 @@ src/cosmos_semantic/
   compiler.py        validation and semantic graph, with joins inferred from entities
   expressions.py     {member} and $user references, and protection of caller filters
   planner.py         query plan and per-dialect SQL (SQLGlot)
-  connectors.py      DuckDB, Postgres (ADBC), Databricks and SQL Server (SQLAlchemy), always Arrow
+  connectors.py      DuckDB, Postgres (ADBC), Databricks, Snowflake, Oracle, SQL Server and MySQL/MariaDB, always Arrow
+  dialects.py        per-dialect rewrites SQLGlot does not cover (MySQL, Oracle)
   engine.py          model + connections -> executed queries
   ontology.py        business rules (virtual dimensions and tests) and SKOS glossary
   catalog.py         members, concept search and explanations
@@ -177,16 +209,19 @@ src/cosmos_semantic/
   impact.py          impact analysis over the model graph and the audit log
   bootstrap.py       draft model from the database catalog
   service.py         querying with evidence, auditing and replay, shared by REST, MCP and CLI
-  api.py             REST API (FastAPI)
+  api.py             REST API (FastAPI) and the console at /console
+  console.py         read-only console views: health, process graphs, catalog, answers
+  checks.py          `cosmos check` runs (rule tests, reconciliations) and their log
   mcp_server.py      MCP server
   interchange/       dbt, Ossie and Cube import
   demo_data.py       synthetic data (en_US default, pt_BR optional)
   reference.py       running the reference queries
   cli.py             the `cosmos` command
 schema/              JSON Schema of the format
-examples/ecommerce/  example model, connections and the divergence zoo
+examples/ecommerce/  example model, connections, the divergence zoo and reconciliation cases
 reference/           reference queries (basic and advanced)
 tests/fixtures/      example models in dbt, Ossie and Cube
+console/             the console's web app (Next.js, React, Tailwind CSS)
 deploy/              local docker compose
 docs/                documentation and ADRs
 ```

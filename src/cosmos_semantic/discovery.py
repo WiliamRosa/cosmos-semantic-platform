@@ -2,9 +2,9 @@
 
 A language model suggests glossary concepts (with English and Portuguese labels), business
 rules, metrics and descriptions for an existing semantic model. Nothing is applied: every
-suggestion is validated by the engine (compiled into a copy of the model and, when a data
-source is given, planned and run), and the accepted ones are written to a separate YAML file
-for a person to review, as a pull request would be.
+suggestion is validated by the engine (compiled into a copy of the model and, on each data
+source given, planned and run, rules included), and the accepted ones are written to a separate
+YAML file for a person to review, as a pull request would be.
 
 The model sees names, types, descriptions and existing definitions. Sample values are sent only
 when the caller opts in, and never for columns classified as personal or sensitive.
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -274,7 +275,7 @@ class DiscoveryReport:
     rules: list[dict[str, Any]] = field(default_factory=list)
     metrics: list[dict[str, Any]] = field(default_factory=list)
     descriptions: list[dict[str, str]] = field(default_factory=list)
-    rejected: list[dict[str, str]] = field(default_factory=list)
+    rejected: list[dict[str, Any]] = field(default_factory=list)
 
     def project(self) -> Project:
         """The accepted suggestions as a model file of their own, for review."""
@@ -303,12 +304,15 @@ class DiscoveryReport:
 
 
 class Validator:
-    """Accepts a suggestion only if the model still compiles with it (and, given a data
-    source, a query using it runs)."""
+    """Accepts a suggestion only if the model still compiles with it and, for each data source
+    given, a query using it runs there. SQL that one database accepts may fail on another (date
+    arithmetic is the usual case), so every source the model will serve should be listed."""
 
-    def __init__(self, graph: SemanticGraph, connector: Connector | None = None) -> None:
+    def __init__(
+        self, graph: SemanticGraph, connectors: Connector | Sequence[Connector] | None = None
+    ) -> None:
         self.base = graph.project.model_dump(mode="json")
-        self.connector = connector
+        self.connectors = _as_list(connectors)
         self.accepted: dict[str, list[dict[str, Any]]] = {
             "glossary": [],
             "business_rules": [],
@@ -328,24 +332,58 @@ class Validator:
             raise QueryError("; ".join(str(e) for e in errors[:3]))
         return graph
 
-    def _run(self, graph: SemanticGraph, metrics: list[str], filters: list[str]) -> None:
-        if self.connector is None:
-            return
+    def _run(self, graph: SemanticGraph, run: Run) -> None:
         from cosmos_semantic.planner import Planner, Principal, QueryRequest
 
         # Placeholder values satisfy row filters; the query only proves the SQL runs.
         user = {name: "__validation__" for name in graph.project.user_context}
-        planner = Planner(graph, self.connector.dialect, self.connector.config.schema_map)
-        compiled = planner.plan(
-            QueryRequest(metrics=metrics, filters=filters, limit=1), Principal(user=user)
+        request = QueryRequest(
+            metrics=run.metrics, dimensions=run.dimensions, filters=run.filters, limit=1
         )
-        self.connector.execute(compiled.sql, max_rows=1)
+        for connector in self.connectors:
+            planner = Planner(graph, connector.dialect, connector.config.schema_map)
+            try:
+                compiled = planner.plan(request, Principal(user=user))
+                connector.execute(compiled.sql, max_rows=1)
+            except CosmosError as exc:
+                if len(self.connectors) == 1:
+                    raise
+                raise QueryError(f"on {connector.config.type}: {exc}") from exc
 
-    def try_add(self, key: str, item: dict[str, Any], run: tuple[list, list] | None) -> None:
+    def try_add(self, key: str, item: dict[str, Any], run: Run | None) -> None:
         graph = self._compile(key, item)
         if run is not None:
-            self._run(graph, *run)
+            self._run(graph, run)
         self.accepted[key].append(item)
+
+
+@dataclass
+class Run:
+    """The query that proves a suggestion runs: its metrics, dimensions and filters."""
+
+    metrics: list[str]
+    dimensions: list[str] = field(default_factory=list)
+    filters: list[str] = field(default_factory=list)
+
+
+def _as_list(connectors: Connector | Sequence[Connector] | None) -> list[Connector]:
+    if connectors is None:
+        return []
+    if isinstance(connectors, list | tuple):
+        return list(connectors)
+    return [connectors]
+
+
+def _rule_run(base: dict[str, Any], name: str, kind: str, model: str) -> Run | None:
+    """A predicate rule runs as a filter; a classification or derived rule computes a value
+    per row, so it runs as a dimension of its model. Without a measure on that model there is
+    no query to run, and only compilation checks the rule."""
+    measure = _any_measure(base, model)
+    if not measure:
+        return None
+    if kind == "predicate":
+        return Run([measure], filters=["{rule." + name + "}"])
+    return Run([measure], dimensions=[f"{model}.{name}"])
 
 
 def _any_measure(base: dict[str, Any], model: str) -> str | None:
@@ -358,24 +396,30 @@ def _any_measure(base: dict[str, Any], model: str) -> str | None:
 def discover(
     graph: SemanticGraph,
     llm: SuggestionModel,
-    connector: Connector | None = None,
+    connectors: Connector | Sequence[Connector] | None = None,
     *,
     samples: bool = False,
 ) -> DiscoveryReport:
-    raw = llm.suggest(build_context(graph, connector, samples=samples))
-    validator = Validator(graph, connector)
+    """``connectors``: every data source a suggestion must run on; samples come from the
+    first."""
+    sources = _as_list(connectors)
+    raw = llm.suggest(build_context(graph, sources[0] if sources else None, samples=samples))
+    validator = Validator(graph, sources)
     report = DiscoveryReport(model=llm.name)
     known = set(graph.metrics) | set(graph.measure_owner) | set(graph.rules)
     concepts = {c.concept for c in graph.project.glossary}
 
-    def reject(kind: str, name: str, reason: str) -> None:
-        report.rejected.append({"kind": kind, "name": name, "reason": reason})
+    def reject(kind: str, name: str, reason: str, suggestion: dict[str, Any]) -> None:
+        # The suggestion as the model sent it, so a reviewer can fix and keep it by hand.
+        report.rejected.append(
+            {"kind": kind, "name": name, "reason": reason, "suggestion": suggestion}
+        )
 
     # Rules first, then metrics, then concepts: later suggestions may build on earlier ones.
     for s in raw.get("rules", []):
         name = s.get("name", "?")
         if name in known:
-            reject("rule", name, "a member with this name already exists")
+            reject("rule", name, "a member with this name already exists", s)
             continue
         try:
             item = {
@@ -389,13 +433,11 @@ def discover(
                 ],
             }
             item = {k: v for k, v in item.items() if v is not None}
-            measure = _any_measure(validator.base, s["model"])
-            predicate = s["kind"] == "predicate" and measure
-            run = ([measure], ["{rule." + name + "}"]) if predicate else None
+            run = _rule_run(validator.base, name, s["kind"], s["model"])
             BusinessRule.model_validate(item)
             validator.try_add("business_rules", item, run)
         except (ValidationError, CosmosError, ValueError, KeyError) as exc:
-            reject("rule", name, _reason(exc))
+            reject("rule", name, _reason(exc), s)
             continue
         report.rules.append(item)
         known.add(name)
@@ -403,13 +445,13 @@ def discover(
     for s in raw.get("metrics", []):
         name = s.get("name", "?")
         if name in known:
-            reject("metric", name, "a member with this name already exists")
+            reject("metric", name, "a member with this name already exists", s)
             continue
         item = {k: v for k, v in s.items() if v is not None and k != "rationale"}
         try:
-            validator.try_add("metrics", _metric(item), ([name], []))
+            validator.try_add("metrics", _metric(item), Run([name]))
         except (ValidationError, CosmosError, ValueError, KeyError) as exc:
-            reject("metric", name, _reason(exc))
+            reject("metric", name, _reason(exc), s)
             continue
         report.metrics.append(_metric(item))
         known.add(name)
@@ -417,7 +459,7 @@ def discover(
     for s in raw.get("concepts", []):
         name = s.get("concept", "?")
         if name in concepts:
-            reject("concept", name, "the concept already exists; extend it by hand")
+            reject("concept", name, "the concept already exists; extend it by hand", s)
             continue
         try:
             item = {
@@ -430,7 +472,7 @@ def discover(
             Concept.model_validate(item)
             validator.try_add("glossary", item, None)
         except (ValidationError, CosmosError, ValueError, KeyError) as exc:
-            reject("concept", name, _reason(exc))
+            reject("concept", name, _reason(exc), s)
             continue
         report.concepts.append(item)
         concepts.add(name)
@@ -439,7 +481,7 @@ def discover(
         member, text = s.get("member", ""), s.get("description", "")
         problem = _description_problem(graph, member)
         if problem:
-            reject("description", member, problem)
+            reject("description", member, problem, s)
         elif text.strip():
             report.descriptions.append({"member": member, "description": text.strip()})
     return report

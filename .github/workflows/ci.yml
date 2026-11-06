@@ -24,12 +24,52 @@ jobs:
           ACCEPT_EULA: "Y"
           MSSQL_SA_PASSWORD: "Cosmos!Passw0rd"
         ports: ["1433:1433"]
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: cosmos
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -pcosmos" --health-interval 2s
+          --health-retries 60
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: cosmos
+        ports: ["3307:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized" --health-interval 2s
+          --health-retries 60
+      oracle:
+        image: gvenzl/oracle-free:23-slim
+        env:
+          ORACLE_PASSWORD: cosmos
+          APP_USER: cosmos
+          APP_USER_PASSWORD: cosmos
+        ports: ["1521:1521"]
+        options: >-
+          --health-cmd healthcheck.sh --health-interval 5s --health-retries 60
     env:
       COSMOS_PG_URI: postgresql://cosmos:cosmos@localhost:5432/cosmos
       COSMOS_MSSQL_URI: mssql+pymssql://sa:Cosmos!Passw0rd@localhost:1433/master
+      COSMOS_MYSQL_URI: mysql+pymysql://root:cosmos@127.0.0.1:3306/
+      COSMOS_MARIADB_URI: mysql+pymysql://root:cosmos@127.0.0.1:3307/
+      COSMOS_ORACLE_DSN: 127.0.0.1:1521/FREEPDB1
+      COSMOS_ORACLE_PASSWORD: cosmos
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: Build the console (ADR 0012)
+        working-directory: console
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
       - run: uv sync --all-extras
       - run: uv run ruff check src tests
       - run: uv run ruff format --check src tests
@@ -41,4 +81,6 @@ jobs:
             uv run python -c "import pymssql; pymssql.connect('localhost', 'sa', 'Cosmos!Passw0rd', port=1433)" && break
             sleep 2
           done
+      - name: Set up the Oracle test schemas
+        run: docker exec -i ${{ job.services.oracle.id }} sqlplus -s system/cosmos@FREEPDB1 < deploy/oracle-setup.sql
       - run: uv run pytest -q

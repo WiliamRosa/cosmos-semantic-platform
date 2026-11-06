@@ -110,7 +110,16 @@ def test_bim_and_tmdl_give_the_same_model():
 @pytest.mark.parametrize("path", [BIM, TMDL], ids=["bim", "tmdl"])
 @pytest.mark.parametrize(
     "source",
-    ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"],
+    [
+        "duckdb_connector",
+        "postgres_connector",
+        "sqlserver_connector",
+        "databricks_connector",
+        "snowflake_connector",
+        "mysql_connector",
+        "mariadb_connector",
+        "oracle_connector",
+    ],
 )
 def test_imported_model_matches_native(path, source, graph, request):
     connector = request.getfixturevalue(source)

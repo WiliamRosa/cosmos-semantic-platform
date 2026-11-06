@@ -1,0 +1,62 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.WiliamRosa/cosmos-semantic",
+  "title": "Cosmos Semantic",
+  "description": "Governed metrics, business rules and a glossary for AI agents, with evidence on every answer.",
+  "repository": {
+    "url": "https://github.com/WiliamRosa/cosmos-semantic-platform",
+    "source": "github"
+  },
+  "websiteUrl": "https://wiliamrosa.github.io/cosmos-semantic-platform/",
+  "version": "0.3.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "cosmos-semantic",
+      "version": "0.3.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--with",
+          "value": "cosmos-semantic[server,duckdb]",
+          "description": "The MCP server and a data source driver; use postgres, databricks, snowflake, oracle, mysql or sqlserver for yours"
+        }
+      ],
+      "packageArguments": [
+        { "type": "positional", "value": "mcp" },
+        {
+          "type": "named",
+          "name": "--model",
+          "valueHint": "semantic_dir",
+          "description": "Directory with the semantic model (YAML)",
+          "isRequired": true
+        },
+        {
+          "type": "named",
+          "name": "--connections",
+          "valueHint": "connections_yml",
+          "description": "connections.yml with the data sources",
+          "isRequired": true
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "COSMOS_API_KEY",
+          "description": "The caller's key; its user context feeds the model's row filters",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "COSMOS_DEV_API_KEYS",
+          "description": "YAML file with development keys (local use); production uses an OIDC provider",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

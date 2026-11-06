@@ -23,7 +23,16 @@ from cosmos_semantic.errors import CosmosError
 from cosmos_semantic.interchange import dump_project
 from cosmos_semantic.spec import Project
 
-SOURCES = ["duckdb_connector", "postgres_connector", "sqlserver_connector", "databricks_connector"]
+SOURCES = [
+    "duckdb_connector",
+    "postgres_connector",
+    "sqlserver_connector",
+    "databricks_connector",
+    "snowflake_connector",
+    "mysql_connector",
+    "mariadb_connector",
+    "oracle_connector",
+]
 
 
 def metric(name, type_, **fields):
@@ -144,6 +153,53 @@ def test_suggestions_are_validated_by_running_them(graph, connector):
     assert "already exists" in rejected[("metric", "revenue")]
     assert ("concept", "phantom") in rejected and ("concept", "customer") in rejected
     assert rejected[("description", "measure:revenue")] == "already described"
+    # Each rejection keeps the suggestion as sent, for a reviewer to fix by hand.
+    ghost = next(r for r in report.rejected if r["name"] == "ghost_metric")
+    assert ghost["suggestion"]["name"] == "ghost_metric"
+
+
+def _rule(name, kind, column, logic):
+    return {
+        "name": name,
+        "kind": kind,
+        "description": f"{name} (suggested)",
+        "model": "orders",
+        "inputs": [{"name": "value", "type": "number", "column": column}],
+        "logic": logic,
+        "rationale": "test",
+    }
+
+
+ROW_RULES = {
+    "rules": [
+        _rule("doubled_amount", "derived", "amount", "{value} * 2"),
+        # Compiles (the engine does not know the table's columns) but cannot run.
+        _rule("ghost_value", "derived", "no_such_column", "{value} * 2"),
+        _rule("ghost_flag", "predicate", "no_such_column", "{value} > 0"),
+    ]
+}
+
+
+def test_derived_rules_are_run_not_only_compiled(graph, duckdb_connector):
+    report = discover(graph, FakeModel(ROW_RULES), duckdb_connector)
+    assert [r["name"] for r in report.rules] == ["doubled_amount"]
+    rejected = {r["name"] for r in report.rejected}
+    assert rejected == {"ghost_value", "ghost_flag"}
+
+
+def test_every_source_must_run_the_suggestion(graph, duckdb_connector):
+    from cosmos_semantic.connectors import DataSourceConfig, connect
+
+    # A second source where the model's tables live in a schema that does not exist.
+    broken = connect(DataSourceConfig(type="duckdb", schema_map={"public": "missing"}))
+    try:
+        alone = discover(graph, FakeModel(SUGGESTIONS), duckdb_connector)
+        both = discover(graph, FakeModel(SUGGESTIONS), [duckdb_connector, broken])
+    finally:
+        broken.close()
+    assert alone.metrics and not both.metrics and not both.rules
+    reasons = [r["reason"] for r in both.rejected if r["name"] == "pending_revenue"]
+    assert reasons and reasons[0].startswith("on duckdb:")
 
 
 def test_accepted_file_merges_into_the_model(graph):

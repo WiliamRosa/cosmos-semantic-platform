@@ -37,6 +37,27 @@ data_sources:
   #     http_path: ${DATABRICKS_HTTP_PATH}
   #     profile: ${DATABRICKS_CONFIG_PROFILE:-DEFAULT}  # `databricks auth login --profile <name>`
   #     catalog: ${DATABRICKS_CATALOG:-cosmos_demo}
+  #
+  # snowflake:
+  #   type: snowflake
+  #   options:
+  #     account: ${SNOWFLAKE_ACCOUNT}               # <org>-<account>
+  #     user: ${SNOWFLAKE_USER}
+  #     private_key_file: ${SNOWFLAKE_PRIVATE_KEY_FILE}  # key-pair login; never commit the key
+  #     warehouse: ${SNOWFLAKE_WAREHOUSE}
+  #     database: ${SNOWFLAKE_DATABASE:-COSMOS_DEMO}
+  #
+  # mysql:                                         # or type: mariadb
+  #   type: mysql
+  #   uri: ${COSMOS_MYSQL_URI}                     # mysql+pymysql://user:password@host:3306/
+  #
+  # oracle:
+  #   type: oracle
+  #   options:
+  #     dsn: ${COSMOS_ORACLE_DSN}                  # host:1521/service
+  #     user: ${COSMOS_ORACLE_USER}
+  #     password: ${COSMOS_ORACLE_PASSWORD}
+  #   schema_map: { public: ${COSMOS_ORACLE_USER} }  # in Oracle a schema is a user
 """
 
 

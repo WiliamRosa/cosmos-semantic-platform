@@ -38,14 +38,18 @@ class ReferenceCase(BaseModel):
 
     def sql_for(self, dialect: str) -> str | None:
         """The reference SQL for a dialect. The shared ``sql`` is written in PostgreSQL;
-        Databricks (Spark SQL) rejects some of its syntax, such as ``DOUBLE PRECISION``, so it
-        gets a SQLGlot translation unless the case spells a Databricks version."""
+        Databricks (Spark SQL), Snowflake, MySQL and Oracle reject some of its syntax, such as
+        ``DOUBLE PRECISION`` in Databricks or ``DATE_TRUNC`` in MySQL, so they get a SQLGlot
+        translation unless the case spells a version for the dialect."""
         if dialect in self.sql_by_dialect:
             return self.sql_by_dialect[dialect]
-        if self.sql is not None and dialect == "databricks":
+        if self.sql is not None and dialect in ("databricks", "snowflake", "mysql", "oracle"):
             import sqlglot
 
-            return sqlglot.transpile(self.sql, read="postgres", write="databricks")[0]
+            from cosmos_semantic import dialects
+
+            tree = dialects.adapt(sqlglot.parse_one(self.sql, read="postgres"), dialect)
+            return tree.sql(dialect=dialect)
         return self.sql
 
 
