@@ -42,6 +42,21 @@ evidence  q_2eae279c2b6b494da485
   sql     eb5ca2c843244937  result 451c5e52d6f85089 (3 rows)
 ```
 
+To take the result to a spreadsheet or a script, add `--csv`. Standard output is then only the CSV: a header, then one line per row, with values at full precision, without thousands separators. The `query_id` line goes to standard error, so redirecting gives a clean file:
+
+```bash
+cosmos query revenue average_order_value --by orders.status --csv > revenue.csv
+```
+
+```text
+orders__status,revenue,average_order_value
+canceled,1518830.029999999,2548.3725335570452
+pending,1578795.779999999,2626.948053244591
+completed,12562542.200000022,2615.561565688116
+```
+
+`--csv` and `--json` cannot be combined.
+
 ## 3. Business rules and policies
 
 The model defines `active_customer` as a business rule with an owner, a history and tests. Use it
