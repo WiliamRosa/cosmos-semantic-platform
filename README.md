@@ -73,6 +73,10 @@ uv run cosmos validate -m examples/ecommerce/semantic
 uv run cosmos query revenue average_order_value --by orders.status \
   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
+# Same query as CSV (raw values, header + one row per result row) for spreadsheets and scripts
+uv run cosmos query revenue average_order_value --by orders.status --csv \
+  -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+
 # Metrics from different models, with the user's row filter; --show-sql prints the generated SQL
 uv run cosmos query revenue paid_value customer_count --by customers.region -u region=Midwest --show-sql \
   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
