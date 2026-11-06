@@ -16,6 +16,14 @@ EXAMPLE = ROOT / "examples" / "ecommerce" / "semantic"
 CASES = ROOT / "reference" / "queries.yml"
 
 
+def pytest_configure(config):
+    """CLI help as plain, unwrapped text everywhere. Typer forces a Rich terminal when it sees
+    GITHUB_ACTIONS (colour codes, 80-column wrapping), so a test reading `--help` would pass
+    locally and fail on CI. Runs before test modules import Typer."""
+    os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
+    os.environ.setdefault("TERMINAL_WIDTH", "200")
+
+
 @pytest.fixture(scope="session")
 def tables():
     return demo_data.generate(600, seed=7, anchor=dt.date.today())
