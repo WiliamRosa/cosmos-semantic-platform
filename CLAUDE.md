@@ -14,7 +14,7 @@ Rules for every Claude Code session and every agent in this repository: interact
 ## Commits and pull requests
 
 - **English** in code, comments, messages, tests, docs and pull requests. Portuguese appears only as data (sample values, `pt` glossary labels). Chat with the maintainer is in Portuguese.
-- **Sign off every commit** (`git commit -s`); the `dco` check fails otherwise. Agents commit as `cosmos-agents` (ADR 0013). In the maintainer's sessions the author email is `66886431+WiliamRosa@users.noreply.github.com`, never a personal address.
+- **Sign off every commit** (`git commit -s`); the `dco` check fails otherwise. Agents commit as `cosmosagentsteam-lab` (ADR 0013). In the maintainer's sessions the author email is `66886431+WiliamRosa@users.noreply.github.com`, never a personal address.
 - **End commit messages** with `Co-Authored-By: Claude <noreply@anthropic.com>`, and pull request descriptions with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - **Small pull requests**, one concern each, with a summary, a test plan and the evidence (test counts per database).
 - **After any merge that changes behaviour,** update `CHANGELOG.md` (`[Unreleased]`) and the docs it touches (README, quickstart, `docs/`). Credit external contributors by GitHub handle and pull request number.
