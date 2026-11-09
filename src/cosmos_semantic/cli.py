@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import csv
 import datetime as dt
+import io
 import json
 import sys
 from pathlib import Path
@@ -217,13 +219,22 @@ def query(
     as_json: Annotated[
         bool, typer.Option("--json", help="Print rows and evidence as JSON.")
     ] = False,
+    as_csv: Annotated[
+        bool, typer.Option("--csv", help="Print rows as CSV (header + one row per result row).")
+    ] = False,
 ) -> None:
     """Runs a metrics request on the data source.
 
     Set COSMOS_AUDIT_LOG to a .jsonl file to record the query for `cosmos replay`.
+
+    Example:
+
+        cosmos query revenue average_order_value --by orders.status --csv
     """
     from cosmos_semantic.service import SemanticService
 
+    if as_csv and as_json:
+        _fail(ValueError("use either --csv or --json"))
     try:
         engine = Engine.from_paths(model, load_connections(connections))
         result = SemanticService(engine).query(
@@ -234,6 +245,16 @@ def query(
         _fail(exc)
     if as_json:
         typer.echo(json.dumps(result, default=str, ensure_ascii=False, indent=2))
+        return
+    if as_csv:
+        sys.stdout.write(_csv_text(result))
+        typer.secho(
+            f"{len(result['rows'])} rows  query_id={result['evidence']['query_id']}",
+            fg=typer.colors.BRIGHT_BLACK,
+            err=True,
+        )
+        if evidence:
+            _print_evidence(result["evidence"], out=lambda s: typer.echo(s, err=True))
         return
     if show_sql:
         typer.secho(result["evidence"]["sql"]["text"], fg=typer.colors.BRIGHT_BLACK, err=True)
@@ -253,8 +274,20 @@ def query(
         _print_evidence(result["evidence"])
 
 
-def _print_evidence(ev: dict) -> None:
-    out = typer.echo
+def _csv_text(result: dict) -> str:
+    """Render a query result as CSV: column names as header, then one row
+    per result row, with values exactly as the engine returns them (no
+    thousands separators or fixed decimals); None becomes an empty field."""
+    names = [c["name"] for c in result["columns"]]
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(names)
+    for row in result["rows"]:
+        writer.writerow(["" if row[n] is None else row[n] for n in names])
+    return buf.getvalue()
+
+
+def _print_evidence(ev: dict, out=typer.echo) -> None:
     out("")
     out(f"evidence  {ev['query_id']}")
     out(f"  model   {ev['model_hash'][:16]}  engine {ev['engine_version']}")

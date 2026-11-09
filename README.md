@@ -10,7 +10,7 @@
 
 <!-- mcp-name: io.github.WiliamRosa/cosmos-semantic -->
 
-**[Live demo of the console](https://wiliamrosa.github.io/cosmos-semantic-platform/)** · [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) · [Docs](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs) · [Article](https://wiliamrosa.github.io/articles/cosmos-semantic-camada-semantica-numeros-verificaveis/) (Portuguese)
+**[Live demo of the console](https://wiliamrosa.github.io/cosmos-semantic-platform/)** · [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) · [Docs](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs) · [Article](https://dev.to/wiliamrosa/cosmos-semantic-an-open-source-semantic-layer-that-makes-ai-agents-get-the-number-right-and-prove-1c06) ([em português](https://wiliamrosa.github.io/articles/cosmos-semantic-camada-semantica-numeros-verificaveis/))
 
 [![The read-only console: metric health, a business process as a graph colored by health, and a metric that diverges from a legacy report](https://raw.githubusercontent.com/WiliamRosa/cosmos-semantic-platform/main/docs/assets/console-tour.gif)](https://wiliamrosa.github.io/cosmos-semantic-platform/)
 
@@ -71,6 +71,10 @@ uv run cosmos validate -m examples/ecommerce/semantic
 
 # Revenue and average order value by status
 uv run cosmos query revenue average_order_value --by orders.status \
+  -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+
+# Same query as CSV (raw values, header + one row per result row) for spreadsheets and scripts
+uv run cosmos query revenue average_order_value --by orders.status --csv \
   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
 # Metrics from different models, with the user's row filter; --show-sql prints the generated SQL
@@ -183,7 +187,7 @@ Editors validate and autocomplete model files through the JSON Schema in [schema
 | [Interoperability](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/interoperability.md) | Mapping to Apache Ossie, and dbt and Cube import |
 | [Roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md) | Phases, MVP scope and exit criteria |
 | [Changelog](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md) | What changed in each release |
-| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source, 0011 adds MySQL, MariaDB and Oracle, 0012 adds the read-only console |
+| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source, 0011 adds MySQL, MariaDB and Oracle, 0012 adds the read-only console, 0013 sets up the supervised agent team |
 
 ## Repository layout
 

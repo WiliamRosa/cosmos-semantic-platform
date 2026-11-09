@@ -7,6 +7,22 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+### Added
+
+- `cosmos query --csv` prints the result as CSV for spreadsheets and scripts: a header, then one
+  line per row, with raw values and nulls as empty fields. Standard output carries only the CSV,
+  and `--csv` with `--json` is an error. Contributed by @zheng-guannan577 in #24, the project's
+  first external contribution.
+
+- A supervised team of AI agents for daily evolution ([ADR 0013](docs/decisions/0013-supervised-agent-team.md)): an
+  orchestrator and four specialists in `.claude/agents/`, the project's working rules in
+  `CLAUDE.md`, and a daily report in GitHub Discussions that the maintainer approves.
+
+### Changed
+
+- Tests render CLI help as plain, unwrapped text everywhere, so a test reading `--help` behaves
+  the same on CI, where Typer otherwise forces a coloured terminal (#25).
+
 ## [0.3.0] - 2026-11-04
 
 A read-only console for people who decide, and a live demo of it that needs no install. AI
