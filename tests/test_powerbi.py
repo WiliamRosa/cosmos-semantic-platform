@@ -194,6 +194,28 @@ def test_dependent_measures_fail_together(tmp_path):
     assert "`D` not imported" in joined
 
 
+def test_distinctcount_counts_blank_and_distinctcountnoblank_matches(tmp_path):
+    (tmp_path / "m.bim").write_text(
+        """{"model": {"tables": [{"name": "T",
+            "columns": [{"name": "v", "dataType": "double", "sourceColumn": "v"}],
+            "partitions": [{"name": "T", "source": {"type": "query", "query": "SELECT * FROM t"}}],
+            "measures": [
+              {"name": "DC", "expression": "DISTINCTCOUNT(T[v])"},
+              {"name": "DCNB", "expression": "DISTINCTCOUNTNOBLANK(T[v])"}
+            ]}]}}""",
+        encoding="utf-8",
+    )
+    result = import_model("powerbi", tmp_path / "m.bim")
+    table = next(m for m in result.project.semantic_models if m.name == "t")
+    measures = {m.name: m for m in table.measures}
+    assert measures["dc"].agg == "count_distinct"
+    assert measures["dcnb"].agg == "count_distinct"
+    joined = "\n".join(result.warnings)
+    # DISTINCTCOUNT counts BLANK in DAX but count_distinct ignores nulls: flagged.
+    assert "`DC`: in DAX a DISTINCTCOUNT counts BLANK" in joined
+    assert "DCNB" not in joined
+
+
 def test_dax_parser_handles_quoting_and_comments():
     tree = parse_dax("CALCULATE( [Net Revenue] /* x */, 'Order Items'[Unit Price] > 10 -- y\n)")
     assert tree == (
