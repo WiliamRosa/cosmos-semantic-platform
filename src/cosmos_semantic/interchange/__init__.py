@@ -1,4 +1,5 @@
-"""Importing models from other tools: dbt, Apache Ossie and Cube (phase 1), Power BI (phase 3).
+"""Importing models from other tools: dbt, Apache Ossie and Cube (phase 1), Power BI (phase 3),
+and exporting to Apache Ossie.
 
 No conversion loses information silently: whatever has no equivalent becomes a warning in the
 report or is kept in ``custom_extensions``.
@@ -18,6 +19,12 @@ from cosmos_semantic.spec import Project
 @dataclass
 class ImportResult:
     project: Project
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ExportResult:
+    text: str
     warnings: list[str] = field(default_factory=list)
 
 

@@ -955,6 +955,49 @@ def export_skos(
     typer.secho(f"glossary written to {output} ({fmt})", fg=typer.colors.GREEN)
 
 
+@export_app.command("ossie")
+def export_ossie_cmd(
+    model: ModelOpt = Path("semantic"),
+    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+    fmt: Annotated[str, typer.Option("--format", "-f", help="yaml or json.")] = "yaml",
+    name: Annotated[
+        str | None, typer.Option(help="Name of the Ossie semantic model (default: the folder).")
+    ] = None,
+    allow_policy_loss: Annotated[
+        bool,
+        typer.Option(
+            "--allow-policy-loss",
+            help="Export even though row filters and sensitivity are not exported yet.",
+        ),
+    ] = False,
+) -> None:
+    """Exports models, entities, dimensions, measures and metrics as an Apache Ossie document.
+    What is not exported yet is listed as warnings on standard error. A model with row filters
+    or sensitive dimensions is refused unless --allow-policy-loss is given."""
+    from cosmos_semantic.interchange.ossie import export_ossie
+
+    if name is None:
+        folder = model.resolve()
+        name = (folder.parent.name if folder.name == "semantic" else folder.stem) or "semantic"
+    try:
+        result = export_ossie(
+            load_project(model), name=name, fmt=fmt, allow_policy_loss=allow_policy_loss
+        )
+    except (errors.CosmosError, ValueError) as exc:
+        _fail(exc)
+    for warning in result.warnings:
+        typer.secho(f"warning: {warning}", fg=typer.colors.YELLOW, err=True)
+    if output is None:
+        typer.echo(result.text, nl=False)
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(result.text, encoding="utf-8", newline="\n")
+    typer.secho(
+        f"Ossie model written to {output} ({fmt}, {len(result.warnings)} warnings)",
+        fg=typer.colors.GREEN,
+    )
+
+
 @app.command("bootstrap")
 def bootstrap_cmd(
     output: Annotated[Path, typer.Option("--output", "-o", help="Draft model file (.yml).")],

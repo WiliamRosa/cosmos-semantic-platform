@@ -14,5 +14,9 @@ class PolicyError(CosmosError):
     """An access or LGPD (personal data) policy denied the query."""
 
 
+class PolicyLossError(CosmosError):
+    """An export would drop row filters or personal-data marking without being allowed to."""
+
+
 class ConnectorError(CosmosError):
     """Running SQL on a data source failed."""
