@@ -13,7 +13,7 @@ from typing import Any
 from mcp.server.mcpserver import Context, MCPServer
 
 from cosmos_semantic.auth import Authenticator, AuthError
-from cosmos_semantic.errors import CosmosError
+from cosmos_semantic.errors import CosmosError, QueryError
 from cosmos_semantic.evidence import engine_version
 from cosmos_semantic.planner import Principal, QueryRequest
 from cosmos_semantic.service import SemanticService
@@ -30,7 +30,9 @@ Cosmos semantic layer. Before querying:
 Personal data (LGPD) never reaches agents: grouping or filtering by it is denied.
 Always answer with the number the tool returned. Every `query` result has an `evidence`
 envelope: cite the metric formula, the business rules applied (with owner and test status),
-the reference date (`as_of`) and the `query_id`, so the answer can be audited and replayed."""
+the reference date (`as_of`) and the `query_id`, so the answer can be audited and replayed.
+Call `replay` with a `query_id` the user ran to tell whether the model, the SQL or the data
+changed since then."""
 
 MAX_ROWS_FOR_AGENTS = 200
 
@@ -127,6 +129,25 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
             )
             compiled = service.compile(request, principal(ctx))
             return {"sql": compiled.sql, "dialect": compiled.dialect}
+
+        return guarded(run)()
+
+    @mcp.tool(
+        description=(
+            "Replay one of the user's audited queries, by `query_id`, with its original request, "
+            "user context and as_of, and tell whether the model, the SQL or the data changed."
+        )
+    )
+    def replay(query_id: str, ctx: Context) -> dict[str, Any]:
+        def run():
+            requester = principal(ctx)
+            # Check ownership before anything else, and answer a query of another user exactly
+            # like an unknown id, so an agent cannot learn which ids exist or how they ended.
+            record = service.find_audit(query_id)
+            owner = (record.get("principal") or {}).get("subject")
+            if requester.subject is None or owner != requester.subject:
+                raise QueryError(f"query `{query_id}` is not in the audit log")
+            return service.replay(query_id, requester=requester)
 
         return guarded(run)()
 

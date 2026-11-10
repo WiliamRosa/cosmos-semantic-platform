@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 import jwt
@@ -41,7 +42,7 @@ def signing_key():
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
-def make_client(graph, connector, signing_key, public_url=None):
+def make_client(graph, connector, signing_key, public_url=None, audit_path=None):
     engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
     engine._connectors["local"] = connector
     settings = AuthSettings(
@@ -57,7 +58,7 @@ def make_client(graph, connector, signing_key, public_url=None):
             return _Key(signing_key.public_key())
 
     authenticator.__dict__["_jwks"] = FakeJWKS()
-    service = SemanticService(engine)
+    service = SemanticService(engine, audit_path=audit_path)
     mcp_app = build_mcp(service, authenticator).streamable_http_app(
         streamable_http_path="/", host="testserver"
     )
@@ -70,6 +71,30 @@ def token(key, **claims) -> str:
     payload = {"iss": ISSUER, "aud": AUDIENCE, "sub": "u1", "iat": now, "exp": now + 600}
     payload.update(claims)
     return jwt.encode(payload, key, algorithm="RS256")
+
+
+def call_tool(client, headers: dict[str, str], tool: str, **arguments):
+    """Calls one MCP tool over streamable HTTP, in its own session, as the given credential."""
+    headers = MCP_HEADERS | headers
+    init = client.post("/mcp/", json=INITIALIZE, headers=headers)
+    assert init.status_code == 200, init.text
+    session = headers | {"mcp-session-id": init.headers["mcp-session-id"]}
+    client.post(
+        "/mcp/", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=session
+    )
+    message = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": tool, "arguments": arguments},
+    }
+    response = client.post("/mcp/", json=message, headers=session)
+    assert response.status_code == 200, response.text
+    data = [line[5:].strip() for line in response.text.splitlines() if line.startswith("data:")]
+    result = json.loads(data[-1] if data else response.text)["result"]
+    if result.get("structuredContent") is not None:
+        return result["structuredContent"]
+    return json.loads(result["content"][0]["text"])
 
 
 def test_metadata_names_the_identity_provider(graph, duckdb_connector, signing_key):
@@ -131,3 +156,19 @@ def test_valid_token_reaches_the_mcp_server(graph, duckdb_connector, signing_key
             response = client.post("/mcp/", json=INITIALIZE, headers=MCP_HEADERS | headers)
             assert response.status_code == 200, response.text
             assert "cosmos-semantic" in response.text
+
+
+def test_a_user_cannot_replay_another_users_query(graph, duckdb_connector, signing_key, tmp_path):
+    audit_path = tmp_path / "audit.jsonl"
+    alice = {"authorization": f"Bearer {token(signing_key, sub='alice', region='Midwest')}"}
+    dev = {"x-api-key": "dev-sul"}
+    with make_client(graph, duckdb_connector, signing_key, audit_path=audit_path) as client:
+        result = call_tool(client, dev, "query", metrics=["customer_count"])
+        query_id = result["evidence"]["query_id"]
+        foreign = call_tool(client, alice, "replay", query_id=query_id)
+        unknown = call_tool(client, alice, "replay", query_id="does-not-exist")
+        # Another user's query looks exactly like an id that does not exist.
+        assert foreign["error"] == unknown["error"] == "QueryError"
+        assert foreign["detail"] == unknown["detail"].replace("does-not-exist", query_id)
+        assert "verdict" not in foreign
+        assert call_tool(client, dev, "replay", query_id=query_id)["verdict"] == "identical"

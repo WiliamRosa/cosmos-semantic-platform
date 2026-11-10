@@ -14,13 +14,15 @@ from cosmos_semantic.service import SemanticService
 
 
 @pytest.fixture(scope="module")
-def server(graph, duckdb_connector):
+def server(graph, duckdb_connector, tmp_path_factory):
     engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
     engine._connectors["local"] = duckdb_connector
     settings = AuthSettings(
         dev_keys={"agente-sul": DevKey(subject="agente", user={"region": "Midwest"})}
     )
-    return build_mcp(SemanticService(engine), Authenticator(settings, graph.project.user_context))
+    audit_path = tmp_path_factory.mktemp("mcp") / "audit.jsonl"
+    service = SemanticService(engine, audit_path=audit_path)
+    return build_mcp(service, Authenticator(settings, graph.project.user_context))
 
 
 def call(server, tool: str, **arguments):
@@ -35,12 +37,19 @@ def call(server, tool: str, **arguments):
     return json.loads(result.content[0].text)
 
 
-def test_lists_the_five_tools(server):
+def test_lists_the_six_tools(server):
     async def run():
         async with Client(server) as client:
             return {t.name for t in (await client.list_tools()).tools}
 
-    assert asyncio.run(run()) == {"search_concepts", "explain", "list_members", "query", "show_sql"}
+    assert asyncio.run(run()) == {
+        "search_concepts",
+        "explain",
+        "list_members",
+        "query",
+        "show_sql",
+        "replay",
+    }
 
 
 def test_without_credentials_the_agent_gets_an_error(server, monkeypatch):
@@ -74,3 +83,20 @@ def test_show_sql_applies_the_users_row_filter(server, monkeypatch):
     monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
     result = call(server, "show_sql", metrics=["customer_count"], dimensions=["customers.region"])
     assert "'Midwest'" in result["sql"]
+
+
+def test_agent_replays_its_own_query(server, monkeypatch):
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    result = call(server, "query", metrics=["customer_count"], dimensions=["customers.region"])
+    query_id = result["evidence"]["query_id"]
+    report = call(server, "replay", query_id=query_id)
+    assert report["query_id"] == query_id
+    assert report["verdict"] == "identical", report
+    assert all(report["matches"].values())
+
+
+def test_replay_of_an_unknown_query_is_an_error(server, monkeypatch):
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    result = call(server, "replay", query_id="does-not-exist")
+    assert result["error"] == "QueryError"
+    assert "not in the audit log" in result["detail"]
