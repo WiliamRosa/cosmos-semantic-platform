@@ -14,6 +14,12 @@ format or the API; such changes are listed under **Changed**.
   and `--csv` with `--json` is an error. Contributed by @zheng-guannan577 in #24, the project's
   first external contribution.
 
+- `cosmos import powerbi` imports `DISTINCTCOUNTNOBLANK` as a `count_distinct` measure, and
+  flags every `DISTINCTCOUNT` measure in the import report: DAX counts BLANK as a value, while
+  `count_distinct` ignores nulls, so the imported measure is one lower whenever the column has
+  nulls. Contributed
+  by @bfs2021 in #11 (fixes #4).
+
 - A supervised team of AI agents for daily evolution ([ADR 0013](docs/decisions/0013-supervised-agent-team.md)): an
   orchestrator and four specialists in `.claude/agents/`, the project's working rules in
   `CLAUDE.md`, and a daily report in GitHub Discussions that the maintainer approves.
