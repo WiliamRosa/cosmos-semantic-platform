@@ -93,7 +93,7 @@ claude mcp add cosmos \
 ```
 
 Any MCP client works the same way: command `cosmos`, arguments `mcp -m <semantic> -c
-<connections.yml>`, and those three environment variables. The agent gets five tools:
+<connections.yml>`, and those three environment variables. The agent gets six tools:
 
 | Tool | What it does |
 | --- | --- |
@@ -102,6 +102,7 @@ Any MCP client works the same way: command `cosmos`, arguments `mcp -m <semantic
 | `list_members` | The metrics, dimensions and rules it can ask for |
 | `query` | Runs a metrics request with the user's policies and returns the evidence envelope |
 | `show_sql` | The SQL the engine would run, without running it |
+| `replay` | Re-runs one of the user's audited queries by `query_id` and tells whether the model, the SQL or the data changed (needs `COSMOS_AUDIT_LOG`) |
 
 Ask it "how many active buyers do we have?": it finds the rule through the synonym, queries
 `customer_count` filtered by `{rule.active_customer}` for the Midwest, and cannot group by e-mail.

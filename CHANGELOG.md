@@ -24,6 +24,11 @@ format or the API; such changes are listed under **Changed**.
   orchestrator and four specialists in `.claude/agents/`, the project's working rules in
   `CLAUDE.md`, and a daily report in GitHub Discussions that the maintainer approves.
 
+- The MCP server has a `replay` tool, the equivalent of `POST /v1/replay/{query_id}`: it re-runs
+  one of the user's audited queries and tells whether the model, the SQL or the data changed.
+  Only the user who ran a query can replay it; over MCP, another user's query gets the same
+  error as an unknown `query_id`.
+
 ### Changed
 
 - Tests render CLI help as plain, unwrapped text everywhere, so a test reading `--help` behaves

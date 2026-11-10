@@ -106,7 +106,7 @@ Every answer (REST, MCP and `cosmos query --evidence`) carries an `evidence` env
 | `sql`, `result` | Generated SQL and its hash; row count and an order-independent result hash |
 | `caveats` | What the evidence does not prove, such as untested rules or the reproducibility limit |
 
-With `COSMOS_AUDIT_LOG` pointing to a `.jsonl` file, every query is recorded with its hashes, and `cosmos replay <query_id>` (or `POST /v1/replay/{query_id}`, only for the user who ran it) re-runs it with the same request, user context and `as_of`. The verdict is `identical`, `data_changed` (same model and SQL, different result), `model_changed` or `engine_changed`. Replaying only returns the same number if the source data has not changed; the envelope says so instead of promising more.
+With `COSMOS_AUDIT_LOG` pointing to a `.jsonl` file, every query is recorded with its hashes, and `cosmos replay <query_id>` (or `POST /v1/replay/{query_id}` and the MCP tool `replay`, only for the user who ran it) re-runs it with the same request, user context and `as_of`. The verdict is `identical`, `data_changed` (same model and SQL, different result), `model_changed` or `engine_changed`. Replaying only returns the same number if the source data has not changed; the envelope says so instead of promising more.
 
 The result hash is the same on DuckDB, Postgres and SQL Server for the same request, which the tests check.
 
@@ -210,6 +210,7 @@ Every inference goes into the report (`--report report.json`); the draft is a st
 | `list_members` | Available metrics, dimensions and rules |
 | `query` | The result of a metrics request, with policies already applied |
 | `show_sql` | The SQL the engine generated for a request |
+| `replay` | Whether the model, the SQL or the data changed since one of the user's audited queries |
 
 ## Authoring flow
 
