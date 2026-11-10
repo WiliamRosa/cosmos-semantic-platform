@@ -118,6 +118,10 @@ uv run cosmos pack apply retail --source local --schema public -c examples/ecomm
 # The business glossary as SKOS/RDF for data catalogs (turtle, jsonld or ntriples)
 uv run cosmos export skos -m examples/ecommerce/semantic -o glossary.ttl --base https://data.example.com/glossary/
 
+# The model as Apache Ossie (yaml or json); what is not exported yet is listed on stderr.
+# Row filters and sensitivity are not exported yet, so the example needs --allow-policy-loss
+uv run cosmos export ossie -m examples/ecommerce/semantic -o ecommerce.ossie.yaml --allow-policy-loss
+
 # Draft a model from the database catalog (keys, joins, measures, LGPD suggestions), then review it
 uv run cosmos bootstrap -c examples/ecommerce/connections.yml -o semantic/draft.yml
 
@@ -184,7 +188,7 @@ Editors validate and autocomplete model files through the JSON Schema in [schema
 | [Product vision](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/product-vision.md) | Problem, audience, positioning, free and paid editions |
 | [Architecture](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/architecture.md) | Components, query planner, cross-database guarantees, security, deployment |
 | [Semantic model](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/semantic-model.md) | The authoring format, the generated SQL and the exports |
-| [Interoperability](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/interoperability.md) | Mapping to Apache Ossie, and dbt and Cube import |
+| [Interoperability](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/interoperability.md) | Mapping to Apache Ossie (import and export), and dbt and Cube import |
 | [Roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md) | Phases, MVP scope and exit criteria |
 | [Changelog](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md) | What changed in each release |
 | [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source, 0011 adds MySQL, MariaDB and Oracle, 0012 adds the read-only console, 0013 sets up the supervised agent team |
@@ -213,7 +217,7 @@ src/cosmos_semantic/
   console.py         read-only console views: health, process graphs, catalog, answers
   checks.py          `cosmos check` runs (rule tests, reconciliations) and their log
   mcp_server.py      MCP server
-  interchange/       dbt, Ossie and Cube import
+  interchange/       dbt, Ossie and Cube import; Ossie and SKOS export
   demo_data.py       synthetic data (en_US default, pt_BR optional)
   reference.py       running the reference queries
   cli.py             the `cosmos` command

@@ -68,7 +68,7 @@ Redefined by [ADR 0009](decisions/0009-business-context-as-phase-3-differentiato
 
 ## Phase 4: connected BI and managed product — paused
 
-- Ossie export with a round-trip test; Cube and dbt export, with a round-trip test for Cube.
+- Ossie export with a round-trip test — first slice done (`cosmos export ossie`: models, entities, dimensions, measures and metrics); glossary, business rules, row filters, sensitivity and business context next. Cube and dbt export, with a round-trip test for Cube.
 - Result cache.
 - A Postgres-compatible SQL endpoint, for Power BI, Tableau and Excel.
 - Control plane: editor, playground, connections, users.

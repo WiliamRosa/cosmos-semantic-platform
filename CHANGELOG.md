@@ -29,6 +29,17 @@ format or the API; such changes are listed under **Changed**.
   Only the user who ran a query can replay it; over MCP, another user's query gets the same
   error as an unknown `query_id`.
 
+- `cosmos export ossie` writes the model as an Apache Ossie document (YAML, or JSON with
+  `--format json`). This first slice exports models, entities, dimensions, measures and the four
+  metric types as datasets, keys, relationships, fields and `OSSIE_SQL_2026` metrics on each
+  dataset. Metrics that span datasets (a naive reader could fan them out) and cumulative ones
+  stay only in a `COSMOS_SEMANTIC` extension, from which `cosmos import ossie` restores the same
+  authoring model. Row filters and sensitivity are not exported yet, so the export fails closed
+  unless `--allow-policy-loss` is given. They and the glossary, business rules and business
+  context are listed as warnings on standard error, and are recorded in the extension, which the
+  importer reports again. Round-trip and same-numbers tests on every database
+  ([interoperability](docs/interoperability.md#exporting-ossie)).
+
 ### Changed
 
 - Tests render CLI help as plain, unwrapped text everywhere, so a test reading `--help` behaves

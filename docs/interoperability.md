@@ -89,6 +89,27 @@ Reported as warnings, never dropped silently: iterators (`SUMX` and similar), `F
 
 An equivalence test imports a Power BI version of the e-commerce example, in both formats, and checks that it returns the same numbers as the native model on DuckDB, Postgres and SQL Server.
 
+## Exporting Ossie
+
+`cosmos export ossie -m semantic -o model.ossie.yaml` writes the model as an Ossie `0.2.0.dev0` document, following the mapping above (`--format json` for JSON, `--name` for the model name; without `-o`, standard output carries only the document). This first slice covers models, entities, dimensions, measures and the four metric types:
+
+| Authoring format | In the document |
+| --- | --- |
+| Models, dimensions | `datasets` with `source`; `fields` with `dimension` (`is_time` for time dimensions) |
+| Entities | `primary_key`, `unique_keys`, a field per key expression, and one explicit relationship per join the engine infers |
+| Measures, and metrics over one dataset | `metrics` on that dataset in `OSSIE_SQL_2026`, written as the planner computes them: a metric filter becomes `CASE WHEN` inside the aggregation, `AVG(CAST(x AS DOUBLE))`, and division is `CAST(a AS DOUBLE) / NULLIF(b, 0)` |
+| Everything Ossie does not represent | A `COSMOS_SEMANTIC` extension at the root holding the exported part of the project, which `cosmos import ossie` restores exactly (Rule 4) |
+
+Some metrics have no native expression and live only in the extension, with a warning that states the reason and that other tools will not see them:
+
+- metrics that span datasets: Ossie does not require a reader to aggregate each dataset at its own grain, so a native expression could fan out (a row-level join of orders and payments inflates order revenue);
+- cumulative metrics;
+- metrics whose filter uses another dataset, a time grain, a business rule or `$user`, or whose derived expression uses bare columns.
+
+**Policies fail closed.** Row filters and sensitivity are not exported yet, so a model that has them is refused, exit code 1, with the counts: `1 row filter and 3 sensitive dimensions would NOT be exported; the document would have no row-level security or personal-data marking. Pass --allow-policy-loss to export anyway`. With `--allow-policy-loss`, the document carries no row-level security and no personal-data marking. The glossary, business rules, user context, teams, systems and processes are not exported yet either. Every omitted member becomes a warning on standard error, and the extension records what was omitted (`omitted`: row filter and dimension names, counts for the rest, never values). `cosmos import ossie` turns that record back into warnings, so whoever imports the file later learns that the row filters and personal-data marking are gone.
+
+Tests export the e-commerce example and re-import it. The authoring model is the same, member by member. The re-imported model answers the 27 reference queries that need no user and no business rule with the numbers of the hand-written SQL. A Cosmos import of the native part alone, without the extension, returns the same numbers for every metric it expresses. This says nothing about other Ossie readers, whose semantics the standard does not yet pin down. Other tests pin the exact native expressions. Both number checks run on DuckDB and on every database configured in CI.
+
 ## Exporting the glossary as SKOS/RDF
 
 `cosmos export skos -o glossary.ttl` (or `GET /v1/glossary?format=turtle|jsonld|ntriples` on the REST API) publishes the business glossary for data catalogs and thesaurus tools that read [SKOS](https://www.w3.org/TR/skos-reference/):
