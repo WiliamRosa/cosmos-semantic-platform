@@ -20,6 +20,12 @@ format or the API; such changes are listed under **Changed**.
   nulls. Contributed
   by @bfs2021 in #11 (fixes #4).
 
+- `cosmos import powerbi` imports `SUMX` over the measure's own table as a `sum` measure whose
+  `expr` is the row expression, when that expression is `+`, `-` and `*` over the table's
+  numeric columns and numbers (for example `SUMX('Order Items', [quantity] * [unit_price])`).
+  BLANK keeps its DAX meaning: `BLANK * x` is NULL, and `+`/`-` treat one missing side as zero.
+  Division, functions, `RELATED`, `FILTER`, other tables and the other iterators stay warnings.
+
 - A supervised team of AI agents for daily evolution ([ADR 0013](docs/decisions/0013-supervised-agent-team.md)): an
   orchestrator and four specialists in `.claude/agents/`, the project's working rules in
   `CLAUDE.md`, and a daily report, posted as an issue labelled `daily`, that the maintainer answers.

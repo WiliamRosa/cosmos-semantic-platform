@@ -7,13 +7,15 @@ become entities. DAX measures are translated when they map onto the Cosmos metri
 | DAX | Cosmos |
 | --- | --- |
 | ``SUM``, ``AVERAGE``, ``MIN``, ``MAX``, ``COUNT``, ``DISTINCTCOUNT``, ``DISTINCTCOUNTNOBLANK``, ``COUNTROWS`` | measure |
+| ``SUMX(T, ...)`` over the measure's own table, with ``+ - *`` over its numeric columns | ``sum`` measure |
 | ``DIVIDE(a, b)`` | ratio metric |
 | ``CALCULATE(m, T[c] = "x", ...)`` with simple column filters | metric with ``filter`` |
 | ``TOTALYTD``, ``TOTALQTD``, ``TOTALMTD`` | cumulative metric |
 | arithmetic over measures (``[A] - [B]``) | derived metric |
 
-Everything else (iterators such as ``SUMX``, ``FILTER``, ``ALL``, variables, calculated columns
-and tables, calculation groups, row-level security roles) is reported as a warning; nothing is
+Everything else (other iterators such as ``AVERAGEX``; ``SUMX`` over another table, with a
+division, a function or ``RELATED``; ``FILTER``, ``ALL``, variables, calculated columns and
+tables, calculation groups, row-level security roles) is reported as a warning; nothing is
 dropped silently. No DAX is ever executed.
 """
 
@@ -51,6 +53,7 @@ _AGGS = {
     "DISTINCTCOUNTNOBLANK": "count_distinct",
 }
 _TO_DATE = {"TOTALYTD": "year", "TOTALQTD": "quarter", "TOTALMTD": "month"}
+_SQL_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def ident(name: str) -> str:
@@ -583,6 +586,81 @@ class _Translator:
             item["description"] = description
         return self.add_measure(table, item)
 
+    def row_sum(self, node: tuple, home: _Table | None, name: str, description: str | None) -> str:
+        """Registers ``SUMX(T, <row arithmetic>)`` over the measure's own table as a ``sum``
+        measure whose ``expr`` is the row expression, and returns its name."""
+        args = node[2]
+        if len(args) != 2:
+            raise _Unsupported("SUMX takes a table and a row expression")
+        if args[0][0] != "table":
+            raise _Unsupported("SUMX over a table expression instead of a table name")
+        if home is None or args[0][1] != home.name:
+            raise _Unsupported(f"SUMX over `{args[0][1]}`, which is not the measure's own table")
+        item: dict[str, Any] = {
+            "name": name,
+            "agg": "sum",
+            "expr": self.row_expression(args[1], home)[0],
+        }
+        if description:
+            item["description"] = description
+        return self.add_measure(home, item)
+
+    def row_expression(self, node: tuple, table: _Table) -> tuple[str, bool, int]:
+        """A SUMX row expression as portable SQL: (sql, can be null, precedence of its top
+        operator: 0 for an operand, 1 for ``*``, 2 for ``+``/``-``). Multiplication keeps NULL
+        as DAX keeps BLANK (``BLANK * 5`` is BLANK). In DAX ``BLANK + 5`` is 5 and
+        ``BLANK + BLANK`` is BLANK, so ``+`` and ``-`` coalesce a missing side. Division is
+        not translated: DAX returns infinity or BLANK where SQL raises an error, returns NULL
+        or truncates integers."""
+        kind = node[0]
+        if kind == "num":
+            return node[1], False, 0
+        if kind == "neg" and node[1][0] == "num":
+            return f"(-{node[1][1]})", False, 0
+        if kind in ("col", "mref"):
+            owner, column = (node[1], node[2]) if kind == "col" else (table.name, node[1])
+            if kind == "mref" and column in self.dax:
+                raise _Unsupported(f"SUMX row expression references the measure `[{column}]`")
+            if owner != table.name:
+                raise _Unsupported(
+                    f"SUMX row expression references `{owner}[{column}]`, a column of another table"
+                )
+            _, info = self.column(owner, column)
+            if info["spec"]["type"] != "number":
+                raise _Unsupported(f"SUMX over the non-numeric column `{owner}[{column}]`")
+            if not _SQL_IDENT.match(info["source"]):
+                raise _Unsupported(
+                    f"SUMX over `{owner}[{column}]`, whose source column `{info['source']}` "
+                    "is not a plain SQL identifier"
+                )
+            return info["source"], True, 0
+        if kind == "bin" and node[1] == "/":
+            raise _Unsupported(
+                "SUMX row expression divides; DAX division returns infinity or BLANK where "
+                "SQL raises an error, returns NULL or truncates integers"
+            )
+        if kind == "bin" and node[1] in ("+", "-", "*"):
+            op, level = node[1], 1 if node[1] == "*" else 2
+            left, left_null, left_level = self.row_expression(node[2], table)
+            right, right_null, right_level = self.row_expression(node[3], table)
+            # Left-associative: same-level operators on the left need no parentheses.
+            lhs = f"({left})" if left_level > level else left
+            rhs = f"({right})" if right_level and right_level >= level else right
+            if op == "*" or not (left_null or right_null):
+                return f"{lhs} {op} {rhs}", left_null or right_null, level
+            if not right_null:
+                return f"COALESCE({left}, 0) {op} {rhs}", False, level
+            if not left_null:
+                return f"{lhs} {op} COALESCE({right}, 0)", False, level
+            negated = rhs if op == "+" else f"-({right})" if right_level else f"-{right}"
+            return f"COALESCE({lhs} {op} {rhs}, {left}, {negated})", True, 0
+        if kind == "neg":
+            raise _Unsupported(
+                "SUMX row expression negates a column or an expression; only negative "
+                "numbers are translated"
+            )
+        raise _Unsupported("SUMX row expression is not arithmetic over the table's columns")
+
     def operand(self, node: tuple, hint: str | None = None) -> str:
         """A measure reference or an inline aggregation, as a Cosmos member name."""
         if node[0] == "mref":
@@ -676,6 +754,9 @@ class _Translator:
         home = self.tables.get(source["table"])
         kind = tree[0]
 
+        if kind == "call" and tree[1] == "SUMX":
+            self.done[pbi_name] = self.row_sum(tree, home, name, description)
+            return
         if kind == "call" and (tree[1] in _AGGS or tree[1] == "COUNTROWS"):
             if tree[1] == "DISTINCTCOUNT":
                 self.warnings.append(
@@ -767,7 +848,9 @@ class _Translator:
 
 
 _TRANSLATABLE = (
-    set(_AGGS) | {"COUNTROWS", "DIVIDE", "CALCULATE", "KEEPFILTERS", "BLANK"} | set(_TO_DATE)
+    set(_AGGS)
+    | {"COUNTROWS", "DIVIDE", "CALCULATE", "KEEPFILTERS", "BLANK", "SUMX"}
+    | set(_TO_DATE)
 )
 
 
