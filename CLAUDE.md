@@ -11,6 +11,13 @@ Rules for every Claude Code session and every agent in this repository: interact
 - **Nothing outside the repository without the maintainer's approval:** no posts, no comments on other projects, no registry or directory submissions, no package publishing.
 - **Never commit secrets.** Credentials come from environment variables. The Snowflake key, Databricks tokens and API keys never appear in the repository, a log or a pull request.
 
+## Agent runs
+
+- **Schedule (São Paulo time, every day):** the execute run at 18:00 opens the day's pull requests; the daily report at 20:00 is an issue labelled `daily`, with the weekly review added on Fridays. The maintainer answers the daily in a comment (`DEC-<n> approve|reject|later`).
+- **Identity first.** Before any GitHub or Git action, `gh api user --jq .login` must print `cosmosagentsteam-lab`; otherwise stop and report the login found. A token kept in the environment is not a fallback: the cloud proxy replaces it with the Claude GitHub App's.
+- **REST only.** GraphQL is not available to cloud routines, so `gh pr`, `gh issue` and Discussions do not work there. Use `gh api` with the REST endpoints.
+- **Budget:** at most 3 agent pull requests a day, unless the maintainer decides otherwise in a daily.
+
 ## Commits and pull requests
 
 - **English** in code, comments, messages, tests, docs and pull requests. Portuguese appears only as data (sample values, `pt` glossary labels). Chat with the maintainer is in Portuguese.
