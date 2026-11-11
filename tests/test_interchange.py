@@ -365,13 +365,109 @@ def test_ossie_export_native_part_keeps_policies(graph, tmp_path, source, reques
     doc["custom_extensions"] = [e for e in doc["custom_extensions"] if e["vendor_name"] != VENDOR]
     path = tmp_path / "native.yaml"
     path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
-    native, _ = imported("ossie", path)
+    native, warnings = imported("ossie", path)
     assert _policies(native.project) == _policies(graph.project)
+    assert len(warnings) == 1
+    assert warnings[0].startswith(
+        "the row filters and sensitivity of customers.by_region, customers.email, "
+        "customers.tax_id, customers.health_plan were read from the COSMOS_SEMANTIC copies"
+    )
+    assert "verify them before use" in warnings[0]
     cases = [c for c in REFERENCE if c.id in ("R17", "R18")]
     assert len(cases) == 2
     for case in cases:
         result = run_case(case, native, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
+
+
+def _native_doc(project: Project) -> dict:
+    """The exported document without the root Cosmos extension."""
+    doc = yaml.safe_load(export_ossie(project).text)
+    doc["custom_extensions"] = [e for e in doc["custom_extensions"] if e["vendor_name"] != VENDOR]
+    return doc
+
+
+def _import_doc(doc: dict, tmp_path: Path):
+    path = tmp_path / "doc.yaml"
+    path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
+    return import_model("ossie", path)
+
+
+def test_ossie_import_warns_on_root_extension_without_project(graph, tmp_path):
+    doc = _native_doc(graph.project)
+    doc["custom_extensions"].append({"vendor_name": VENDOR, "data": json.dumps({"x": 1})})
+    result = _import_doc(doc, tmp_path)
+    assert result.warnings[0] == (
+        "custom_extensions: the COSMOS_SEMANTIC extension at the root has no project; the "
+        "model is read from the native part of the document"
+    )
+    assert "were read from the COSMOS_SEMANTIC copies" in result.warnings[1]
+    assert _policies(result.project) == _policies(graph.project)
+
+
+def test_ossie_import_refuses_conflicting_user_context(graph, tmp_path):
+    data = graph.project.model_dump(mode="json")
+    sellers = next(m for m in data["semantic_models"] if m["name"] == "sellers")
+    sellers["row_filters"] = [{"name": "by_region", "filter": "{region} = $user.region"}]
+    doc = _native_doc(Project.model_validate(data))
+    # The same declaration in two datasets is fine.
+    assert _policies(_import_doc(doc, tmp_path).project)["user_context"] == {
+        "region": graph.project.user_context["region"].model_dump(mode="json")
+    }
+    ds = next(d for d in doc["datasets"] if d["name"] == "sellers")
+    copy = json.loads(ds["custom_extensions"][0]["data"])
+    copy["user_context"]["region"]["claim"] = "home_region"
+    ds["custom_extensions"][0]["data"] = json.dumps(copy)
+    with pytest.raises(ValueError, match="user_context.region is declared in conflicting ways"):
+        _import_doc(doc, tmp_path)
+    copy["user_context"]["region"]["claim"] = "region"
+    copy["user_context"]["region"]["required"] = False
+    ds["custom_extensions"][0]["data"] = json.dumps(copy)
+    with pytest.raises(ValueError, match="datasets.sellers: user_context.region"):
+        _import_doc(doc, tmp_path)
+
+
+def test_ossie_import_rejects_invalid_extension_json(graph, tmp_path):
+    doc = _native_doc(graph.project)
+    customers = next(d for d in doc["datasets"] if d["name"] == "customers")
+    email = next(f for f in customers["fields"] if f["name"] == "email")
+    email["custom_extensions"][0]["data"] = "{not json"
+    with pytest.raises(
+        ValueError,
+        match=r"datasets.customers.fields.email.custom_extensions: the COSMOS_SEMANTIC "
+        r"extension is not valid JSON",
+    ):
+        _import_doc(doc, tmp_path)
+    doc = _native_doc(graph.project)
+    doc["custom_extensions"].append({"vendor_name": VENDOR, "data": "[1"})
+    with pytest.raises(ValueError, match=r"^custom_extensions: the COSMOS_SEMANTIC extension"):
+        _import_doc(doc, tmp_path)
+
+
+def test_ossie_import_fallback_reports_user_metrics(graph, tmp_path):
+    """A metric whose filter reads $user has no native expression; without the root extension
+    it is missing, and the import says so instead of dropping it, or its user context,
+    silently."""
+    data = graph.project.model_dump(mode="json")
+    data["metrics"].append(
+        {
+            "name": "my_status_revenue",
+            "type": "simple",
+            "measure": "revenue",
+            "filter": "{status} = $user.region",
+        }
+    )
+    project = Project.model_validate(data)
+    doc = yaml.safe_load(export_ossie(project).text)
+    root = _cosmos_extension(doc)["project"]
+    assert "my_status_revenue" in {m["name"] for m in root["metrics"]}
+    assert list(root["user_context"]) == ["region"]
+    natives = {m["name"] for d in doc["datasets"] for m in d.get("metrics", [])}
+    assert "my_status_revenue" not in natives
+    result = _import_doc(_native_doc(project), tmp_path)
+    assert "my_status_revenue" not in {m.name for m in result.project.metrics}
+    assert "metrics whose filter reads $user" in result.warnings[-1]
+    assert "are missing" in result.warnings[-1]
 
 
 def test_ossie_export_fails_closed_on_policy_loss(graph, tmp_path):

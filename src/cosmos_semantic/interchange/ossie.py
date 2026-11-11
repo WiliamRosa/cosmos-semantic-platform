@@ -102,12 +102,16 @@ def import_ossie(path: str | Path) -> ImportResult:
         doc = doc["semantic_model"][0]
     warnings: list[str] = []
 
-    for ext in doc.get("custom_extensions") or []:
-        if ext.get("vendor_name") == VENDOR:
-            data = json.loads(ext["data"])
-            if "project" in data:
-                warnings += _omitted_warnings(data.get("omitted") or {})
-                return ImportResult(Project.model_validate(data["project"]), warnings)
+    root = _cosmos_data(doc, "custom_extensions")
+    if "project" in root:
+        warnings += _omitted_warnings(root.get("omitted") or {})
+        return ImportResult(Project.model_validate(root["project"]), warnings)
+    if any(e.get("vendor_name") == VENDOR for e in doc.get("custom_extensions") or []):
+        warnings.append(
+            f"custom_extensions: the {VENDOR} extension at the root has no project; the model "
+            "is read from the native part of the document"
+        )
+    copies: list[str] = []
 
     datasets = {d["name"]: d for d in doc.get("datasets") or []}
     model_names = {name: _ident(name) for name in datasets}
@@ -123,10 +127,11 @@ def import_ossie(path: str | Path) -> ImportResult:
         if ds.get("description"):
             model["description"] = ds["description"]
         exprs: dict[str, str] = {}
-        policies = _cosmos_data(ds)
+        policies = _cosmos_data(ds, f"{where}.custom_extensions")
         if policies.get("row_filters"):
             model["row_filters"] = policies["row_filters"]
-            user_context.update(policies.get("user_context") or {})
+            copies += [f"{mname}.{f['name']}" for f in policies["row_filters"]]
+            _merge_user_context(user_context, policies.get("user_context") or {}, where)
         for fld in ds.get("fields") or []:
             fexpr = _expression(fld.get("expression"), f"{where}.fields.{fld['name']}", warnings)
             exprs[fld["name"]] = fexpr or fld["name"]
@@ -142,8 +147,10 @@ def import_ossie(path: str | Path) -> ImportResult:
                 item["expr"] = fexpr
             if fld.get("description"):
                 item["description"] = fld["description"]
-            if _cosmos_data(fld).get("sensitivity"):
-                item["sensitivity"] = _cosmos_data(fld)["sensitivity"]
+            marking = _cosmos_data(fld, f"{where}.fields.{fld['name']}.custom_extensions")
+            if marking.get("sensitivity"):
+                item["sensitivity"] = marking["sensitivity"]
+                copies.append(f"{mname}.{dim_name}")
             model.setdefault("dimensions", []).append(item)
             _synonyms(glossary, fld, f"dimension:{mname}.{dim_name}", f"{mname}_{dim_name}")
         field_exprs[name] = exprs
@@ -197,6 +204,15 @@ def import_ossie(path: str | Path) -> ImportResult:
     for metric in doc.get("metrics") or []:
         _metric(metric, models, model_names, field_exprs, metrics, glossary, warnings, scope=None)
 
+    if copies:
+        warnings.append(
+            f"the row filters and sensitivity of {', '.join(copies)} were read from the "
+            f"{VENDOR} copies on datasets and fields, not from the root {VENDOR} extension, "
+            "which is missing; verify them before use. Members kept only in the root extension "
+            "(metrics that span datasets, cumulative ones, metrics whose filter reads $user, "
+            "the user context only those metrics read, and the glossary beyond ai_context "
+            "synonyms) are missing"
+        )
     extensions = {
         ext.get("vendor_name", "unknown"): ext.get("data")
         for ext in doc.get("custom_extensions") or []
@@ -214,13 +230,41 @@ def import_ossie(path: str | Path) -> ImportResult:
     return ImportResult(project, warnings)
 
 
-def _cosmos_data(member: dict) -> dict[str, Any]:
-    """The Cosmos extension of a dataset or field: its row filters or sensitivity."""
+def _cosmos_data(member: dict, where: str) -> dict[str, Any]:
+    """The Cosmos extension of the document, a dataset or a field."""
     for ext in member.get("custom_extensions") or []:
         if ext.get("vendor_name") == VENDOR:
             data = ext.get("data")
-            return json.loads(data) if isinstance(data, str) else data or {}
+            try:
+                data = json.loads(data) if isinstance(data, str) else data
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"{where}: the {VENDOR} extension is not valid JSON ({exc})"
+                ) from None
+            if data is not None and not isinstance(data, dict):
+                raise ValueError(f"{where}: the {VENDOR} extension is not a JSON object")
+            return data or {}
     return {}
+
+
+def _merge_user_context(merged: dict[str, Any], fields: dict[str, Any], where: str) -> None:
+    """The user context the row filters of each dataset read; a field declared in two ways
+    is an error, since either one would change who sees which rows."""
+    for name, field in fields.items():
+        if name in merged:
+            old, new = merged[name], field
+            if (old.get("claim"), old.get("required", True)) != (
+                new.get("claim"),
+                new.get("required", True),
+            ):
+                raise ValueError(
+                    f"{where}: user_context.{name} is declared in conflicting ways in the "
+                    f"{VENDOR} copies (claim {old.get('claim')!r}, required "
+                    f"{old.get('required', True)} against claim {new.get('claim')!r}, required "
+                    f"{new.get('required', True)}); fix the document"
+                )
+            continue
+        merged[name] = field
 
 
 def _omitted_warnings(omitted: dict[str, Any]) -> list[str]:
