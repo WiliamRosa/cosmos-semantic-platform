@@ -79,15 +79,16 @@ Importing a Cube model and exporting it back must produce the same static YAML, 
 | Column | Dimension (`sourceColumn` becomes `expr`); hidden columns, usually keys, only when a filter needs them |
 | Active relationship | Foreign entity on the many side, primary entity on the one side |
 | `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `DISTINCTCOUNT`, `DISTINCTCOUNTNOBLANK`, `COUNTROWS` | Measure |
+| `SUMX(T, ...)` over the measure's own table, with `+`, `-` and `*` over its numeric columns and numbers | `sum` measure with that row expression; `+` and `-` keep the DAX rule that one BLANK side counts as zero (`BLANK * x` is BLANK, as NULL is in SQL) |
 | `DIVIDE(a, b)` | Ratio metric |
 | `CALCULATE(m, T[c] = "x", T[d] IN {...}, KEEPFILTERS(...))` | Metric with `filter` |
 | `TOTALYTD`, `TOTALQTD`, `TOTALMTD` | Cumulative metric |
 | Arithmetic over measures | Derived metric |
 | Hierarchies | `custom_extensions` |
 
-Reported as warnings, never dropped silently: iterators (`SUMX` and similar), `FILTER`, `ALL`, variables, `LASTDATE` and other functions with no equivalent (with the measures that depend on them), calculated columns and tables, calculation groups, inactive (`USERELATIONSHIP`), bidirectional and many-to-many relationships, and row-level security roles, which must be recreated as `row_filters` with `$user` fields. Two semantic differences are flagged per measure: a plain `CALCULATE` filter replaces the filter on that column in DAX, while Cosmos intersects it, as `KEEPFILTERS` does (numbers differ only when a query also groups or filters by that column); and `DISTINCTCOUNT` counts BLANK as a value in DAX, while `count_distinct` ignores nulls (use `DISTINCTCOUNTNOBLANK` in Power BI to match).
+Reported as warnings, never dropped silently: other iterators (`AVERAGEX` and similar) and `SUMX` over another table or with a division, a function or `RELATED` (DAX division returns infinity or BLANK where SQL fails, returns NULL or truncates integers), `FILTER`, `ALL`, variables, `LASTDATE` and other functions with no equivalent (with the measures that depend on them), calculated columns and tables, calculation groups, inactive (`USERELATIONSHIP`), bidirectional and many-to-many relationships, and row-level security roles, which must be recreated as `row_filters` with `$user` fields. Two semantic differences are flagged per measure: a plain `CALCULATE` filter replaces the filter on that column in DAX, while Cosmos intersects it, as `KEEPFILTERS` does (numbers differ only when a query also groups or filters by that column); and `DISTINCTCOUNT` counts BLANK as a value in DAX, while `count_distinct` ignores nulls (use `DISTINCTCOUNTNOBLANK` in Power BI to match).
 
-An equivalence test imports a Power BI version of the e-commerce example, in both formats, and checks that it returns the same numbers as the native model on DuckDB, Postgres and SQL Server.
+An equivalence test imports a Power BI version of the e-commerce example, in both formats, and checks that it returns the same numbers as the native model on DuckDB, Postgres and SQL Server. Imported `SUMX` measures are also checked against hand-written SQL on data with NULLs in every numeric column.
 
 ## Exporting Ossie
 
