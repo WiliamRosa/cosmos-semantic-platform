@@ -191,9 +191,9 @@ def test_ossie_restores_cosmos_projects_without_loss(tmp_path, graph):
     assert result.project.model_dump(mode="json") == graph.project.model_dump(mode="json")
 
 
-# -- Ossie export (first slice: models, entities, dimensions, measures and metrics) -----------
+# -- Ossie export (models, entities, dimensions, measures, metrics, policies and glossary) ---
 
-LATER_SLICE = ("glossary", "business_rules", "user_context", "teams", "systems", "processes")
+LATER_SLICE = ("business_rules", "teams", "systems", "processes")
 REFERENCE = load_cases(CASES) + load_cases(CASES.with_name("queries_advanced.yml"))
 # Metrics kept only in the Cosmos extension, and why.
 EXTENSION_ONLY = {
@@ -202,22 +202,48 @@ EXTENSION_ONLY = {
     "revenue_year_to_date": "it is cumulative",
     "revenue_month_to_date": "it is cumulative",
 }
+# A row filter that reads a business rule, which the Ossie export does not carry yet.
+RULE_FILTER = {"name": "active_only", "filter": "{rule.active_customer} AND {segment} <> 'x'"}
 
 
 def _exported_slice(project: Project) -> dict:
-    """The example as this slice exports it: no row filters, sensitivity or later members."""
+    """The example as the export carries it: no business rules or business context, and no
+    glossary concept that maps to a rule. Row filters, sensitivity, the user context the row
+    filters read and the rest of the glossary are kept."""
     data = project.model_dump(mode="json")
     for key in LATER_SLICE:
         data[key] = Project.model_fields[key].default
+    data["glossary"] = [c for c in data["glossary"] if not (c["maps_to"] or "").startswith("rule:")]
+    return data
+
+
+def _without_policies(data: dict) -> dict:
     for model in data["semantic_models"]:
         model["row_filters"] = []
         for dim in model["dimensions"]:
             dim["sensitivity"] = None
+    data["user_context"] = {}
     return data
 
 
-def _round_trip(project: Project, tmp_path: Path, fmt: str = "yaml"):
-    exported = export_ossie(project, name="ecommerce", fmt=fmt, allow_policy_loss=True)
+def _policies(project: Project) -> dict:
+    return {
+        "row_filters": {
+            m.name: [f.model_dump(mode="json") for f in m.row_filters]
+            for m in project.semantic_models
+        },
+        "sensitivity": {
+            f"{m.name}.{d.name}": d.sensitivity
+            for m in project.semantic_models
+            for d in m.dimensions
+            if d.sensitivity
+        },
+        "user_context": {k: v.model_dump(mode="json") for k, v in project.user_context.items()},
+    }
+
+
+def _round_trip(project: Project, tmp_path: Path, fmt: str = "yaml", **options):
+    exported = export_ossie(project, name="ecommerce", fmt=fmt, **options)
     path = tmp_path / f"ecommerce.{fmt}"
     path.write_text(exported.text, encoding="utf-8")
     return exported, import_model("ossie", path)
@@ -236,10 +262,10 @@ def _uses_rule(case, rules: set[str]) -> bool:
 
 
 def _numbers_cases(project: Project) -> list:
-    """Reference queries this slice must answer: no user (row filters and sensitivity are not
-    exported yet) and no business rules."""
+    """Reference queries the export must answer: every one without business rules, with the
+    user's row filter and the sensitivity policy applied."""
     rules = {r.name for r in project.business_rules}
-    return [c for c in REFERENCE if c.question is None and not c.user and not _uses_rule(c, rules)]
+    return [c for c in REFERENCE if c.question is None and not _uses_rule(c, rules)]
 
 
 @pytest.mark.parametrize("fmt", ["yaml", "json"])
@@ -251,28 +277,33 @@ def test_ossie_export_round_trip(graph, tmp_path, fmt):
     assert got["semantic_models"] == want["semantic_models"]
     assert got["metrics"] == want["metrics"]
     assert got == want
+    # The policies come back exactly: the same filters, principals and personal-data marking.
+    assert _policies(back.project) == _policies(graph.project)
+    assert _policies(back.project)["row_filters"]["customers"] == [
+        {"name": "by_region", "filter": "{region} = $user.region"}
+    ]
+    assert len(_policies(back.project)["sensitivity"]) == 3
+    # The glossary too, except the concept that maps to a business rule.
+    assert [c.concept for c in back.project.glossary] == [
+        c.concept for c in graph.project.glossary if c.concept != "active_customer"
+    ]
     # The re-imported model is a valid v1 model on its own.
     compile_project(Project.model_validate(yaml.safe_load(dump_project(back.project))))
     # Nothing outside the slice is dropped silently, on export ...
     joined = "\n".join(exported.warnings)
     for key in LATER_SLICE:
         assert f"{key}: not exported to Ossie yet" in joined
-    assert "semantic_models.customers.row_filters: by_region" in joined
-    for dim in ("email", "tax_id", "health_plan"):
-        assert f"semantic_models.customers.dimensions.{dim}: the sensitivity" in joined
+    assert "glossary.active_customer: it maps to a business rule" in joined
+    assert "row_filters" not in joined and "sensitivity" not in joined
+    assert "user_context" not in joined
     for name, reason in EXTENSION_ONLY.items():
         assert f"metrics.{name}: {reason}" in joined
     assert sum("only in the" in w for w in exported.warnings) == len(EXTENSION_ONLY)
-    assert len(exported.warnings) == 14
+    assert len(exported.warnings) == 9
     # ... nor on a later import, through the marker in the extension.
     assert back.warnings == [
-        "row_filters: the export omitted customers.by_region; this model has no row-level security",
-        "sensitivity: the export omitted the personal-data marking of customers.email, "
-        "customers.tax_id, customers.health_plan; mark these dimensions again before agents "
-        "use them",
-        "glossary: the export omitted 6 item(s)",
+        "glossary: the export omitted 1 item(s)",
         "business_rules: the export omitted 3 item(s)",
-        "user_context: the export omitted 1 item(s)",
         "teams: the export omitted 4 item(s)",
         "systems: the export omitted 3 item(s)",
         "processes: the export omitted 2 item(s)",
@@ -280,38 +311,215 @@ def test_ossie_export_round_trip(graph, tmp_path, fmt):
 
 
 def test_ossie_export_omitted_marker_has_names_and_counts_only(graph):
-    doc = yaml.safe_load(export_ossie(graph.project, allow_policy_loss=True).text)
+    doc = yaml.safe_load(export_ossie(graph.project).text)
     assert _cosmos_extension(doc)["omitted"] == {
-        "row_filters": ["customers.by_region"],
-        "sensitivity": ["customers.email", "customers.tax_id", "customers.health_plan"],
-        "glossary": 6,
+        "glossary": 1,
         "business_rules": 3,
-        "user_context": 1,
         "teams": 4,
         "systems": 3,
         "processes": 2,
     }
 
 
-def test_ossie_export_fails_closed_on_policy_loss(graph):
+def test_ossie_export_policies_in_the_document(graph):
+    """Row filters and sensitivity sit next to their dataset and field too, and the glossary
+    becomes Ossie's own ai_context of the member each concept maps to."""
+    doc = yaml.safe_load(export_ossie(graph.project).text)
+    datasets = {d["name"]: d for d in doc["datasets"]}
+    customers = datasets["customers"]
+    assert json.loads(customers["custom_extensions"][0]["data"]) == {
+        "row_filters": [{"name": "by_region", "filter": "{region} = $user.region"}],
+        "user_context": {
+            "region": {
+                "claim": "region",
+                "required": True,
+                "description": "Region the user is allowed to see",
+            }
+        },
+    }
+    fields = {f["name"]: f for f in customers["fields"]}
+    marked = {
+        name: json.loads(f["custom_extensions"][0]["data"])["sensitivity"]
+        for name, f in fields.items()
+        if "custom_extensions" in f
+    }
+    assert marked == {"email": "personal", "tax_id": "personal", "health_plan": "sensitive"}
+    assert all("custom_extensions" not in d for n, d in datasets.items() if n != "customers")
+    assert fields["region"]["ai_context"] == {
+        "synonyms": ["Customer region", "Região do cliente", "região", "region"],
+        "instructions": "Region where the customer lives",
+    }
+    assert "comprador" in fields["customer_id"]["ai_context"]["synonyms"]  # entity:customer
+    metrics = {m["name"]: m for d in doc["datasets"] for m in d.get("metrics", [])}
+    assert metrics["revenue"]["ai_context"]["synonyms"][:2] == ["Gross revenue", "Receita bruta"]
+    assert metrics["net_revenue"]["ai_context"]["instructions"] == "Gross revenue minus discounts"
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_ossie_export_native_part_keeps_policies(graph, tmp_path, source, request):
+    """Without the root extension, a Cosmos import still restores the row filters, the user
+    context they read and the sensitivity, so the row-filter and sensitivity reference queries
+    give the same results."""
+    connector = request.getfixturevalue(source)
+    doc = yaml.safe_load(export_ossie(graph.project).text)
+    doc["custom_extensions"] = [e for e in doc["custom_extensions"] if e["vendor_name"] != VENDOR]
+    path = tmp_path / "native.yaml"
+    path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
+    native, warnings = imported("ossie", path)
+    assert _policies(native.project) == _policies(graph.project)
+    assert len(warnings) == 1
+    assert warnings[0].startswith(
+        "the row filters and sensitivity of customers.by_region, customers.email, "
+        "customers.tax_id, customers.health_plan were read from the COSMOS_SEMANTIC copies"
+    )
+    assert "verify them before use" in warnings[0]
+    cases = [c for c in REFERENCE if c.id in ("R17", "R18")]
+    assert len(cases) == 2
+    for case in cases:
+        result = run_case(case, native, connector)
+        assert result.status == "pass", f"{case.id}: {result.detail}"
+
+
+def _native_doc(project: Project) -> dict:
+    """The exported document without the root Cosmos extension."""
+    doc = yaml.safe_load(export_ossie(project).text)
+    doc["custom_extensions"] = [e for e in doc["custom_extensions"] if e["vendor_name"] != VENDOR]
+    return doc
+
+
+def _import_doc(doc: dict, tmp_path: Path):
+    path = tmp_path / "doc.yaml"
+    path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
+    return import_model("ossie", path)
+
+
+def test_ossie_import_warns_on_root_extension_without_project(graph, tmp_path):
+    doc = _native_doc(graph.project)
+    doc["custom_extensions"].append({"vendor_name": VENDOR, "data": json.dumps({"x": 1})})
+    result = _import_doc(doc, tmp_path)
+    assert result.warnings[0] == (
+        "custom_extensions: the COSMOS_SEMANTIC extension at the root has no project; the "
+        "model is read from the native part of the document"
+    )
+    assert "were read from the COSMOS_SEMANTIC copies" in result.warnings[1]
+    assert _policies(result.project) == _policies(graph.project)
+
+
+def test_ossie_import_refuses_conflicting_user_context(graph, tmp_path):
+    data = graph.project.model_dump(mode="json")
+    sellers = next(m for m in data["semantic_models"] if m["name"] == "sellers")
+    sellers["row_filters"] = [{"name": "by_region", "filter": "{region} = $user.region"}]
+    doc = _native_doc(Project.model_validate(data))
+    # The same declaration in two datasets is fine.
+    assert _policies(_import_doc(doc, tmp_path).project)["user_context"] == {
+        "region": graph.project.user_context["region"].model_dump(mode="json")
+    }
+    ds = next(d for d in doc["datasets"] if d["name"] == "sellers")
+    copy = json.loads(ds["custom_extensions"][0]["data"])
+    copy["user_context"]["region"]["claim"] = "home_region"
+    ds["custom_extensions"][0]["data"] = json.dumps(copy)
+    with pytest.raises(ValueError, match="user_context.region is declared in conflicting ways"):
+        _import_doc(doc, tmp_path)
+    copy["user_context"]["region"]["claim"] = "region"
+    copy["user_context"]["region"]["required"] = False
+    ds["custom_extensions"][0]["data"] = json.dumps(copy)
+    with pytest.raises(ValueError, match="datasets.sellers: user_context.region"):
+        _import_doc(doc, tmp_path)
+
+
+def test_ossie_import_rejects_invalid_extension_json(graph, tmp_path):
+    doc = _native_doc(graph.project)
+    customers = next(d for d in doc["datasets"] if d["name"] == "customers")
+    email = next(f for f in customers["fields"] if f["name"] == "email")
+    email["custom_extensions"][0]["data"] = "{not json"
+    with pytest.raises(
+        ValueError,
+        match=r"datasets.customers.fields.email.custom_extensions: the COSMOS_SEMANTIC "
+        r"extension is not valid JSON",
+    ):
+        _import_doc(doc, tmp_path)
+    doc = _native_doc(graph.project)
+    doc["custom_extensions"].append({"vendor_name": VENDOR, "data": "[1"})
+    with pytest.raises(ValueError, match=r"^custom_extensions: the COSMOS_SEMANTIC extension"):
+        _import_doc(doc, tmp_path)
+
+
+def test_ossie_import_fallback_reports_user_metrics(graph, tmp_path):
+    """A metric whose filter reads $user has no native expression; without the root extension
+    it is missing, and the import says so instead of dropping it, or its user context,
+    silently."""
+    data = graph.project.model_dump(mode="json")
+    data["metrics"].append(
+        {
+            "name": "my_status_revenue",
+            "type": "simple",
+            "measure": "revenue",
+            "filter": "{status} = $user.region",
+        }
+    )
+    project = Project.model_validate(data)
+    doc = yaml.safe_load(export_ossie(project).text)
+    root = _cosmos_extension(doc)["project"]
+    assert "my_status_revenue" in {m["name"] for m in root["metrics"]}
+    assert list(root["user_context"]) == ["region"]
+    natives = {m["name"] for d in doc["datasets"] for m in d.get("metrics", [])}
+    assert "my_status_revenue" not in natives
+    result = _import_doc(_native_doc(project), tmp_path)
+    assert "my_status_revenue" not in {m.name for m in result.project.metrics}
+    assert "metrics whose filter reads $user" in result.warnings[-1]
+    assert "are missing" in result.warnings[-1]
+
+
+def test_ossie_export_fails_closed_on_policy_loss(graph, tmp_path):
+    data = graph.project.model_dump(mode="json")
+    customers = next(m for m in data["semantic_models"] if m["name"] == "customers")
+    customers["row_filters"].append(RULE_FILTER)
+    project = Project.model_validate(data)
     with pytest.raises(PolicyLossError) as exc:
-        export_ossie(graph.project)
+        export_ossie(project)
     assert str(exc.value).startswith(
-        "1 row filter and 3 sensitive dimensions would NOT be exported"
+        "1 row filter (customers.active_only) would NOT be exported: they use business rules"
     )
     assert "--allow-policy-loss" in str(exc.value)
-    # Without row filters or sensitivity there is nothing to refuse, and no marker for them.
-    data = _exported_slice(graph.project)
-    result = export_ossie(Project.model_validate(data))
+    # With the flag, only that row filter is lost, and the document says so.
+    exported, back = _round_trip(project, tmp_path, allow_policy_loss=True)
+    assert any(
+        w.startswith(
+            "semantic_models.customers.row_filters.active_only: it uses the business rule "
+            "`rule.active_customer`"
+        )
+        for w in exported.warnings
+    )
+    assert _policies(back.project) == _policies(graph.project)
+    assert back.warnings[0] == (
+        "row_filters: the export omitted customers.active_only; this model does not have that "
+        "row-level security"
+    )
+    # Without row filters, sensitivity or user context there is nothing to refuse either.
+    result = export_ossie(Project.model_validate(_without_policies(_exported_slice(project))))
     assert "omitted" not in _cosmos_extension(yaml.safe_load(result.text))
     assert {w.split(":")[0].removeprefix("metrics.") for w in result.warnings} == set(
         EXTENSION_ONLY
     )
 
 
+def test_ossie_export_reports_unused_user_context(graph):
+    data = graph.project.model_dump(mode="json")
+    data["user_context"]["team"] = {"claim": "team"}
+    exported = export_ossie(Project.model_validate(data))
+    assert (
+        "user_context: team not exported to Ossie yet (no exported row filter or metric uses them)"
+        in (exported.warnings)
+    )
+    doc = yaml.safe_load(exported.text)
+    assert _cosmos_extension(doc)["omitted"]["user_context"] == 1
+    assert list(_cosmos_extension(doc)["project"]["user_context"]) == ["region"]
+
+
 def _with_test_metrics(project: Project) -> Project:
     """The example plus a filtered count, a filtered count_distinct and a filtered avg."""
-    data = _exported_slice(project)
+    data = _without_policies(_exported_slice(project))
+    data["glossary"] = []
     payments = next(m for m in data["semantic_models"] if m["name"] == "payments")
     payments["measures"].append({"name": "avg_paid", "agg": "avg", "expr": "value"})
     data["metrics"] += [
@@ -380,7 +588,8 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     _, back = _round_trip(graph.project, tmp_path)
     other = compile_project(back.project)
     cases = _numbers_cases(graph.project)
-    assert len(cases) == 27
+    assert {"R17", "R18", "A22", "A24"} <= {c.id for c in cases}
+    assert len(cases) == 42
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -410,7 +619,7 @@ def test_ossie_export_native_part_same_numbers(graph, tmp_path, source, request)
 
 
 def test_ossie_export_states_each_reason(graph):
-    data = _exported_slice(graph.project)
+    data = _without_policies(_exported_slice(graph.project))
     data["metrics"] += [
         {
             "name": "midwest_revenue",
@@ -445,38 +654,38 @@ def test_ossie_export_states_each_reason(graph):
     assert reasons["metrics.raw_gap"].startswith("its expression uses bare columns (amount)")
     assert reasons["metrics.gap_share"].startswith("it spans datasets")
     with pytest.raises(ValueError):
-        export_ossie(graph.project, fmt="xml", allow_policy_loss=True)
+        export_ossie(graph.project, fmt="xml")
 
 
-def test_cli_export_ossie(tmp_path):
+def test_cli_export_ossie(tmp_path, graph):
     runner = CliRunner()
-    refused = runner.invoke(app, ["export", "ossie", "-m", str(EXAMPLE)])
-    assert refused.exit_code == 1
-    assert refused.stdout == ""
-    assert "1 row filter and 3 sensitive dimensions would NOT be exported" in refused.stderr
-    result = runner.invoke(app, ["export", "ossie", "-m", str(EXAMPLE), "--allow-policy-loss"])
+    # The example, with a row filter and personal data, exports without --allow-policy-loss.
+    result = runner.invoke(app, ["export", "ossie", "-m", str(EXAMPLE)])
     assert result.exit_code == 0, result.output
     doc = yaml.safe_load(result.stdout)
     assert doc["name"] == "ecommerce" and doc["datasets"]
     assert "warning:" not in result.stdout
-    assert "warning: glossary: not exported to Ossie yet" in result.stderr
+    assert "warning: business_rules: not exported to Ossie yet" in result.stderr
+    assert "row_filters" not in result.stderr
     out = tmp_path / "out" / "model.json"
     result = runner.invoke(
-        app,
-        [
-            "export",
-            "ossie",
-            "-m",
-            str(EXAMPLE),
-            "-o",
-            str(out),
-            "-f",
-            "json",
-            "--allow-policy-loss",
-        ],
+        app, ["export", "ossie", "-m", str(EXAMPLE), "-o", str(out), "-f", "json"]
     )
     assert result.exit_code == 0, result.output
-    assert "14 warnings" in result.stdout
-    assert "semantic_models.customers.row_filters" in result.stderr
+    assert "9 warnings" in result.stdout
     assert json.loads(out.read_text(encoding="utf-8"))["name"] == "ecommerce"
-    assert import_model("ossie", out).project.semantic_models
+    assert _policies(import_model("ossie", out).project) == _policies(graph.project)
+    # A row filter that reads a business rule is refused, unless the loss is accepted.
+    data = graph.project.model_dump(mode="json")
+    customers = next(m for m in data["semantic_models"] if m["name"] == "customers")
+    customers["row_filters"].append(RULE_FILTER)
+    model = tmp_path / "semantic" / "model.yml"
+    model.parent.mkdir()
+    model.write_text(dump_project(Project.model_validate(data)), encoding="utf-8")
+    refused = runner.invoke(app, ["export", "ossie", "-m", str(model)])
+    assert refused.exit_code == 1
+    assert refused.stdout == ""
+    assert "1 row filter (customers.active_only) would NOT be exported" in refused.stderr
+    result = runner.invoke(app, ["export", "ossie", "-m", str(model), "--allow-policy-loss"])
+    assert result.exit_code == 0, result.output
+    assert "semantic_models.customers.row_filters.active_only" in result.stderr
