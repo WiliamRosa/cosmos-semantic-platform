@@ -33,7 +33,7 @@ Before any GitHub or Git action, run `gh api user --jq .login`. It must print `c
    - run ruff and the tests on the databases that apply;
    - get the specialist reviews;
    - open the pull request.
-5. When the maintainer approves an agent pull request, enable auto-merge on it. Never approve one yourself.
+5. When the maintainer approves an agent pull request, enable auto-merge on it. GitHub enables auto-merge only through GraphQL, so use the route the cloud environment offers for it; if that fails, say so in the daily and the maintainer enables it. Never approve one yourself.
 6. With nothing approved and nothing on the standing list, open no pull request. Propose work in the next daily instead.
 
 **Daily report (20:00 São Paulo, every day).**
