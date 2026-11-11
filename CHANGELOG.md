@@ -30,15 +30,19 @@ format or the API; such changes are listed under **Changed**.
   error as an unknown `query_id`.
 
 - `cosmos export ossie` writes the model as an Apache Ossie document (YAML, or JSON with
-  `--format json`). This first slice exports models, entities, dimensions, measures and the four
-  metric types as datasets, keys, relationships, fields and `OSSIE_SQL_2026` metrics on each
-  dataset. Metrics that span datasets (a naive reader could fan them out) and cumulative ones
-  stay only in a `COSMOS_SEMANTIC` extension, from which `cosmos import ossie` restores the same
-  authoring model. Row filters and sensitivity are not exported yet, so the export fails closed
-  unless `--allow-policy-loss` is given. They and the glossary, business rules and business
-  context are listed as warnings on standard error, and are recorded in the extension, which the
-  importer reports again. Round-trip and same-numbers tests on every database
-  ([interoperability](docs/interoperability.md#exporting-ossie)).
+  `--format json`). It exports models, entities, dimensions, measures and the four metric types
+  as datasets, keys, relationships, fields and `OSSIE_SQL_2026` metrics on each dataset. Metrics
+  that span datasets (a naive reader could fan them out) and cumulative ones stay only in a
+  `COSMOS_SEMANTIC` extension, from which `cosmos import ossie` restores the same authoring
+  model. Row filters (with the user context they read) and `sensitivity` are exported in that
+  extension and next to their dataset and field, and come back exactly, so a governed model
+  such as the example exports without `--allow-policy-loss`. The glossary is exported too, with
+  each concept's labels and definition as `ai_context` of the member it maps to. A row filter
+  that reads a business rule still fails closed unless `--allow-policy-loss` is given. Business
+  rules and business context (teams, systems, processes) are not exported yet; they are listed
+  as warnings on standard error and recorded in the extension, which the importer reports again.
+  Round-trip and same-numbers tests on every database, including the row-filter and
+  sensitivity reference queries ([interoperability](docs/interoperability.md#exporting-ossie)).
 
 ### Changed
 
