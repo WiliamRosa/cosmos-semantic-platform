@@ -10,7 +10,8 @@ Import:
 - Cosmos's own ``custom_extensions`` restore the model without loss; other vendors'
   extensions are kept in ``custom_extensions``.
 
-Export (first slice: models, entities, dimensions, measures and metrics):
+Export (models, entities, dimensions, measures, metrics, row filters, sensitivity and the
+glossary):
 
 - Models become ``datasets``, dimensions and keys become ``fields``, entities become
   ``primary_key``, ``unique_keys`` and explicit ``relationships``.
@@ -21,10 +22,16 @@ Export (first slice: models, entities, dimensions, measures and metrics):
 - The exported part of the project goes, whole, into a ``COSMOS_SEMANTIC`` extension, which
   ``import_ossie`` restores without loss. Metrics spanning datasets (a naive reader could fan
   them out), cumulative ones and filters Ossie cannot express live only there, with a warning.
-- Glossary, business rules, row filters, sensitivity and business context are not exported
+- Row filters (with the ``user_context`` fields they read) and sensitivity have no native
+  Ossie field: they are in the root extension and, for other tools, in a ``COSMOS_SEMANTIC``
+  extension on their dataset and field, which ``import_ossie`` also reads when the root
+  extension is gone. The glossary is in the root extension, and each concept's labels and
+  definition become ``ai_context`` (``synonyms``, ``instructions``) of the member it maps to.
+- Business rules, the rest of the user context, teams, systems and processes are not exported
   yet; each one present becomes a warning, and the extension records what was omitted (names
-  and counts only), which ``import_ossie`` reports again. Row filters and sensitivity make the
-  export fail unless the caller accepts losing them.
+  and counts only), which ``import_ossie`` reports again. A row filter that reads a business
+  rule cannot be exported, so it makes the export fail unless the caller accepts losing it;
+  glossary concepts that map to a rule, or link to such a concept, are left out with a warning.
 """
 
 from __future__ import annotations
@@ -107,6 +114,7 @@ def import_ossie(path: str | Path) -> ImportResult:
     field_exprs: dict[str, dict[str, str]] = {}
     models: dict[str, dict[str, Any]] = {}
     glossary: list[dict[str, Any]] = []
+    user_context: dict[str, Any] = {}
 
     for name, ds in datasets.items():
         mname = model_names[name]
@@ -115,6 +123,10 @@ def import_ossie(path: str | Path) -> ImportResult:
         if ds.get("description"):
             model["description"] = ds["description"]
         exprs: dict[str, str] = {}
+        policies = _cosmos_data(ds)
+        if policies.get("row_filters"):
+            model["row_filters"] = policies["row_filters"]
+            user_context.update(policies.get("user_context") or {})
         for fld in ds.get("fields") or []:
             fexpr = _expression(fld.get("expression"), f"{where}.fields.{fld['name']}", warnings)
             exprs[fld["name"]] = fexpr or fld["name"]
@@ -130,6 +142,8 @@ def import_ossie(path: str | Path) -> ImportResult:
                 item["expr"] = fexpr
             if fld.get("description"):
                 item["description"] = fld["description"]
+            if _cosmos_data(fld).get("sensitivity"):
+                item["sensitivity"] = _cosmos_data(fld)["sensitivity"]
             model.setdefault("dimensions", []).append(item)
             _synonyms(glossary, fld, f"dimension:{mname}.{dim_name}", f"{mname}_{dim_name}")
         field_exprs[name] = exprs
@@ -193,10 +207,20 @@ def import_ossie(path: str | Path) -> ImportResult:
             "semantic_models": list(models.values()),
             "metrics": metrics,
             "glossary": glossary,
+            "user_context": user_context,
             "custom_extensions": {"ossie": extensions} if extensions else {},
         }
     )
     return ImportResult(project, warnings)
+
+
+def _cosmos_data(member: dict) -> dict[str, Any]:
+    """The Cosmos extension of a dataset or field: its row filters or sensitivity."""
+    for ext in member.get("custom_extensions") or []:
+        if ext.get("vendor_name") == VENDOR:
+            data = ext.get("data")
+            return json.loads(data) if isinstance(data, str) else data or {}
+    return {}
 
 
 def _omitted_warnings(omitted: dict[str, Any]) -> list[str]:
@@ -206,7 +230,7 @@ def _omitted_warnings(omitted: dict[str, Any]) -> list[str]:
         out.append(
             "row_filters: the export omitted "
             + ", ".join(omitted["row_filters"])
-            + "; this model has no row-level security"
+            + "; this model does not have that row-level security"
         )
     if omitted.get("sensitivity"):
         out.append(
@@ -318,7 +342,7 @@ def _metric(metric, models, model_names, field_exprs, metrics, glossary, warning
 
 _AGG_NODES = {"sum": exp.Sum, "avg": exp.Avg, "min": exp.Min, "max": exp.Max}
 # Members of the authoring format that a later slice maps to Ossie.
-_LATER = ("glossary", "business_rules", "user_context", "teams", "systems", "processes")
+_LATER = ("business_rules", "teams", "systems", "processes")
 _SPANS = (
     "it spans datasets; Ossie does not require a reader to aggregate each dataset at its own "
     "grain, so a native expression could fan out"
@@ -337,19 +361,19 @@ def export_ossie(
     allow_policy_loss: bool = False,
 ) -> ExportResult:
     """Writes the project as an Ossie document (YAML or JSON), with a warning for each member
-    this slice does not export. Refuses, unless ``allow_policy_loss``, a project with row
-    filters or sensitive dimensions, which the document would lose."""
+    this slice does not export. Refuses, unless ``allow_policy_loss``, a project with a row
+    filter the document cannot carry (one that reads a business rule)."""
     if fmt not in ("yaml", "json"):
         raise ValueError(f"unknown format: {fmt} (use yaml or json)")
-    compile_project(project)  # only valid models are exported
+    full = compile_project(project)  # only valid models are exported
     warnings: list[str] = []
-    exported, omitted = _exported_part(project, warnings)
-    if (omitted.get("row_filters") or omitted.get("sensitivity")) and not allow_policy_loss:
+    exported, omitted = _exported_part(project, full, warnings)
+    if omitted.get("row_filters") and not allow_policy_loss:
+        lost = omitted["row_filters"]
         raise PolicyLossError(
-            f"{_plural(len(omitted.get('row_filters', [])), 'row filter')} and "
-            f"{_plural(len(omitted.get('sensitivity', [])), 'sensitive dimension')} would NOT be "
-            "exported; the document would have no row-level security or personal-data marking. "
-            "Pass --allow-policy-loss to export anyway"
+            f"{_plural(len(lost), 'row filter')} ({', '.join(lost)}) would NOT be exported: "
+            "they use business rules, which the Ossie export does not carry yet; the document "
+            "would not have this row-level security. Pass --allow-policy-loss to export anyway"
         )
     graph = compile_project(exported, strict=False)
     for issue in graph.issues:
@@ -381,40 +405,95 @@ def export_ossie(
     return ExportResult(text, list(dict.fromkeys(warnings)))
 
 
-def _exported_part(project: Project, warnings: list[str]) -> tuple[Project, dict[str, Any]]:
+def _exported_part(
+    project: Project, graph: SemanticGraph, warnings: list[str]
+) -> tuple[Project, dict[str, Any]]:
     """The project without the members a later slice exports, with a warning for each, and
-    the marker of what was omitted: names and counts only, never values."""
+    the marker of what was omitted: names and counts only, never values.
+
+    Row filters, sensitivity, the user context fields the row filters and metrics read and the
+    glossary are exported. A row filter that reads a business rule is not (rules come in a later
+    slice), nor is a concept that maps to a rule or links to a concept left out."""
     data = project.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
     omitted: dict[str, Any] = {}
     row_filters: list[str] = []
-    sensitive: list[str] = []
+    user_fields: set[str] = set()
     for model in data.get("semantic_models", []):
-        where = f"semantic_models.{model['name']}"
-        filters = model.pop("row_filters", None)
-        if filters:
-            row_filters += [f"{model['name']}.{f['name']}" for f in filters]
-            names = ", ".join(f["name"] for f in filters)
-            warnings.append(
-                f"{where}.row_filters: {names} not exported to Ossie yet; "
-                "the exported model has no row-level security"
-            )
-        for dim in model.get("dimensions", []):
-            if dim.pop("sensitivity", None):
-                sensitive.append(f"{model['name']}.{dim['name']}")
+        kept = []
+        for row_filter in model.get("row_filters", []):
+            rules = _rule_refs(graph, model["name"], row_filter["filter"])
+            if rules:
+                row_filters.append(f"{model['name']}.{row_filter['name']}")
                 warnings.append(
-                    f"{where}.dimensions.{dim['name']}: the sensitivity is not exported to "
-                    "Ossie yet; the exported model treats it as ordinary data"
+                    f"semantic_models.{model['name']}.row_filters.{row_filter['name']}: it uses "
+                    f"the business rule {', '.join(rules)}, and business rules are not exported "
+                    "to Ossie yet; the exported model does not have this row-level security"
                 )
+                continue
+            kept.append(row_filter)
+            user_fields.update(USER_RE.findall(row_filter["filter"]))
+        if kept:
+            model["row_filters"] = kept
+        else:
+            model.pop("row_filters", None)
     if row_filters:
         omitted["row_filters"] = row_filters
-    if sensitive:
-        omitted["sensitivity"] = sensitive
+
+    # Metric filters may read the user too; those metrics are kept in the extension.
+    user_fields.update(USER_RE.findall(json.dumps(data.get("metrics", []))))
+    context = data.get("user_context") or {}
+    rest = {k: v for k, v in context.items() if k not in user_fields}
+    data["user_context"] = {k: v for k, v in context.items() if k in user_fields}
+    if rest:
+        omitted["user_context"] = len(rest)
+        warnings.append(
+            f"user_context: {', '.join(rest)} not exported to Ossie yet (no exported row "
+            "filter or metric uses them)"
+        )
+
+    glossary = data.get("glossary") or []
+    left_out = {
+        c["concept"]: "it maps to a business rule, and business rules are not exported yet"
+        for c in glossary
+        if str(c.get("maps_to", "")).startswith("rule:")
+    }
+    changed = True
+    while changed:  # a concept linked to one left out would point to nothing
+        changed = False
+        for c in glossary:
+            if c["concept"] in left_out:
+                continue
+            links = [c.get("broader"), *c.get("related", [])]
+            gone = next((x for x in links if x in left_out), None)
+            if gone:
+                left_out[c["concept"]] = f"it links to `{gone}`, which is left out"
+                changed = True
+    for name, reason in left_out.items():
+        warnings.append(f"glossary.{name}: {reason}; it is not exported to Ossie")
+    if left_out:
+        data["glossary"] = [c for c in glossary if c["concept"] not in left_out]
+        omitted["glossary"] = len(left_out)
+
     for key in _LATER:
         items = data.pop(key, None)
         if items:
             omitted[key] = len(items)
             warnings.append(f"{key}: not exported to Ossie yet ({len(items)} in the project)")
     return Project.model_validate(data), omitted
+
+
+def _rule_refs(graph: SemanticGraph, model: str, text: str) -> list[str]:
+    """The business rules a row filter reads, by reference."""
+    rules = []
+    for ref in REF_RE.findall(text):
+        dim = graph.resolve_dimension(ref, context=model)
+        if dim.name not in {d.name for d in graph.models[dim.model].spec.dimensions}:
+            rules.append(f"`{ref}`")
+    return rules
+
+
+def _extension(data: dict[str, Any]) -> list[dict[str, str]]:
+    return [{"vendor_name": VENDOR, "data": json.dumps(data, ensure_ascii=False)}]
 
 
 def _dialects(text: str) -> dict[str, Any]:
@@ -475,6 +554,9 @@ class _OssieWriter:
             item["expression"] = _dialects(text)
             if dim.description:
                 item["description"] = dim.description
+            if dim.sensitivity:
+                # No native Ossie field; also in the root extension, the source of truth.
+                item["custom_extensions"] = _extension({"sensitivity": dim.sensitivity})
             fields.append(item)
             self.by_expr[model].setdefault(text, dim.name)
             self.field_exprs[model][dim.name] = text
@@ -512,8 +594,55 @@ class _OssieWriter:
             item["fields"] = self.fields[spec.name]
             if self.dataset_metrics.get(spec.name):
                 item["metrics"] = self.dataset_metrics[spec.name]
+            if spec.row_filters:
+                # No native Ossie field; also in the root extension, the source of truth.
+                filters = [f.model_dump(mode="json") for f in spec.row_filters]
+                context = self.graph.project.user_context
+                used = sorted({u for f in spec.row_filters for u in USER_RE.findall(f.filter)})
+                item["custom_extensions"] = _extension(
+                    {
+                        "row_filters": filters,
+                        "user_context": {
+                            u: context[u].model_dump(mode="json", exclude_none=True) for u in used
+                        },
+                    }
+                )
             out.append(item)
+        self._ai_context(out)
         return out
+
+    def _ai_context(self, datasets: list[dict[str, Any]]) -> None:
+        """The glossary's labels and definitions as ``ai_context`` of the member each concept
+        maps to, where that member is in the native part (Ossie's own place for synonyms)."""
+        members: dict[str, dict[str, Any]] = {}
+        for ds in datasets:
+            fields = {f["name"]: f for f in ds["fields"]}
+            for dim in self.graph.models[ds["name"]].spec.dimensions:
+                members[f"dimension:{ds['name']}.{dim.name}"] = fields[dim.name]
+            for entity in self.graph.models[ds["name"]].spec.entities:
+                if entity.type != "foreign":
+                    key = fields[self._key_field(ds["name"], entity.name)]
+                    members.setdefault(f"entity:{entity.name}", key)
+            for metric in ds.get("metrics", []):
+                members[f"metric:{metric['name']}"] = metric
+                members[f"measure:{metric['name']}"] = metric
+        for concept in self.graph.project.glossary:
+            target = concept.maps_to or ""
+            if target.startswith("dimension:") and "." not in target:
+                suffix = "." + target.split(":", 1)[1]
+                owners = [k for k in members if k.startswith("dimension:") and k.endswith(suffix)]
+                target = owners[0] if len(owners) == 1 else target
+            member = members.get(target)
+            if member is None:
+                continue
+            ai = member.setdefault("ai_context", {})
+            labels = [*concept.pref_label.values()]
+            labels += [x for values in concept.alt_labels.values() for x in values]
+            synonyms = ai.setdefault("synonyms", [])
+            synonyms += [x for x in dict.fromkeys(labels) if x not in synonyms]
+            if concept.definition:
+                text = ai.get("instructions")
+                ai["instructions"] = f"{text}\n{concept.definition}" if text else concept.definition
 
     def relationships(self) -> list[dict[str, Any]]:
         """Joins the engine infers from entities, written as explicit relationships."""

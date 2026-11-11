@@ -119,8 +119,8 @@ uv run cosmos pack apply retail --source local --schema public -c examples/ecomm
 uv run cosmos export skos -m examples/ecommerce/semantic -o glossary.ttl --base https://data.example.com/glossary/
 
 # The model as Apache Ossie (yaml or json); what is not exported yet is listed on stderr.
-# Row filters and sensitivity are not exported yet, so the example needs --allow-policy-loss
-uv run cosmos export ossie -m examples/ecommerce/semantic -o ecommerce.ossie.yaml --allow-policy-loss
+# Row filters, sensitivity and the glossary go too, so the example needs no --allow-policy-loss
+uv run cosmos export ossie -m examples/ecommerce/semantic -o ecommerce.ossie.yaml
 
 # Draft a model from the database catalog (keys, joins, measures, LGPD suggestions), then review it
 uv run cosmos bootstrap -c examples/ecommerce/connections.yml -o semantic/draft.yml
