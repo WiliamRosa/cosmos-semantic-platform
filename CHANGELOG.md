@@ -30,6 +30,13 @@ format or the API; such changes are listed under **Changed**.
   orchestrator and four specialists in `.claude/agents/`, the project's working rules in
   `CLAUDE.md`, and a daily report, posted as an issue labelled `daily`, that the maintainer answers.
 
+- `GET /v1/impact/{kind:name}` and the MCP tool `impact` expose `cosmos impact` to applications and
+  agents: what a change to a metric, measure, rule, dimension, model, concept, system or process
+  affects, grouped by owner, source systems and processes. Who queried the affected members, from
+  the audit log, is personal data and is returned only to the subjects in `COSMOS_CONSOLE_ADMINS`;
+  for everyone else `consumers` is absent and `consumers_visible` is `false`. An unknown member is
+  a `QueryError` (HTTP 400).
+
 - The MCP server has a `replay` tool, the equivalent of `POST /v1/replay/{query_id}`: it re-runs
   one of the user's audited queries and tells whether the model, the SQL or the data changed.
   Only the user who ran a query can replay it; over MCP, another user's query gets the same

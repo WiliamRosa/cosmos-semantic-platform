@@ -54,10 +54,8 @@ class Console:
         self.graph = service.engine.graph
         path = runs_path or os.environ.get("COSMOS_RUNS_LOG")
         self.runs_path = Path(path) if path else None
-        if admins is None:
-            raw = os.environ.get("COSMOS_CONSOLE_ADMINS", "")
-            admins = {s.strip() for s in raw.split(",") if s.strip()}
-        self.admins = admins
+        # The same admins as the service (COSMOS_CONSOLE_ADMINS), unless given here.
+        self.admins = service.admins if admins is None else admins
 
     # -- access ------------------------------------------------------------------
 

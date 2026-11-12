@@ -197,6 +197,13 @@ def create_app(
     def explain(name: str, _user: User) -> dict[str, Any]:
         return service.catalog.explain(name)
 
+    @app.get(
+        "/v1/impact/{name}",
+        summary="What a change to a member affects; who queried it is shown to admins only",
+    )
+    def impact(name: str, user: User) -> dict[str, Any]:
+        return service.impact(name, requester=user)
+
     @app.post("/v1/query", summary="Run a metrics request on the data source")
     def query(request: QueryRequest, user: User) -> dict[str, Any]:
         return service.query(request, user)

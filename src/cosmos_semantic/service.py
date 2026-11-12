@@ -1,5 +1,9 @@
 """Service shared by the REST API, the MCP server and the CLI: querying with evidence,
-auditing, replay and serialization."""
+auditing, replay, impact analysis and serialization.
+
+Admins are the subjects listed in ``COSMOS_CONSOLE_ADMINS`` (ADR 0012), plus ``anonymous``
+under ``--allow-anonymous`` (local development). Only they see audit data about other people,
+such as who queried the members a change affects."""
 
 from __future__ import annotations
 
@@ -36,12 +40,22 @@ def jsonable(value: Any) -> Any:
 
 
 class SemanticService:
-    def __init__(self, engine: Engine, *, audit_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        *,
+        audit_path: str | Path | None = None,
+        admins: set[str] | None = None,
+    ) -> None:
         self.engine = engine
         self.catalog = Catalog(engine.graph)
         self.evidence = EvidenceBuilder(engine.graph)
         path = audit_path or os.environ.get("COSMOS_AUDIT_LOG")
         self.audit_path = Path(path) if path else None
+        if admins is None:
+            raw = os.environ.get("COSMOS_CONSOLE_ADMINS", "")
+            admins = {s.strip() for s in raw.split(",") if s.strip()}
+        self.admins = admins
         # Connections cannot be shared across threads; one query at a time per process.
         self._lock = threading.Lock()
 
@@ -100,6 +114,29 @@ class SemanticService:
             "truncated": truncated,
             "evidence": evidence,
         }
+
+    def is_admin(self, principal: Principal) -> bool:
+        # `--allow-anonymous` is for local development; the person at the keyboard sees all.
+        return principal.subject == "anonymous" or principal.subject in self.admins
+
+    # -- impact ------------------------------------------------------------------
+
+    def impact(self, target: str, *, requester: Principal) -> dict[str, Any]:
+        """What a change to `target` (`kind:name`, as `cosmos impact` takes it) affects,
+        grouped by owner, source systems and processes. Read-only.
+
+        Consumers (who queried the affected members, from the audit log) are personal data:
+        they are returned only to admins, under `consumers`. For everyone else the key is
+        absent, and `consumers_visible` is false."""
+        from cosmos_semantic.impact import analyze
+
+        admin = self.is_admin(requester)
+        audit = self.audit_path if admin else None
+        report = analyze(self.engine.graph, [target], audit_path=audit)
+        if not admin:
+            report.pop("consumers", None)
+        report["consumers_visible"] = admin
+        return report
 
     # -- replay ------------------------------------------------------------------
 

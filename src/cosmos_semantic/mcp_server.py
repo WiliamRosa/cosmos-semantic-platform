@@ -32,7 +32,8 @@ Always answer with the number the tool returned. Every `query` result has an `ev
 envelope: cite the metric formula, the business rules applied (with owner and test status),
 the reference date (`as_of`) and the `query_id`, so the answer can be audited and replayed.
 Call `replay` with a `query_id` the user ran to tell whether the model, the SQL or the data
-changed since then."""
+changed since then. Call `impact` with `kind:name` (such as `rule:active_customer`) to tell
+what a change to a member affects, by owner, source systems and processes."""
 
 MAX_ROWS_FOR_AGENTS = 200
 
@@ -150,6 +151,17 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
             return service.replay(query_id, requester=requester)
 
         return guarded(run)()
+
+    @mcp.tool(
+        description=(
+            "What a change to a metric, measure, rule, dimension, model, concept, system or "
+            "process affects, as `kind:name` (for example `rule:active_customer`): affected "
+            "members grouped by owner, source systems and processes. Who queried them (from the "
+            "audit log) is included only for admins."
+        )
+    )
+    def impact(name: str, ctx: Context) -> dict[str, Any]:
+        return guarded(lambda: service.impact(name, requester=principal(ctx)))()
 
     return mcp
 
