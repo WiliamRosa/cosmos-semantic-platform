@@ -1,0 +1,190 @@
+# yaml-language-server: $schema=../../../schema/cosmos-semantic.v1.schema.json
+version: 1
+
+# The TPC-H schema as DuckDB's `tpch` extension generates it (`CALL dbgen(sf=1)`).
+# Used by the performance baseline (tests/perf) and as a second reference case
+# (examples/tpch/queries.yml). The supplier side (supplier, partsupp) is left out for now:
+# a second path to `nation` through the supplier would change what `nation` means for lines.
+
+semantic_models:
+  - name: lineitem
+    table: lineitem
+    owner: tpch
+    description: Order lines, one row per line of an order
+    entities:
+      - name: order
+        type: foreign
+        expr: l_orderkey
+      - name: part
+        type: foreign
+        expr: l_partkey
+    dimensions:
+      - name: return_flag
+        type: categorical
+        expr: l_returnflag
+        description: R (returned), A or N
+      - name: line_status
+        type: categorical
+        expr: l_linestatus
+        description: O (open) or F (fulfilled)
+      - name: ship_mode
+        type: categorical
+        expr: l_shipmode
+      - name: shipped_at
+        type: time
+        expr: l_shipdate
+    measures:
+      - name: revenue
+        agg: sum
+        expr: l_extendedprice * (1 - l_discount)
+        description: Discounted line value (TPC-H revenue)
+      - name: gross_revenue
+        agg: sum
+        expr: l_extendedprice
+        description: Line value before discounts
+      - name: discount_amount
+        agg: sum
+        expr: l_extendedprice * l_discount
+        description: Value given away as discounts
+      - name: quantity
+        agg: sum
+        expr: l_quantity
+        description: Units shipped
+      - name: avg_quantity
+        agg: avg
+        expr: l_quantity
+        description: Average units per line
+      - name: line_count
+        agg: count
+        description: Number of order lines
+
+  - name: orders
+    table: orders
+    owner: tpch
+    description: Orders, one row per order
+    entities:
+      - name: order
+        type: primary
+        expr: o_orderkey
+      - name: customer
+        type: foreign
+        expr: o_custkey
+    dimensions:
+      - name: ordered_at
+        type: time
+        expr: o_orderdate
+      - name: status
+        type: categorical
+        expr: o_orderstatus
+        description: F, O or P
+      - name: priority
+        type: categorical
+        expr: o_orderpriority
+    measures:
+      - name: order_count
+        agg: count
+        description: Number of orders
+      - name: order_value
+        agg: sum
+        expr: o_totalprice
+        description: Total price of the orders
+
+  - name: customer
+    table: customer
+    owner: tpch
+    description: Customers
+    entities:
+      - name: customer
+        type: primary
+        expr: c_custkey
+      - name: nation
+        type: foreign
+        expr: c_nationkey
+    dimensions:
+      - name: segment
+        type: categorical
+        expr: c_mktsegment
+        description: Market segment
+    measures:
+      - name: customer_count
+        agg: count
+        description: Number of customers
+
+  - name: nation
+    table: nation
+    owner: tpch
+    description: Nations
+    entities:
+      - name: nation
+        type: primary
+        expr: n_nationkey
+      - name: region
+        type: foreign
+        expr: n_regionkey
+    dimensions:
+      - name: name
+        type: categorical
+        expr: n_name
+
+  - name: region
+    table: region
+    owner: tpch
+    description: Regions
+    entities:
+      - name: region
+        type: primary
+        expr: r_regionkey
+    dimensions:
+      - name: name
+        type: categorical
+        expr: r_name
+
+  - name: part
+    table: part
+    owner: tpch
+    description: Parts
+    entities:
+      - name: part
+        type: primary
+        expr: p_partkey
+    dimensions:
+      - name: brand
+        type: categorical
+        expr: p_brand
+      - name: type
+        type: categorical
+        expr: p_type
+      - name: size
+        type: number
+        expr: p_size
+
+metrics:
+  - name: discount_rate
+    type: ratio
+    owner: tpch
+    numerator: discount_amount
+    denominator: gross_revenue
+    description: Discounts over gross line value
+  - name: revenue_per_order
+    type: ratio
+    owner: tpch
+    numerator: revenue
+    denominator: order_count
+    description: Discounted revenue per order (line grain over order grain)
+  - name: returned_revenue
+    type: simple
+    owner: tpch
+    measure: revenue
+    filter: "{lineitem.return_flag} = 'R'"
+    description: Revenue of returned lines (TPC-H Q10)
+  - name: promo_revenue
+    type: simple
+    owner: tpch
+    measure: revenue
+    filter: "{part.type} LIKE 'PROMO%'"
+    description: Revenue of promotional parts (TPC-H Q14)
+  - name: promo_revenue_share
+    type: derived
+    owner: tpch
+    expr: "100.0 * {promo_revenue} / {revenue}"
+    description: Percentage of revenue from promotional parts (TPC-H Q14)

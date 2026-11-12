@@ -89,6 +89,19 @@ The advanced reference suite and a randomized cross-database test (80 random req
 | Postgres `NUMERIC` arrives as an exact decimal | The ADBC driver returns it as text |
 | SQL Server identifiers are bracketed and grouping uses expressions | `public` is a reserved word and `GROUP BY 1` is not accepted |
 
+## Performance baseline
+
+`examples/tpch` models the TPC-H schema (line items, orders, customers, nations, regions and parts) with measures such as revenue (`l_extendedprice * (1 - l_discount)`), a ratio across two grains and TPC-H Q14's promotional revenue share. Its `queries.yml` holds seven requests with hand-written SQL in the format of `reference/`, so the model is a second reference case: `tests/test_tpch.py` checks them in the default run on DuckDB at scale factor 0.01.
+
+The baseline times the same requests on DuckDB's TPC-H data at scale factor 1: for each one, the time to compile the request, to run the engine's SQL and to run the hand-written SQL (the best of three runs), and it fails if the two results differ. It is opt-in, behind the `perf` marker, and prints a table at the end:
+
+```bash
+uv run pytest -m perf tests/perf            # scale factor 1
+COSMOS_TPCH_SF=0.1 uv run pytest -m perf tests/perf
+```
+
+The data comes from `CALL dbgen(sf=...)` in DuckDB's `tpch` extension, which DuckDB downloads once; without network access both tests are skipped. Only DuckDB for now; the other databases come in later slices.
+
 ## Evidence envelope
 
 Every answer (REST, MCP and `cosmos query --evidence`) carries an `evidence` envelope ([ADR 0008](decisions/0008-verifiable-numbers-as-phase-2-differentiator.md)):
