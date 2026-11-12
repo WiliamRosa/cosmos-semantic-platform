@@ -118,6 +118,29 @@ Some metrics have no native expression and live only in the extension, with a wa
 
 Tests export the e-commerce example and re-import it. The authoring model is the same, member by member. The row filters, user context and sensitivity are compared after the round trip, field by field. The re-imported model answers the 42 reference queries that need no business rule, with the user's row filter and the sensitivity policy applied (R17 and R18 among them), with the numbers of the hand-written SQL. A Cosmos import of the native part alone, without the root extension, returns the same numbers for every metric it expresses, and still restores the policies, so R17 and R18 pass on it too. This says nothing about other Ossie readers, whose semantics the standard does not yet pin down. Other tests pin the exact native expressions. The number checks run on DuckDB and on every database configured in CI.
 
+## Exporting Cube
+
+`cosmos export cube -m semantic -o model/cubes/model.yml` writes the model as Cube static YAML (without `-o`, standard output carries only the YAML). `cosmos import cube` reads it back with the same numbers. This first slice covers models, joins, dimensions, measures and the simple, ratio and derived metrics:
+
+| Authoring format | In Cube |
+| --- | --- |
+| Model | A cube with `sql_table`, `description`, `data_source`, and the owner in `meta` |
+| `primary` entity | The dimension with the key's expression marked `primary_key`, or a hidden one (`public: false`) added for it |
+| `foreign` entity | A `many_to_one` join on the many side, one per join the engine infers: `{CUBE}.customer_id = {customers}.customer_id` |
+| Dimensions | Dimensions: `categorical` becomes `string`; `time`, `number` and `boolean` keep their type |
+| Measures | Measures of the same type; `avg` is written as `AVG(1.0 * x)`, so Cube averages in decimal as the planner does (an integer AVG truncates in SQL Server) |
+| Simple metric | A measure of its measure's type, with the metric `filter` in `filters`; a dimension reference becomes its expression on the cube |
+| Ratio and derived metrics | `number` measures over the measures they use; division is written `1.0 * a / NULLIF(b, 0)`, real and null on a zero denominator, as the planner computes it |
+| Metric `label`, `description` and owner | `title`, `description` and `meta` |
+
+Column names in expressions get a `{CUBE}.` prefix, so Cube does not confuse columns of joined cubes; the rest of the expression is written as in the model, and `cosmos import cube` removes the prefix. A ratio or derived metric goes on the cube of its first measure, and refers to members of other cubes as `{payments.paid_value}`.
+
+**Metrics that span cubes are exported with a warning** (Rule 3). `collection_gap` and `items_per_order` in the example combine measures of two cubes; the engine aggregates each measure at its own grain, and Cube must do the same to return the same numbers, so check them in Cube.
+
+**What cannot be exported fails closed.** Cube's access policies are not mapped yet, so a model with row filters or `sensitivity` is refused, exit code 1, naming them: `1 row filter (customers.by_region) and the sensitivity of 3 dimensions (...) would NOT be exported: the Cube export does not carry access or personal-data policies yet; ... Pass --allow-policy-loss to export anyway`. Metrics Cube cannot carry here are refused the same way, until `--allow-metric-loss` is given: cumulative metrics; simple metrics whose filter uses another cube, a time grain, a business rule or `$user`; ratio metrics with a filter (a `number` measure cannot filter the measures it uses); derived metrics over bare columns; and metrics that use a metric left out. With the flags, each loss is a warning on standard error. Business rules, the glossary, teams, systems, processes, the user context, `custom_extensions` and the time zone (Cube has none in the model; set `timezone` on Cube queries) are not exported yet, and each one present is a warning too. Cube's `meta`, `title` and `data_source` are written, but `cosmos import cube` does not read them back yet.
+
+Tests export the e-commerce example with both flags and import it back with `cosmos import cube`, which reports nothing. Models, tables, dimensions and measures come back the same; filtered metrics come back as a `<name>__base` measure plus a simple metric, ratio metrics as derived ones. The re-imported model answers the 25 reference queries that need no business rule, cumulative metric or user policy with the numbers of the hand-written SQL; with the original row filters, user context and sensitivity put back, it answers all 40 that need no business rule or cumulative metric, R17 and R18 among them. Every measure and metric of an extended example (filtered `count`, `count_distinct` and `avg`, a filter on a dimension with an expression, nested division) returns the native numbers. The number checks run on DuckDB and on every database configured in CI.
+
 ## Exporting the glossary as SKOS/RDF
 
 `cosmos export skos -o glossary.ttl` (or `GET /v1/glossary?format=turtle|jsonld|ntriples` on the REST API) publishes the business glossary for data catalogs and thesaurus tools that read [SKOS](https://www.w3.org/TR/skos-reference/):

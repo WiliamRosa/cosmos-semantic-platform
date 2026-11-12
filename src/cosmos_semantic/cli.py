@@ -999,6 +999,53 @@ def export_ossie_cmd(
     )
 
 
+@export_app.command("cube")
+def export_cube_cmd(
+    model: ModelOpt = Path("semantic"),
+    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+    allow_policy_loss: Annotated[
+        bool,
+        typer.Option(
+            "--allow-policy-loss",
+            help="Export even though row filters and sensitivity are not exported.",
+        ),
+    ] = False,
+    allow_metric_loss: Annotated[
+        bool,
+        typer.Option(
+            "--allow-metric-loss",
+            help="Export even though metrics Cube cannot carry (cumulative ones) are dropped.",
+        ),
+    ] = False,
+) -> None:
+    """Exports models, joins, dimensions, measures and metrics as Cube static YAML, which
+    `cosmos import cube` reads back with the same numbers. What is not exported is listed as
+    warnings on standard error. A model with row filters or sensitivity is refused unless
+    --allow-policy-loss is given, and one with metrics Cube cannot carry unless
+    --allow-metric-loss is given."""
+    from cosmos_semantic.interchange.cube import export_cube
+
+    try:
+        result = export_cube(
+            load_project(model),
+            allow_policy_loss=allow_policy_loss,
+            allow_metric_loss=allow_metric_loss,
+        )
+    except (errors.CosmosError, ValueError) as exc:
+        _fail(exc)
+    for warning in result.warnings:
+        typer.secho(f"warning: {warning}", fg=typer.colors.YELLOW, err=True)
+    if output is None:
+        typer.echo(result.text, nl=False)
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(result.text, encoding="utf-8", newline="\n")
+    typer.secho(
+        f"Cube model written to {output} ({len(result.warnings)} warnings)",
+        fg=typer.colors.GREEN,
+    )
+
+
 @app.command("bootstrap")
 def bootstrap_cmd(
     output: Annotated[Path, typer.Option("--output", "-o", help="Draft model file (.yml).")],

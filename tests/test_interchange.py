@@ -12,9 +12,10 @@ from typer.testing import CliRunner
 
 from cosmos_semantic.cli import app
 from cosmos_semantic.compiler import compile_project
-from cosmos_semantic.errors import PolicyLossError
+from cosmos_semantic.errors import MetricLossError, PolicyLossError
 from cosmos_semantic.expressions import REF_RE
 from cosmos_semantic.interchange import dump_project, import_model
+from cosmos_semantic.interchange.cube import export_cube
 from cosmos_semantic.interchange.ossie import VENDOR, export_ossie
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
 from cosmos_semantic.reference import load_cases, run_case
@@ -689,3 +690,304 @@ def test_cli_export_ossie(tmp_path, graph):
     result = runner.invoke(app, ["export", "ossie", "-m", str(model), "--allow-policy-loss"])
     assert result.exit_code == 0, result.output
     assert "semantic_models.customers.row_filters.active_only" in result.stderr
+
+
+# -- Cube export (cubes, joins, dimensions, measures, metrics) --------------------------------
+
+CUMULATIVE = ("revenue_year_to_date", "revenue_month_to_date")
+SPANS_CUBES = ("collection_gap", "items_per_order")
+LOSS_FLAGS = {"allow_policy_loss": True, "allow_metric_loss": True}
+
+
+def _cube_round_trip(project: Project, tmp_path: Path, **options):
+    exported = export_cube(project, **options)
+    path = tmp_path / "cube" / "model.yml"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(exported.text, encoding="utf-8")
+    return exported, import_model("cube", path)
+
+
+def _with_policies(back: Project, original: Project) -> Project:
+    """The re-imported model with the original row filters, user context and sensitivity put
+    back, to show that the export keeps everything the policies act on."""
+    data = back.model_dump(mode="json")
+    source = {m.name: m for m in original.semantic_models}
+    for model in data["semantic_models"]:
+        spec = source[model["name"]]
+        model["row_filters"] = [f.model_dump(mode="json") for f in spec.row_filters]
+        marked = {d.name: d.sensitivity for d in spec.dimensions}
+        for dim in model["dimensions"]:
+            dim["sensitivity"] = marked[dim["name"]]
+    data["user_context"] = {k: v.model_dump(mode="json") for k, v in original.user_context.items()}
+    return Project.model_validate(data)
+
+
+def _cube_cases(project: Project, *, policies: bool) -> list:
+    """Reference queries the Cube export must answer: none with a business rule or a cumulative
+    metric (not exported), and, without the policies, none that reads the user or expects a
+    policy error."""
+    cases = [
+        c
+        for c in _numbers_cases(project)
+        if not set(c.request.metrics) & set(CUMULATIVE)
+        and (policies or not (c.user or c.expect_error))
+    ]
+    return cases
+
+
+def test_cube_export_fails_closed(graph, tmp_path):
+    """The example has row filters, sensitivity and cumulative metrics: each loss is refused
+    until the caller accepts it."""
+    with pytest.raises(PolicyLossError) as exc:
+        export_cube(graph.project, allow_metric_loss=True)
+    assert str(exc.value) == (
+        "1 row filter (customers.by_region) and the sensitivity of 3 dimensions "
+        "(customers.email, customers.tax_id, customers.health_plan) would NOT be exported: the "
+        "Cube export does not carry access or personal-data policies yet; the Cube model would "
+        "not have this row-level security or personal-data marking. Pass --allow-policy-loss to "
+        "export anyway"
+    )
+    with pytest.raises(MetricLossError) as exc:
+        export_cube(graph.project, allow_policy_loss=True)
+    assert str(exc.value).startswith(
+        "2 metrics (revenue_year_to_date, revenue_month_to_date) would NOT be exported "
+        "(revenue_year_to_date: it is cumulative"
+    )
+    assert str(exc.value).endswith("Pass --allow-metric-loss to export anyway")
+    # Without policies or cumulative metrics there is nothing to refuse.
+    data = _without_policies(_exported_slice(graph.project))
+    data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUMULATIVE]
+    data["user_context"], data["timezone"], data["glossary"] = {}, None, []
+    clean = export_cube(Project.model_validate(data))
+    assert {w.split(":")[0] for w in clean.warnings} == {f"metrics.{m}" for m in SPANS_CUBES}
+
+
+def test_cube_export_round_trip(graph, tmp_path):
+    exported, back = _cube_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
+    # The importer reads the whole export, with nothing to report.
+    assert back.warnings == []
+    doc = yaml.safe_load(exported.text)
+    cubes = {c["name"]: c for c in doc["cubes"]}
+    assert set(cubes) == {m.name for m in graph.project.semantic_models}
+    orders = cubes["orders"]
+    assert orders["sql_table"] == "public.orders"
+    assert orders["joins"] == [
+        {
+            "name": "customers",
+            "relationship": "many_to_one",
+            "sql": "{CUBE}.customer_id = {customers}.customer_id",
+        }
+    ]
+    assert orders["dimensions"][0] == {
+        "name": "order_id",
+        "sql": "{CUBE}.order_id",
+        "type": "string",
+        "primary_key": True,
+        "public": False,
+    }
+    measures = {m["name"]: m for c in doc["cubes"] for m in c.get("measures", [])}
+    assert measures["completed_revenue"]["filters"] == [{"sql": "{CUBE}.status = 'completed'"}]
+    assert measures["average_order_value"]["sql"] == "1.0 * {revenue} / NULLIF({order_count}, 0)"
+    assert measures["orders_per_buyer"]["sql"] == "(1.0 * {order_count} / NULLIF({buyers}, 0))"
+    assert measures["collection_gap"]["sql"] == "{net_revenue} - {payments.paid_value}"
+    assert measures["avg_quantity"]["sql"] == "1.0 * {CUBE}.quantity"
+    assert measures["item_revenue"]["sql"] == "{CUBE}.quantity * {CUBE}.unit_price"
+
+    # Models, tables, dimensions and measures come back as they were (the primary key as an
+    # entity named after the cube; AVG in decimal, as the planner computes it).
+    def shape(project: Project) -> dict:
+        return {
+            m.name: (
+                m.table,
+                [(d.name, d.type, d.expr, d.description) for d in m.dimensions],
+                [(x.name, x.agg, x.expr) for x in m.measures if not x.name.endswith("__base")],
+            )
+            for m in project.semantic_models
+        }
+
+    want = shape(Project.model_validate(_without_policies(graph.project.model_dump(mode="json"))))
+    want["order_items"][2][2] = ("avg_quantity", "avg", "1.0 * quantity")
+    assert shape(back.project) == want
+    names = {m.name for m in back.project.metrics} | {
+        x.name for m in back.project.semantic_models for x in m.measures
+    }
+    assert {m.name for m in graph.project.metrics} - names == set(CUMULATIVE)
+    # Every loss is a warning: policies, cumulative metrics and what a later slice exports;
+    # metrics spanning cubes are exported, with Rule 3's warning.
+    joined = "\n".join(exported.warnings)
+    assert "semantic_models.customers.row_filters.by_region: not exported to Cube" in joined
+    assert sum("its sensitivity is not exported" in w for w in exported.warnings) == 3
+    for name in CUMULATIVE:
+        assert f"metrics.{name}: it is cumulative" in joined
+    for name in SPANS_CUBES:
+        assert f"metrics.{name}: it spans cubes" in joined
+    for key in ("business_rules", "glossary", "teams", "systems", "processes"):
+        assert f"{key}: not exported to Cube yet" in joined
+    assert "user_context: region" in joined and "timezone: Cube models have no time zone" in joined
+    assert len(exported.warnings) == 15
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_cube_export_same_numbers(graph, tmp_path, source, request):
+    """Exported to Cube and imported back, the model answers the reference queries with the
+    hand-written SQL's numbers, on every database available."""
+    connector = request.getfixturevalue(source)
+    _, back = _cube_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
+    other = compile_project(back.project)
+    cases = _cube_cases(graph.project, policies=False)
+    assert len(cases) == 25
+    for case in cases:
+        result = run_case(case, other, connector)
+        assert result.status == "pass", f"{case.id}: {result.detail}"
+    # With the original policies put back, the queries that read the user pass too.
+    governed = compile_project(_with_policies(back.project, graph.project))
+    cases = _cube_cases(graph.project, policies=True)
+    assert {"R17", "R18"} <= {c.id for c in cases}
+    assert len(cases) == 40
+    for case in cases:
+        result = run_case(case, governed, connector)
+        assert result.status == "pass", f"{case.id}: {result.detail}"
+
+
+def _cube_test_metrics(project: Project) -> Project:
+    """The example without policies or cumulative metrics, plus filtered metrics of every
+    aggregation, a filter on a dimension with an expression, and nested division."""
+    data = _with_test_metrics(project).model_dump(mode="json")
+    data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUMULATIVE]
+    data["metrics"] += [
+        {
+            "name": "discounted_revenue",
+            "type": "simple",
+            "measure": "revenue",
+            "filter": "{has_discount} AND {status} <> 'canceled'",
+        },
+        {"name": "biggest_order", "type": "simple", "measure": "revenue"},
+        {"name": "share_of_net", "type": "derived", "expr": "{net_revenue} / ({revenue} / 2)"},
+        {
+            "name": "completed_share",
+            "type": "ratio",
+            "numerator": "completed_revenue",
+            "denominator": "revenue",
+        },
+    ]
+    return Project.model_validate(data)
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_cube_export_metric_shapes_same_numbers(graph, tmp_path, source, request):
+    """Every measure and metric the export writes returns the native numbers after the round
+    trip, alone and by order status."""
+    connector = request.getfixturevalue(source)
+    project = _cube_test_metrics(graph.project)
+    full = compile_project(project)
+    exported, back = _cube_round_trip(project, tmp_path)
+    assert back.warnings == []
+    measures = {
+        m["name"]: m for c in yaml.safe_load(exported.text)["cubes"] for m in c.get("measures", [])
+    }
+    assert measures["discounted_revenue"]["filters"] == [
+        {"sql": "({CUBE}.discount > 0) AND {CUBE}.status <> 'canceled'"}
+    ]
+    assert measures["share_of_net"]["sql"] == (
+        "(1.0 * {net_revenue} / NULLIF(((1.0 * {revenue} / NULLIF(2, 0))), 0))"
+    )
+    other = compile_project(back.project)
+    names = [*full.measure_owner, *(m.name for m in project.metrics)]
+    assert len(names) == 27
+    for name in names:
+        for dims in ([], ["orders.status"]):
+            query = QueryRequest(metrics=[name], dimensions=dims)
+            if dims and full.measure_owner.get(name) in ("customers", "products", "sellers"):
+                continue  # those models do not reach orders
+            same(rows(full, connector, query), rows(other, connector, query))
+
+
+def test_cube_export_states_each_reason(graph):
+    data = _without_policies(_exported_slice(graph.project))
+    data["metrics"] += [
+        {
+            "name": "midwest_revenue",
+            "type": "simple",
+            "measure": "revenue",
+            "filter": "{customers.region} = 'Midwest'",
+        },
+        {
+            "name": "recent_revenue",
+            "type": "simple",
+            "measure": "revenue",
+            "filter": "{orders.ordered_at__month} >= DATE '2026-01-01'",
+        },
+        {"name": "my_revenue", "type": "simple", "measure": "revenue", "filter": "$user.id = 1"},
+        {"name": "raw_gap", "type": "derived", "expr": "{revenue} - amount"},
+        {
+            "name": "completed_rate",
+            "type": "ratio",
+            "numerator": "revenue",
+            "denominator": "order_count",
+            "filter": "{status} = 'completed'",
+        },
+        {"name": "ytd_gap", "type": "derived", "expr": "{revenue_year_to_date} - {revenue}"},
+    ]
+    project = Project.model_validate(data)
+    with pytest.raises(MetricLossError) as exc:
+        export_cube(project)
+    assert str(exc.value).startswith("8 metrics (revenue_year_to_date, revenue_month_to_date, ")
+    warnings = export_cube(project, allow_metric_loss=True).warnings
+    reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in warnings}
+    assert reasons["metrics.midwest_revenue"].startswith(
+        "its filter uses `customers.region` from another cube (customers)"
+    )
+    assert reasons["metrics.recent_revenue"].startswith(
+        "its filter uses a time grain (`orders.ordered_at__month`)"
+    )
+    assert reasons["metrics.my_revenue"].startswith("its filter uses $user")
+    assert reasons["metrics.raw_gap"].startswith("its expression uses bare columns (amount)")
+    assert reasons["metrics.completed_rate"].startswith("it has a filter")
+    assert reasons["metrics.ytd_gap"].startswith(
+        "it uses `revenue_year_to_date`, which is not exported"
+    )
+    assert all(
+        r.endswith("it is not exported to Cube")
+        for k, r in reasons.items()
+        if k in ("metrics.midwest_revenue", "metrics.ytd_gap")
+    )
+
+
+def test_cube_export_keeps_expressions_as_written():
+    """Only bare columns get ``{CUBE}.``; the importer removes it and gets the same text."""
+    from cosmos_semantic.interchange.cube import _cube_sql, _strip_cube
+
+    for text, want in [
+        ("amount", "{CUBE}.amount"),
+        ("quantity * unit_price", "{CUBE}.quantity * {CUBE}.unit_price"),
+        (
+            'CASE WHEN "Net value" > 0 THEN value ELSE 0 END',
+            'CASE WHEN {CUBE}."Net value" > 0 THEN {CUBE}.value ELSE 0 END',
+        ),
+        ("EXTRACT(year FROM ordered_at)", "EXTRACT(year FROM {CUBE}.ordered_at)"),
+        ("COALESCE(o.amount, 'amount')", "COALESCE(o.amount, 'amount')"),
+    ]:
+        assert _cube_sql(text) == want
+        assert _strip_cube(_cube_sql(text)) == text
+
+
+def test_cli_export_cube(tmp_path):
+    runner = CliRunner()
+    refused = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE)])
+    assert refused.exit_code == 1
+    assert refused.stdout == ""
+    assert "1 row filter (customers.by_region) and the sensitivity" in refused.stderr
+    refused = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "--allow-policy-loss"])
+    assert refused.exit_code == 1
+    assert "2 metrics (revenue_year_to_date, revenue_month_to_date)" in refused.stderr
+    flags = ["--allow-policy-loss", "--allow-metric-loss"]
+    result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), *flags])
+    assert result.exit_code == 0, result.output
+    assert yaml.safe_load(result.stdout)["cubes"]
+    assert "warning:" not in result.stdout
+    assert "warning: metrics.collection_gap: it spans cubes" in result.stderr
+    out = tmp_path / "model" / "cubes.yml"
+    result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "-o", str(out), *flags])
+    assert result.exit_code == 0, result.output
+    assert "15 warnings" in result.stdout
+    assert import_model("cube", out).warnings == []
