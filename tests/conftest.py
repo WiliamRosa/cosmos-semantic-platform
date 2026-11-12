@@ -166,3 +166,41 @@ def snowflake_connector(tables):
     demo_data.load(connector, tables)
     yield connector
     connector.close()
+
+
+# -- TPC-H (DEC-4): examples/tpch on the data of DuckDB's `tpch` extension ----
+
+TPCH = ROOT / "examples" / "tpch"
+
+
+def tpch_connector(scale_factor: float):
+    """An in-memory DuckDB with the TPC-H tables at ``scale_factor``. DuckDB downloads its
+    ``tpch`` extension once; without network access the calling test is skipped, or fails
+    when ``COSMOS_REQUIRE_TPCH=1`` (for a run that must not lose the TPC-H cases silently)."""
+    import duckdb
+
+    connector = connect(DataSourceConfig(type="duckdb"))
+    try:
+        try:
+            connector.run_script("LOAD tpch")
+        except duckdb.Error:
+            connector.run_script("INSTALL tpch; LOAD tpch")
+    except duckdb.Error as exc:
+        connector.close()
+        reason = (
+            f"DuckDB's tpch extension is not available (no network?): {str(exc).splitlines()[0]}"
+        )
+        if os.environ.get("COSMOS_REQUIRE_TPCH") == "1":
+            pytest.fail(f"{reason}; COSMOS_REQUIRE_TPCH=1 requires it")
+        pytest.skip(reason)
+    try:
+        connector.run_script(f"CALL dbgen(sf={float(scale_factor)})")
+    except BaseException:
+        connector.close()
+        raise
+    return connector
+
+
+@pytest.fixture(scope="session")
+def tpch_graph():
+    return compile_project(load_project(TPCH / "semantic"))

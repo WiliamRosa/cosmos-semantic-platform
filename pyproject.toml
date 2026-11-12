@@ -90,6 +90,8 @@ exclude = ["console/node_modules", "console/.next", "console/out"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The performance baseline is opt-in: `uv run pytest -m perf tests/perf`.
+addopts = ["-m", "not perf"]
 markers = [
     "postgres: precisa de um Postgres em COSMOS_PG_URI",
     "sqlserver: precisa de um SQL Server em COSMOS_MSSQL_URI",
@@ -98,6 +100,7 @@ markers = [
     "mysql: needs a MySQL server at COSMOS_MYSQL_URI",
     "mariadb: needs a MariaDB server at COSMOS_MARIADB_URI",
     "oracle: needs an Oracle Database at COSMOS_ORACLE_DSN",
+    "perf: TPC-H performance baseline; opt-in with `-m perf` (not in the default run)",
 ]
 
 [tool.ruff]
