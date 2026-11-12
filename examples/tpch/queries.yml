@@ -1,15 +1,21 @@
 # TPC-H reference queries (DEC-4): a second reference case beside reference/queries.yml.
 #
 # Each case compares the engine's result with hand-written SQL that never goes through the
-# engine, on the data of DuckDB's `tpch` extension (`CALL dbgen(sf=...)`). The results do not
-# depend on the scale factor. The same cases are timed by the performance baseline
+# engine, on the data of DuckDB's `tpch` extension (`CALL dbgen(sf=...)`). The values change
+# with the scale factor; what holds at every scale factor is that the engine's result equals the
+# hand-written SQL's. The same cases are timed by the performance baseline
 # (tests/perf/test_tpch_perf.py). The SQL is in the Postgres dialect, as in reference/.
+#
+# The cases borrow the shapes of TPC-H queries (joins, grains, filters); only T06 is exactly a
+# TPC-H query (Q14). The hand-written SQL uses inner joins where the engine writes LEFT JOINs
+# (T01, T02, T04, T05, T06 and T07): they agree only because TPC-H data has full
+# referential integrity (every foreign key finds its row).
 
 cases:
   - id: T01
     category: tpch
     phase: 0
-    title: Revenue by customer region (four joins, TPC-H Q5 shape)
+    title: Revenue by customer region (a four-join path from line items)
     request:
       metrics: [revenue]
       dimensions: [region.name]
@@ -84,7 +90,7 @@ cases:
   - id: T05
     category: tpch
     phase: 0
-    title: Returned revenue by nation in one region and quarter (TPC-H Q10 shape)
+    title: Returned revenue by customer nation in one region and quarter (metric filter)
     request:
       metrics: [returned_revenue]
       dimensions: [nation.name]
@@ -92,15 +98,18 @@ cases:
         - "{region.name} = 'EUROPE'"
         - "{orders.ordered_at} >= DATE '1993-10-01'"
         - "{orders.ordered_at} < DATE '1994-01-01'"
+    # The metric filter stays inside the sum, as in reference/queries.yml R14: a nation with
+    # lines in the window but none returned is a row with NULL, not a missing row.
     sql: |
       SELECT n.n_name AS nation__name,
-             SUM(l.l_extendedprice * (1 - l.l_discount)) AS returned_revenue
+             SUM(CASE WHEN l.l_returnflag = 'R'
+                      THEN l.l_extendedprice * (1 - l.l_discount) END) AS returned_revenue
       FROM lineitem l
       JOIN orders o ON o.o_orderkey = l.l_orderkey
       JOIN customer c ON c.c_custkey = o.o_custkey
       JOIN nation n ON n.n_nationkey = c.c_nationkey
       JOIN region r ON r.r_regionkey = n.n_regionkey
-      WHERE l.l_returnflag = 'R' AND r.r_name = 'EUROPE'
+      WHERE r.r_name = 'EUROPE'
         AND o.o_orderdate >= DATE '1993-10-01' AND o.o_orderdate < DATE '1994-01-01'
       GROUP BY n.n_name
 

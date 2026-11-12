@@ -26,5 +26,6 @@ def test_tpch_reference_duckdb(case, tpch_graph, tpch_small):
 
 
 def test_tpch_cases_are_unique():
-    assert len(CASES) == 7
+    assert CASES
     assert len({c.id for c in CASES}) == len(CASES)
+    assert all(c.request is not None and c.sql for c in CASES)

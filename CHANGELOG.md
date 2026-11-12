@@ -27,12 +27,13 @@ format or the API; such changes are listed under **Changed**.
   Division, functions, `RELATED`, `FILTER`, other tables and the other iterators stay warnings.
 
 - A TPC-H model in `examples/tpch` and a performance baseline on DuckDB (DEC-4). Seven metric
-  requests, among them a ratio across two grains and TPC-H Q14's promotional revenue share, have
-  hand-written SQL: the default test run checks them at scale factor 0.01, and
-  `uv run pytest -m perf tests/perf` times compiling each request, running the engine's SQL and
-  running the hand-written SQL at scale factor 1 (`COSMOS_TPCH_SF` picks another), and checks
-  the results are equal. The data comes from DuckDB's `tpch` extension; without network access
-  the tests are skipped. See "Performance baseline" in `docs/architecture.md`.
+  requests in the shapes of TPC-H queries (only one is exactly a TPC-H query, Q14's promotional
+  revenue share), among them a ratio across two grains, have hand-written SQL: the default test
+  run checks them at scale factor 0.01, and `uv run pytest -m perf tests/perf` times compiling
+  each request, running the engine's SQL and running the hand-written SQL at scale factor 1
+  (`COSMOS_TPCH_SF` picks another), and checks the results are equal. The data comes from
+  DuckDB's `tpch` extension; without network access the tests are skipped, or fail with
+  `COSMOS_REQUIRE_TPCH=1`. See "Performance baseline" in `docs/architecture.md`.
 
 - A supervised team of AI agents for daily evolution ([ADR 0013](docs/decisions/0013-supervised-agent-team.md)): an
   orchestrator and four specialists in `.claude/agents/`, the project's working rules in

@@ -175,7 +175,8 @@ TPCH = ROOT / "examples" / "tpch"
 
 def tpch_connector(scale_factor: float):
     """An in-memory DuckDB with the TPC-H tables at ``scale_factor``. DuckDB downloads its
-    ``tpch`` extension once; without network access the calling test is skipped."""
+    ``tpch`` extension once; without network access the calling test is skipped, or fails
+    when ``COSMOS_REQUIRE_TPCH=1`` (for a run that must not lose the TPC-H cases silently)."""
     import duckdb
 
     connector = connect(DataSourceConfig(type="duckdb"))
@@ -186,9 +187,17 @@ def tpch_connector(scale_factor: float):
             connector.run_script("INSTALL tpch; LOAD tpch")
     except duckdb.Error as exc:
         connector.close()
-        reason = str(exc).splitlines()[0]
-        pytest.skip(f"DuckDB's tpch extension is not available (no network?): {reason}")
-    connector.run_script(f"CALL dbgen(sf={float(scale_factor)})")
+        reason = (
+            f"DuckDB's tpch extension is not available (no network?): {str(exc).splitlines()[0]}"
+        )
+        if os.environ.get("COSMOS_REQUIRE_TPCH") == "1":
+            pytest.fail(f"{reason}; COSMOS_REQUIRE_TPCH=1 requires it")
+        pytest.skip(reason)
+    try:
+        connector.run_script(f"CALL dbgen(sf={float(scale_factor)})")
+    except BaseException:
+        connector.close()
+        raise
     return connector
 
 

@@ -176,7 +176,7 @@ metrics:
     owner: tpch
     measure: revenue
     filter: "{lineitem.return_flag} = 'R'"
-    description: Revenue of returned lines (TPC-H Q10)
+    description: Revenue of returned lines (the return-flag filter of TPC-H Q10)
   - name: promo_revenue
     type: simple
     owner: tpch
