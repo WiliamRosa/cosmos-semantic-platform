@@ -154,7 +154,7 @@ def create_app(
     ) -> Principal:
         if authenticator is None or not authenticator.settings.enabled:
             if allow_anonymous:
-                return Principal(channel="api", subject="anonymous")
+                return Principal(channel="api", subject="anonymous", local_anonymous=True)
             raise AuthError("authentication is not configured on the server")
         bearer = None
         if authorization:
@@ -196,6 +196,13 @@ def create_app(
     @app.get("/v1/explain/{name}", summary="Explain a metric, rule, dimension or concept")
     def explain(name: str, _user: User) -> dict[str, Any]:
         return service.catalog.explain(name)
+
+    @app.get(
+        "/v1/impact/{name}",
+        summary="What a change to a member affects; who queried it is shown to admins only",
+    )
+    def impact(name: str, user: User) -> dict[str, Any]:
+        return service.impact(name, requester=user)
 
     @app.post("/v1/query", summary="Run a metrics request on the data source")
     def query(request: QueryRequest, user: User) -> dict[str, Any]:

@@ -54,16 +54,16 @@ class Console:
         self.graph = service.engine.graph
         path = runs_path or os.environ.get("COSMOS_RUNS_LOG")
         self.runs_path = Path(path) if path else None
-        if admins is None:
-            raw = os.environ.get("COSMOS_CONSOLE_ADMINS", "")
-            admins = {s.strip() for s in raw.split(",") if s.strip()}
-        self.admins = admins
+        # The same admins as the service (COSMOS_CONSOLE_ADMINS), unless given here.
+        self.admins = service.admins if admins is None else admins
 
     # -- access ------------------------------------------------------------------
 
     def is_admin(self, principal: Principal) -> bool:
         # `--allow-anonymous` is for local development; the person at the keyboard sees all.
-        return principal.subject == "anonymous" or principal.subject in self.admins
+        if principal.local_anonymous:
+            return True
+        return principal.subject is not None and principal.subject in self.admins
 
     def _require_admin(self, principal: Principal) -> None:
         if not self.is_admin(principal):

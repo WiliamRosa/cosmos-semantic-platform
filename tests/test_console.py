@@ -187,7 +187,9 @@ def test_admin_flag(graph):
     engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
     console = Console(SemanticService(engine), admins={"lead@example.com"})
     assert console.is_admin(Principal(subject="lead@example.com"))
-    assert console.is_admin(Principal(subject="anonymous"))  # --allow-anonymous, local only
+    # --allow-anonymous, local only: recognized by the marker, not by the name.
+    assert console.is_admin(Principal(subject="anonymous", local_anonymous=True))
+    assert not console.is_admin(Principal(subject="anonymous"))
     assert not console.is_admin(Principal(subject="someone@example.com"))
 
 

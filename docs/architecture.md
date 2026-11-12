@@ -156,6 +156,8 @@ Legacy SQL can read anything the database user can, bypassing row filters, so re
 
 With `--audit` (or `COSMOS_AUDIT_LOG`), the report adds the **consumers**: who queried any affected member, through which channel, how many times and when last. With `--changes-from <previous model>`, the command first finds the members whose definition changed (metrics, measures, dimensions, rules, glossary concepts and models, including removals) and reports their combined impact, which is what a reviewer needs on a pull request.
 
+`GET /v1/impact/{kind:name}` and the MCP tool `impact` return the same report for one target. The consumers are personal data, so they are returned only to the subjects in `COSMOS_CONSOLE_ADMINS` (and to `--allow-anonymous` in local development); for everyone else the `consumers` key is absent and `consumers_visible` is `false`.
+
 ## Business knowledge graph
 
 Teams, systems and processes declared in the model (see [the semantic model](semantic-model.md#business-context)) extend the dependency graph: systems feed models, processes run on systems and use metrics and rules, and teams own all of them. `cosmos impact` follows these links too, so the impact of `system:payment_gateway` reaches the `payments` model, the `collection_gap` metric, the `order_to_cash` process and the `controllership` team. `explain` (REST, MCP and CLI) answers who owns a member, which systems its data comes from and which processes rely on it. `cosmos graph` exports the whole graph or a focused part as Mermaid, Graphviz DOT or JSON.

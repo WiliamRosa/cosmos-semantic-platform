@@ -227,8 +227,12 @@ def consumers(audit_path: str | Path, impact: Impact, graph: SemanticGraph) -> l
     usage: dict[tuple, dict[str, Any]] = {}
     with path.open(encoding="utf-8") as fh:
         for line in fh:
-            record = json.loads(line)
-            if record.get("outcome") != "ok":
+            # A truncated or corrupted line (a crash mid-write) is skipped, not fatal.
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict) or record.get("outcome") != "ok":
                 continue
             request = record.get("request") or {}
             used = set(request.get("metrics", []))

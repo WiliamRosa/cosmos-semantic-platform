@@ -126,3 +126,73 @@ def test_glossary_as_skos(client):
     assert turtle.headers["content-type"].startswith("text/turtle")
     bad = client.get("/v1/glossary", params={"format": "x"}, headers={"X-API-Key": "dev-sul"})
     assert bad.status_code == 400
+
+
+def test_impact_shows_who_queried_only_to_admins(graph, duckdb_connector, tmp_path):
+    engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
+    engine._connectors["local"] = duckdb_connector
+    settings = AuthSettings(
+        dev_keys={
+            "analyst": DevKey(subject="analyst@example.com", user={"region": "Midwest"}),
+            "lead": DevKey(subject="lead@example.com", user={"region": "Midwest"}),
+        }
+    )
+    service = SemanticService(
+        engine, audit_path=tmp_path / "audit.jsonl", admins={"lead@example.com"}
+    )
+    client = TestClient(create_app(service, Authenticator(settings, graph.project.user_context)))
+    analyst, lead = {"X-API-Key": "analyst"}, {"X-API-Key": "lead"}
+    ran = client.post(
+        "/v1/query",
+        headers=analyst,
+        json={"metrics": ["customer_count"], "filters": ["{rule.active_customer}"]},
+    )
+    assert ran.status_code == 200, ran.text
+
+    assert client.get("/v1/impact/rule:active_customer").status_code == 401
+    response = client.get("/v1/impact/rule:active_customer", headers=analyst)
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["affected"]["rules"] == ["active_customer"]
+    assert "sales-leadership" in report["owners"]
+    assert report["consumers_visible"] is False and "consumers" not in report
+    assert "analyst@example.com" not in response.text
+
+    admin = client.get("/v1/impact/rule:active_customer", headers=lead).json()
+    assert admin["consumers_visible"] is True
+    assert [(c["subject"], c["channel"], c["queries"]) for c in admin["consumers"]] == [
+        ("analyst@example.com", "api", 1)
+    ]
+
+    unknown = client.get("/v1/impact/metric:does_not_exist", headers=lead)
+    assert unknown.status_code == 400
+    assert unknown.json()["error"] == "QueryError"
+    assert "does not exist in the model" in unknown.json()["detail"]
+    assert client.get("/v1/impact/active_customer", headers=lead).status_code == 400
+
+
+def test_admin_depends_on_the_anonymous_marker_not_the_name(graph, duckdb_connector, tmp_path):
+    engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
+    engine._connectors["local"] = duckdb_connector
+    audit = tmp_path / "audit.jsonl"
+    service = SemanticService(engine, audit_path=audit, admins={"lead@example.com"})
+    # A credential whose subject is literally "anonymous" is an ordinary user.
+    settings = AuthSettings(
+        dev_keys={"anon": DevKey(subject="anonymous", user={"region": "Midwest"})}
+    )
+    client = TestClient(create_app(service, Authenticator(settings, graph.project.user_context)))
+    headers = {"X-API-Key": "anon"}
+    ran = client.post(
+        "/v1/query",
+        headers=headers,
+        json={"metrics": ["customer_count"], "filters": ["{rule.active_customer}"]},
+    )
+    assert ran.status_code == 200, ran.text
+    report = client.get("/v1/impact/rule:active_customer", headers=headers).json()
+    assert report["consumers_visible"] is False and "consumers" not in report
+
+    # The user that --allow-anonymous creates (local development) still sees everything.
+    local = TestClient(create_app(service, None, allow_anonymous=True))
+    admin = local.get("/v1/impact/rule:active_customer").json()
+    assert admin["consumers_visible"] is True
+    assert [c["subject"] for c in admin["consumers"]] == ["anonymous"]
