@@ -18,5 +18,9 @@ class PolicyLossError(CosmosError):
     """An export would drop row filters or personal-data marking without being allowed to."""
 
 
+class MetricLossError(CosmosError):
+    """An export would drop metrics the target format cannot carry without being allowed to."""
+
+
 class ConnectorError(CosmosError):
     """Running SQL on a data source failed."""

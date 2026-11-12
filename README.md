@@ -122,6 +122,10 @@ uv run cosmos export skos -m examples/ecommerce/semantic -o glossary.ttl --base 
 # Row filters, sensitivity and the glossary go too, so the example needs no --allow-policy-loss
 uv run cosmos export ossie -m examples/ecommerce/semantic -o ecommerce.ossie.yaml
 
+# The model as Cube static YAML, which `cosmos import cube` reads back with the same numbers.
+# Row filters, sensitivity and cumulative metrics are not exported yet, so the example needs both flags
+uv run cosmos export cube -m examples/ecommerce/semantic -o model/cubes/ecommerce.yml --allow-policy-loss --allow-metric-loss
+
 # Draft a model from the database catalog (keys, joins, measures, LGPD suggestions), then review it
 uv run cosmos bootstrap -c examples/ecommerce/connections.yml -o semantic/draft.yml
 
