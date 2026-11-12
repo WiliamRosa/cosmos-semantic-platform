@@ -61,7 +61,9 @@ class Console:
 
     def is_admin(self, principal: Principal) -> bool:
         # `--allow-anonymous` is for local development; the person at the keyboard sees all.
-        return principal.subject == "anonymous" or principal.subject in self.admins
+        if principal.local_anonymous:
+            return True
+        return principal.subject is not None and principal.subject in self.admins
 
     def _require_admin(self, principal: Principal) -> None:
         if not self.is_admin(principal):

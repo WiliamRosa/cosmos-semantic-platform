@@ -169,3 +169,30 @@ def test_impact_shows_who_queried_only_to_admins(graph, duckdb_connector, tmp_pa
     assert unknown.json()["error"] == "QueryError"
     assert "does not exist in the model" in unknown.json()["detail"]
     assert client.get("/v1/impact/active_customer", headers=lead).status_code == 400
+
+
+def test_admin_depends_on_the_anonymous_marker_not_the_name(graph, duckdb_connector, tmp_path):
+    engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
+    engine._connectors["local"] = duckdb_connector
+    audit = tmp_path / "audit.jsonl"
+    service = SemanticService(engine, audit_path=audit, admins={"lead@example.com"})
+    # A credential whose subject is literally "anonymous" is an ordinary user.
+    settings = AuthSettings(
+        dev_keys={"anon": DevKey(subject="anonymous", user={"region": "Midwest"})}
+    )
+    client = TestClient(create_app(service, Authenticator(settings, graph.project.user_context)))
+    headers = {"X-API-Key": "anon"}
+    ran = client.post(
+        "/v1/query",
+        headers=headers,
+        json={"metrics": ["customer_count"], "filters": ["{rule.active_customer}"]},
+    )
+    assert ran.status_code == 200, ran.text
+    report = client.get("/v1/impact/rule:active_customer", headers=headers).json()
+    assert report["consumers_visible"] is False and "consumers" not in report
+
+    # The user that --allow-anonymous creates (local development) still sees everything.
+    local = TestClient(create_app(service, None, allow_anonymous=True))
+    admin = local.get("/v1/impact/rule:active_customer").json()
+    assert admin["consumers_visible"] is True
+    assert [c["subject"] for c in admin["consumers"]] == ["anonymous"]

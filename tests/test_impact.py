@@ -80,6 +80,24 @@ def test_consumers_come_from_the_audit_log(graph, duckdb_connector, tmp_path):
     assert [(c["subject"], c["channel"]) for c in report["consumers"]] == [("agent", "mcp")]
 
 
+def test_corrupted_audit_lines_are_skipped(graph, duckdb_connector, tmp_path):
+    engine = Engine(graph, ConnectionsFile(data_sources={"src": duckdb_connector.config}))
+    engine._connectors["src"] = duckdb_connector
+    audit = tmp_path / "audit.jsonl"
+    service = SemanticService(engine, audit_path=audit)
+    ana = Principal(user={"region": "Midwest"}, channel="api", subject="ana")
+    request = QueryRequest(metrics=["customer_count"], filters=["{rule.active_customer}"])
+    service.query(request, ana)
+    with audit.open("a", encoding="utf-8") as fh:
+        fh.write('{"event": "query", "outcome": "ok", "princ\n')  # cut off mid-write
+        fh.write("not json at all\n")
+        fh.write("42\n")
+    service.query(request, ana)
+
+    report = analyze(graph, ["rule:active_customer"], audit_path=audit)
+    assert [(c["subject"], c["queries"]) for c in report["consumers"]] == [("ana", 2)]
+
+
 def test_changes_between_model_versions(graph):
     project = graph.project.model_copy(deep=True)
     metric = next(m for m in project.metrics if m.name == "completed_revenue")

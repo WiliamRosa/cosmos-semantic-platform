@@ -68,6 +68,9 @@ class Principal:
     user: dict[str, Any] = field(default_factory=dict)
     channel: Literal["api", "mcp", "cli"] = "cli"
     subject: str | None = None
+    # Set only for the user that `--allow-anonymous` creates (local development). Admin rights
+    # depend on this marker, never on the subject's name, which any credential could carry.
+    local_anonymous: bool = False
 
     @property
     def is_agent(self) -> bool:

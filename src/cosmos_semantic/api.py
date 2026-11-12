@@ -154,7 +154,7 @@ def create_app(
     ) -> Principal:
         if authenticator is None or not authenticator.settings.enabled:
             if allow_anonymous:
-                return Principal(channel="api", subject="anonymous")
+                return Principal(channel="api", subject="anonymous", local_anonymous=True)
             raise AuthError("authentication is not configured on the server")
         bearer = None
         if authorization:

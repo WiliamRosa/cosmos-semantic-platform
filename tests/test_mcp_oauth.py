@@ -191,3 +191,17 @@ def test_impact_consumers_only_for_admins_over_oauth(
         admin = call_tool(client, dev, "impact", name="metric:customer_count")
         assert admin["consumers_visible"] is True
         assert {c["subject"] for c in admin["consumers"]} == {"alice", "dev"}
+
+
+def test_a_token_with_subject_anonymous_is_not_admin(
+    graph, duckdb_connector, signing_key, tmp_path
+):
+    audit_path = tmp_path / "audit.jsonl"
+    anon = {"authorization": f"Bearer {token(signing_key, sub='anonymous', region='Midwest')}"}
+    dev = {"x-api-key": "dev-sul"}
+    with make_client(graph, duckdb_connector, signing_key, audit_path=audit_path) as client:
+        call_tool(client, dev, "query", metrics=["customer_count"])
+        report = call_tool(client, anon, "impact", name="metric:customer_count")
+        assert report["consumers_visible"] is False and "consumers" not in report
+        rest = client.get("/v1/impact/metric:customer_count", headers=anon).json()
+        assert rest["consumers_visible"] is False and "consumers" not in rest

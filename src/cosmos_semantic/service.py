@@ -1,8 +1,9 @@
 """Service shared by the REST API, the MCP server and the CLI: querying with evidence,
 auditing, replay, impact analysis and serialization.
 
-Admins are the subjects listed in ``COSMOS_CONSOLE_ADMINS`` (ADR 0012), plus ``anonymous``
-under ``--allow-anonymous`` (local development). Only they see audit data about other people,
+Admins are the subjects listed in ``COSMOS_CONSOLE_ADMINS`` (ADR 0012), plus the user that
+``--allow-anonymous`` creates (local development), recognized by how it was created
+(``Principal.local_anonymous``), never by its name. Only they see audit data about other people,
 such as who queried the members a change affects."""
 
 from __future__ import annotations
@@ -117,7 +118,9 @@ class SemanticService:
 
     def is_admin(self, principal: Principal) -> bool:
         # `--allow-anonymous` is for local development; the person at the keyboard sees all.
-        return principal.subject == "anonymous" or principal.subject in self.admins
+        if principal.local_anonymous:
+            return True
+        return principal.subject is not None and principal.subject in self.admins
 
     # -- impact ------------------------------------------------------------------
 
