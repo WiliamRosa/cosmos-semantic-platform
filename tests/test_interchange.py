@@ -787,14 +787,14 @@ def test_cube_export_round_trip(graph, tmp_path):
     }
     measures = {m["name"]: m for c in doc["cubes"] for m in c.get("measures", [])}
     assert measures["completed_revenue"]["filters"] == [{"sql": "{CUBE}.status = 'completed'"}]
-    assert measures["average_order_value"]["sql"] == "1.0 * {revenue} / NULLIF({order_count}, 0)"
-    assert measures["orders_per_buyer"]["sql"] == "(1.0 * {order_count} / NULLIF({buyers}, 0))"
+    assert measures["average_order_value"]["sql"] == "1e0 * {revenue} / NULLIF({order_count}, 0)"
+    assert measures["orders_per_buyer"]["sql"] == "(1e0 * {order_count} / NULLIF({buyers}, 0))"
     assert measures["collection_gap"]["sql"] == "{net_revenue} - {payments.paid_value}"
-    assert measures["avg_quantity"]["sql"] == "1.0 * {CUBE}.quantity"
+    assert measures["avg_quantity"]["sql"] == "1e0 * {CUBE}.quantity"
     assert measures["item_revenue"]["sql"] == "{CUBE}.quantity * {CUBE}.unit_price"
 
     # Models, tables, dimensions and measures come back as they were (the primary key as an
-    # entity named after the cube; AVG in decimal, as the planner computes it).
+    # entity named after the cube; AVG with a `1e0 *` factor, so it is real in Cube too).
     def shape(project: Project) -> dict:
         return {
             m.name: (
@@ -806,7 +806,7 @@ def test_cube_export_round_trip(graph, tmp_path):
         }
 
     want = shape(Project.model_validate(_without_policies(graph.project.model_dump(mode="json"))))
-    want["order_items"][2][2] = ("avg_quantity", "avg", "1.0 * quantity")
+    want["order_items"][2][2] = ("avg_quantity", "avg", "1e0 * quantity")
     assert shape(back.project) == want
     names = {m.name for m in back.project.metrics} | {
         x.name for m in back.project.semantic_models for x in m.measures
@@ -823,7 +823,9 @@ def test_cube_export_round_trip(graph, tmp_path):
         assert f"metrics.{name}: it spans cubes" in joined
     for key in ("business_rules", "glossary", "teams", "systems", "processes"):
         assert f"{key}: not exported to Cube yet" in joined
-    assert "user_context: region" in joined and "timezone: Cube models have no time zone" in joined
+    assert "user_context: region" in joined
+    assert "timezone: not exported to Cube. Model timestamps are local time, so keep" in joined
+    assert "relative dates such as today then follow UTC in Cube, not America/New_York" in joined
     assert len(exported.warnings) == 15
 
 
@@ -850,10 +852,15 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
 
 
 def _cube_test_metrics(project: Project) -> Project:
-    """The example without policies or cumulative metrics, plus filtered metrics of every
-    aggregation, a filter on a dimension with an expression, and nested division."""
+    """The example without policies or cumulative metrics, plus `max` and `min` measures,
+    filtered metrics of every aggregation, a filter on a dimension with an expression, and
+    nested division."""
     data = _with_test_metrics(project).model_dump(mode="json")
     data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUMULATIVE]
+    orders = next(m for m in data["semantic_models"] if m["name"] == "orders")
+    orders["measures"].append({"name": "largest_order", "agg": "max", "expr": "amount"})
+    payments = next(m for m in data["semantic_models"] if m["name"] == "payments")
+    payments["measures"].append({"name": "smallest_payment", "agg": "min", "expr": "value"})
     data["metrics"] += [
         {
             "name": "discounted_revenue",
@@ -861,7 +868,13 @@ def _cube_test_metrics(project: Project) -> Project:
             "measure": "revenue",
             "filter": "{has_discount} AND {status} <> 'canceled'",
         },
-        {"name": "biggest_order", "type": "simple", "measure": "revenue"},
+        {"name": "gross_revenue", "type": "simple", "measure": "revenue"},
+        {
+            "name": "largest_completed_order",
+            "type": "simple",
+            "measure": "largest_order",
+            "filter": "{status} = 'completed'",
+        },
         {"name": "share_of_net", "type": "derived", "expr": "{net_revenue} / ({revenue} / 2)"},
         {
             "name": "completed_share",
@@ -889,11 +902,17 @@ def test_cube_export_metric_shapes_same_numbers(graph, tmp_path, source, request
         {"sql": "({CUBE}.discount > 0) AND {CUBE}.status <> 'canceled'"}
     ]
     assert measures["share_of_net"]["sql"] == (
-        "(1.0 * {net_revenue} / NULLIF(((1.0 * {revenue} / NULLIF(2, 0))), 0))"
+        "(1e0 * {net_revenue} / NULLIF(((1e0 * {revenue} / NULLIF(2, 0))), 0))"
     )
     other = compile_project(back.project)
     names = [*full.measure_owner, *(m.name for m in project.metrics)]
-    assert len(names) == 27
+    assert len(names) == 30
+    assert measures["largest_order"] == {
+        "name": "largest_order",
+        "type": "max",
+        "sql": "{CUBE}.amount",
+    }
+    assert measures["smallest_payment"]["type"] == "min"
     for name in names:
         for dims in ([], ["orders.status"]):
             query = QueryRequest(metrics=[name], dimensions=dims)

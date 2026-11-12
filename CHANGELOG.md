@@ -53,13 +53,15 @@ format or the API; such changes are listed under **Changed**.
 - `cosmos export cube` writes the model as Cube static YAML: one cube per model, joins from the
   entities, dimensions (the primary key as a hidden dimension when none holds it), measures,
   simple metrics as measures with `filters`, and ratio and derived metrics as `number` measures,
-  with division real and null on a zero denominator and AVG in decimal, as the planner computes
-  them. `cosmos import cube` reads the export back with the same numbers. Metrics that span
+  with a `1e0 *` factor so that division and AVG are real (division is null on a zero
+  denominator), close to the planner's `CAST(x AS DOUBLE)`. `cosmos import cube` reads the export
+  back with the same numbers in Cosmos. Metrics that span
   cubes are exported with a warning (Rule 3). Row filters and sensitivity fail closed unless
   `--allow-policy-loss` is given, and cumulative metrics and filters beyond the measure's own
   cube unless `--allow-metric-loss` is given. Business rules, the glossary, business context,
-  user context and the time zone are listed as warnings on standard error. Round-trip and
-  same-numbers tests on every database
+  user context and the time zone are listed as warnings on standard error; model timestamps are
+  local, so Cube's query time zone should stay UTC. Round-trip and same-numbers tests, through
+  the Cosmos importer and planner, on every database
   ([interoperability](docs/interoperability.md#exporting-cube)).
 
 ### Changed

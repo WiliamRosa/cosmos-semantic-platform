@@ -1014,7 +1014,12 @@ def export_cube_cmd(
         bool,
         typer.Option(
             "--allow-metric-loss",
-            help="Export even though metrics Cube cannot carry (cumulative ones) are dropped.",
+            help=(
+                "Export even though metrics Cube cannot carry are dropped: cumulative metrics, "
+                "simple metrics filtered by another cube, a time grain, a business rule or "
+                "$user, ratio metrics with a filter, derived metrics over bare columns, and "
+                "metrics that use one of these."
+            ),
         ),
     ] = False,
 ) -> None:

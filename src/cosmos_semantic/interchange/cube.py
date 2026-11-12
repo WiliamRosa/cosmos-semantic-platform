@@ -7,8 +7,10 @@ too: the report lists what must be recreated as ``row_filters`` and ``sensitivit
 Export (first slice): one cube per model with ``sql_table``, joins from the entities, dimensions
 (the primary key as a hidden dimension when no dimension holds it), measures, and metrics as
 measures: a simple metric is a measure with ``filters``, ratio and derived metrics are ``number``
-measures, with division real and null on a zero denominator and AVG in decimal, as the planner
-computes them. ``import_cube`` reads the export back with the same numbers. Metrics spanning
+measures. Division and AVG are written with a ``1e0 *`` factor, a floating-point literal in most
+databases (a high-precision numeric in Postgres and Oracle), so they are real and division is null
+on a zero denominator, close to the planner's ``CAST(x AS DOUBLE)`` without being the same SQL.
+``import_cube`` reads the export back with the same numbers in Cosmos. Metrics spanning
 cubes are exported with a warning (docs Rule 3). The export fails closed on row filters and
 sensitivity, and on metrics it cannot carry (cumulative ones, filters beyond the measure's own
 cube), unless the caller accepts the loss. Business rules, the glossary and the business context
@@ -458,8 +460,10 @@ def export_cube(
         )
     if project.timezone:
         warnings.append(
-            f"timezone: Cube models have no time zone; set `timezone: {project.timezone}` on "
-            "Cube queries so that dates mean the same day"
+            f"timezone: not exported to Cube. Model timestamps are local time, so keep Cube's "
+            "query timezone at UTC (Cube would otherwise convert them and shift day, week and "
+            "month buckets); relative dates such as today then follow UTC in Cube, not "
+            f"{project.timezone}"
         )
     for key in _CUBE_LATER:
         items = getattr(project, key)
@@ -570,8 +574,8 @@ class _CubeWriter:
         if text is not None:
             sql = _cube_sql(text)
             if measure.agg == "avg":
-                # In decimal, as the planner averages: an integer AVG truncates in SQL Server.
-                sql = f"1.0 * {sql}" if _IDENT.fullmatch(text) else f"1.0 * ({sql})"
+                # Real, as the planner averages: an integer AVG truncates in SQL Server.
+                sql = f"1e0 * {sql}" if _IDENT.fullmatch(text) else f"1e0 * ({sql})"
             item["sql"] = sql
         if name is None and measure.description:
             item["description"] = measure.description
@@ -628,7 +632,7 @@ class _CubeWriter:
                 )
             num, den = self._use(metric.numerator), self._use(metric.denominator)
             cube = self.placed[num]
-            sql = f"1.0 * {self._ref(num, cube)} / NULLIF({self._ref(den, cube)}, 0)"
+            sql = f"1e0 * {self._ref(num, cube)} / NULLIF({self._ref(den, cube)}, 0)"
             item = {"name": metric.name, "type": "number", "sql": sql}
             return cube, item, self.leaves[num] | self.leaves[den]
         if isinstance(metric, DerivedMetric):
@@ -662,7 +666,7 @@ class _CubeWriter:
             # Innermost first, so a division inside another one is rewritten too.
             for node in reversed(list(tree.find_all(exp.Div, bfs=False))):
                 real = exp.Div(
-                    this=exp.Mul(this=exp.Literal.number("1.0"), expression=node.this.copy()),
+                    this=exp.Mul(this=exp.Literal.number("1e0"), expression=node.this.copy()),
                     expression=exp.Nullif(
                         this=node.expression.copy(), expression=exp.Literal.number(0)
                     ),
