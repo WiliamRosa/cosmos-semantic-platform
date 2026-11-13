@@ -66,12 +66,24 @@ a supervised agent team are also new.
   model. Row filters (with the user context they read) and `sensitivity` are exported in that
   extension and next to their dataset and field, and come back exactly, so a governed model
   such as the example exports without `--allow-policy-loss`. The glossary is exported too, with
-  each concept's labels and definition as `ai_context` of the member it maps to. A row filter
-  that reads a business rule still fails closed unless `--allow-policy-loss` is given. Business
-  rules and business context (teams, systems, processes) are not exported yet; they are listed
-  as warnings on standard error and recorded in the extension, which the importer reports again.
+  each concept's labels and definition as `ai_context` of the member it maps to. Business rules
+  and business context are exported too (see the next entry).
   Round-trip and same-numbers tests on every database, including the row-filter and
   sensitivity reference queries ([interoperability](docs/interoperability.md#exporting-ossie)).
+
+- `cosmos export ossie` exports business rules (`predicate`, `classification`, `derived`, with
+  owner, effective dates, change notes, tests and every earlier version in `history`) and the
+  business context (teams, systems, processes) in the `COSMOS_SEMANTIC` extension, and
+  `cosmos import ossie` restores them exactly, so queries replayed as of a past date use the
+  same rule version and give the same numbers. Glossary concepts that map to a rule are exported
+  too. A row filter that reads a business rule is now exported with the rule (also copied next
+  to its dataset, with the rules it depends on and the business time zone, for imports of
+  documents whose root extension was dropped), so no model needs
+  `--allow-policy-loss`; the flag is still accepted by `cosmos export ossie`, for
+  compatibility with 0.4.0, and has no effect. The round-trip test
+  now runs all 48 reference cases. Teams, systems, processes (with `contact` and `owner`) and
+  rule test values now leave with the exported file (DEC-10,
+  [interoperability](docs/interoperability.md#exporting-ossie)).
 
 - `cosmos export cube` writes the model as Cube static YAML: one cube per model, joins from the
   entities, dimensions (the primary key as a hidden dimension when none holds it), measures,

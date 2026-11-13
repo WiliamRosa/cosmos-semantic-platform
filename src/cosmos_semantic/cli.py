@@ -967,14 +967,14 @@ def export_ossie_cmd(
         bool,
         typer.Option(
             "--allow-policy-loss",
-            help="Export even though a row filter that reads a business rule is not exported.",
+            help="Deprecated: no longer needed; kept for compatibility. Has no effect.",
         ),
     ] = False,
 ) -> None:
-    """Exports models, entities, dimensions, measures, metrics, row filters, sensitivity and the
-    glossary as an Apache Ossie document. What is not exported yet is listed as warnings on
-    standard error. A row filter that reads a business rule cannot be exported, so a model with
-    one is refused unless --allow-policy-loss is given."""
+    """Exports models, entities, dimensions, measures, metrics, row filters, sensitivity, the
+    glossary, business rules (with their versions), teams, systems and processes as an Apache
+    Ossie document. What is not exported, and the metrics only Cosmos reads, are listed as
+    warnings on standard error. --allow-policy-loss is no longer needed and has no effect."""
     from cosmos_semantic.interchange.ossie import export_ossie
 
     if name is None:
