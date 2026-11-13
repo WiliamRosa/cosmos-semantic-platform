@@ -80,7 +80,7 @@ a supervised agent team are also new.
   to its dataset, with the rules it depends on and the business time zone, for imports of
   documents whose root extension was dropped), so no model needs
   `--allow-policy-loss`; the flag is still accepted by `cosmos export ossie`, for
-  compatibility with 0.4.0, and has no effect. The round-trip test
+  compatibility, and has no effect. The round-trip test
   now runs all 48 reference cases. Teams, systems, processes (with `contact` and `owner`) and
   rule test values now leave with the exported file (DEC-10,
   [interoperability](docs/interoperability.md#exporting-ossie)).
