@@ -10,8 +10,8 @@ Import:
 - Cosmos's own ``custom_extensions`` restore the model without loss; other vendors'
   extensions are kept in ``custom_extensions``.
 
-Export (models, entities, dimensions, measures, metrics, row filters, sensitivity and the
-glossary):
+Export (models, entities, dimensions, measures, metrics, row filters, sensitivity, the
+glossary, business rules and business context):
 
 - Models become ``datasets``, dimensions and keys become ``fields``, entities become
   ``primary_key``, ``unique_keys`` and explicit ``relationships``.
@@ -27,11 +27,13 @@ glossary):
   extension on their dataset and field, which ``import_ossie`` also reads when the root
   extension is gone. The glossary is in the root extension, and each concept's labels and
   definition become ``ai_context`` (``synonyms``, ``instructions``) of the member it maps to.
-- Business rules, the rest of the user context, teams, systems and processes are not exported
-  yet; each one present becomes a warning, and the extension records what was omitted (names
-  and counts only), which ``import_ossie`` reports again. A row filter that reads a business
-  rule cannot be exported, so it makes the export fail unless the caller accepts losing it;
-  glossary concepts that map to a rule, or link to such a concept, are left out with a warning.
+- Business rules (every version in ``history``, with owner, effective dates and tests), teams,
+  systems and processes have no native Ossie field: they are in the root extension, so a row
+  filter that reads a rule and a glossary concept that maps to one are exported too. The rules
+  a dataset's row filters read (with the rules those bind to) are also copied into that
+  dataset's extension, with the business time zone, so the fallback import still has them. A metric whose filter reads a rule lives only in the root extension.
+- User context fields that nothing exported reads are not exported; each one becomes a warning,
+  and the extension records how many were omitted, which ``import_ossie`` reports again.
 """
 
 from __future__ import annotations
@@ -45,7 +47,7 @@ import yaml
 from sqlglot import exp
 
 from cosmos_semantic.compiler import SemanticGraph, compile_project
-from cosmos_semantic.errors import PolicyLossError, QueryError
+from cosmos_semantic.errors import QueryError
 from cosmos_semantic.expressions import REF_RE, USER_RE
 from cosmos_semantic.interchange import ExportResult, ImportResult, read_yaml_files
 from cosmos_semantic.spec import (
@@ -119,6 +121,8 @@ def import_ossie(path: str | Path) -> ImportResult:
     models: dict[str, dict[str, Any]] = {}
     glossary: list[dict[str, Any]] = []
     user_context: dict[str, Any] = {}
+    rules: dict[str, Any] = {}
+    zones: dict[str, str] = {}
 
     for name, ds in datasets.items():
         mname = model_names[name]
@@ -132,6 +136,8 @@ def import_ossie(path: str | Path) -> ImportResult:
             model["row_filters"] = policies["row_filters"]
             copies += [f"{mname}.{f['name']}" for f in policies["row_filters"]]
             _merge_user_context(user_context, policies.get("user_context") or {}, where)
+            _merge_rules(rules, policies.get("business_rules") or [], where)
+            _merge_timezone(zones, policies, where)
         for fld in ds.get("fields") or []:
             fexpr = _expression(fld.get("expression"), f"{where}.fields.{fld['name']}", warnings)
             exprs[fld["name"]] = fexpr or fld["name"]
@@ -205,13 +211,15 @@ def import_ossie(path: str | Path) -> ImportResult:
         _metric(metric, models, model_names, field_exprs, metrics, glossary, warnings, scope=None)
 
     if copies:
+        read_rules = f", with the business rules they read ({', '.join(rules)})," if rules else ""
         warnings.append(
-            f"the row filters and sensitivity of {', '.join(copies)} were read from the "
-            f"{VENDOR} copies on datasets and fields, not from the root {VENDOR} extension, "
+            f"the row filters and sensitivity of {', '.join(copies)}{read_rules} were read from "
+            f"the {VENDOR} copies on datasets and fields, not from the root {VENDOR} extension, "
             "which is missing; verify them before use. Members kept only in the root extension "
-            "(metrics that span datasets, cumulative ones, metrics whose filter reads $user, "
-            "the user context only those metrics read, and the glossary beyond ai_context "
-            "synonyms) are missing"
+            "(metrics that span datasets, cumulative ones, metrics whose filter reads $user or a "
+            "business rule, the user context only those metrics read, the glossary beyond "
+            "ai_context synonyms, business rules no row filter reads, teams, systems and "
+            "processes) are missing"
         )
     extensions = {
         ext.get("vendor_name", "unknown"): ext.get("data")
@@ -224,6 +232,8 @@ def import_ossie(path: str | Path) -> ImportResult:
             "metrics": metrics,
             "glossary": glossary,
             "user_context": user_context,
+            "business_rules": list(rules.values()),
+            "timezone": zones.get("timezone"),
             "custom_extensions": {"ossie": extensions} if extensions else {},
         }
     )
@@ -265,6 +275,30 @@ def _merge_user_context(merged: dict[str, Any], fields: dict[str, Any], where: s
                 )
             continue
         merged[name] = field
+
+
+def _merge_rules(merged: dict[str, Any], rules: list[dict[str, Any]], where: str) -> None:
+    """The business rules the row filters of each dataset read; one rule copied with two
+    definitions is an error, since either one would change who sees which rows."""
+    for rule in rules:
+        if merged.setdefault(rule["name"], rule) != rule:
+            raise ValueError(
+                f"{where}: business rule `{rule['name']}` is defined in conflicting ways in the "
+                f"{VENDOR} copies; fix the document"
+            )
+
+
+def _merge_timezone(merged: dict[str, str], copy: dict[str, Any], where: str) -> None:
+    """The business time zone the copies were written with; two different ones are an error,
+    since "today" decides which rows a row filter and which rule version a query uses."""
+    zone = copy.get("timezone")
+    if zone is None:
+        return
+    if merged.setdefault("timezone", zone) != zone:
+        raise ValueError(
+            f"{where}: the {VENDOR} copies declare conflicting time zones "
+            f"({merged['timezone']!r} and {zone!r}); fix the document"
+        )
 
 
 def _omitted_warnings(omitted: dict[str, Any]) -> list[str]:
@@ -385,16 +419,10 @@ def _metric(metric, models, model_names, field_exprs, metrics, glossary, warning
 # -- export -----------------------------------------------------------------------------------
 
 _AGG_NODES = {"sum": exp.Sum, "avg": exp.Avg, "min": exp.Min, "max": exp.Max}
-# Members of the authoring format that a later slice maps to Ossie.
-_LATER = ("business_rules", "teams", "systems", "processes")
 _SPANS = (
     "it spans datasets; Ossie does not require a reader to aggregate each dataset at its own "
     "grain, so a native expression could fan out"
 )
-
-
-def _plural(n: int, word: str) -> str:
-    return f"{n} {word}" + ("" if n == 1 else "s")
 
 
 def export_ossie(
@@ -405,20 +433,17 @@ def export_ossie(
     allow_policy_loss: bool = False,
 ) -> ExportResult:
     """Writes the project as an Ossie document (YAML or JSON), with a warning for each member
-    this slice does not export. Refuses, unless ``allow_policy_loss``, a project with a row
-    filter the document cannot carry (one that reads a business rule)."""
+    that is not exported (user context fields nothing exported reads) and for each metric that
+    lives only in the Cosmos extension.
+
+    ``allow_policy_loss`` is no longer needed, since every row filter is exported; it is kept
+    for compatibility with 0.4.0 and does nothing."""
+    del allow_policy_loss  # deprecated, no effect
     if fmt not in ("yaml", "json"):
         raise ValueError(f"unknown format: {fmt} (use yaml or json)")
-    full = compile_project(project)  # only valid models are exported
+    compile_project(project)  # only valid models are exported
     warnings: list[str] = []
-    exported, omitted = _exported_part(project, full, warnings)
-    if omitted.get("row_filters") and not allow_policy_loss:
-        lost = omitted["row_filters"]
-        raise PolicyLossError(
-            f"{_plural(len(lost), 'row filter')} ({', '.join(lost)}) would NOT be exported: "
-            "they use business rules, which the Ossie export does not carry yet; the document "
-            "would not have this row-level security. Pass --allow-policy-loss to export anyway"
-        )
+    exported, omitted = _exported_part(project, warnings)
     graph = compile_project(exported, strict=False)
     for issue in graph.issues:
         if issue.severity == "error":
@@ -449,40 +474,16 @@ def export_ossie(
     return ExportResult(text, list(dict.fromkeys(warnings)))
 
 
-def _exported_part(
-    project: Project, graph: SemanticGraph, warnings: list[str]
-) -> tuple[Project, dict[str, Any]]:
-    """The project without the members a later slice exports, with a warning for each, and
-    the marker of what was omitted: names and counts only, never values.
-
-    Row filters, sensitivity, the user context fields the row filters and metrics read and the
-    glossary are exported. A row filter that reads a business rule is not (rules come in a later
-    slice), nor is a concept that maps to a rule or links to a concept left out."""
+def _exported_part(project: Project, warnings: list[str]) -> tuple[Project, dict[str, Any]]:
+    """The project without the user context fields nothing exported reads, with a warning for
+    them and the marker of what was omitted: counts only, never values. Everything else,
+    business rules and business context included, is exported."""
     data = project.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
     omitted: dict[str, Any] = {}
-    row_filters: list[str] = []
     user_fields: set[str] = set()
     for model in data.get("semantic_models", []):
-        kept = []
         for row_filter in model.get("row_filters", []):
-            rules = _rule_refs(graph, model["name"], row_filter["filter"])
-            if rules:
-                row_filters.append(f"{model['name']}.{row_filter['name']}")
-                warnings.append(
-                    f"semantic_models.{model['name']}.row_filters.{row_filter['name']}: it uses "
-                    f"the business rule {', '.join(rules)}, and business rules are not exported "
-                    "to Ossie yet; the exported model does not have this row-level security"
-                )
-                continue
-            kept.append(row_filter)
             user_fields.update(USER_RE.findall(row_filter["filter"]))
-        if kept:
-            model["row_filters"] = kept
-        else:
-            model.pop("row_filters", None)
-    if row_filters:
-        omitted["row_filters"] = row_filters
-
     # Metric filters may read the user too; those metrics are kept in the extension.
     user_fields.update(USER_RE.findall(json.dumps(data.get("metrics", []))))
     context = data.get("user_context") or {}
@@ -494,46 +495,29 @@ def _exported_part(
             f"user_context: {', '.join(rest)} not exported to Ossie yet (no exported row "
             "filter or metric uses them)"
         )
-
-    glossary = data.get("glossary") or []
-    left_out = {
-        c["concept"]: "it maps to a business rule, and business rules are not exported yet"
-        for c in glossary
-        if str(c.get("maps_to", "")).startswith("rule:")
-    }
-    changed = True
-    while changed:  # a concept linked to one left out would point to nothing
-        changed = False
-        for c in glossary:
-            if c["concept"] in left_out:
-                continue
-            links = [c.get("broader"), *c.get("related", [])]
-            gone = next((x for x in links if x in left_out), None)
-            if gone:
-                left_out[c["concept"]] = f"it links to `{gone}`, which is left out"
-                changed = True
-    for name, reason in left_out.items():
-        warnings.append(f"glossary.{name}: {reason}; it is not exported to Ossie")
-    if left_out:
-        data["glossary"] = [c for c in glossary if c["concept"] not in left_out]
-        omitted["glossary"] = len(left_out)
-
-    for key in _LATER:
-        items = data.pop(key, None)
-        if items:
-            omitted[key] = len(items)
-            warnings.append(f"{key}: not exported to Ossie yet ({len(items)} in the project)")
     return Project.model_validate(data), omitted
 
 
-def _rule_refs(graph: SemanticGraph, model: str, text: str) -> list[str]:
-    """The business rules a row filter reads, by reference."""
-    rules = []
-    for ref in REF_RE.findall(text):
-        dim = graph.resolve_dimension(ref, context=model)
-        if dim.name not in {d.name for d in graph.models[dim.model].spec.dimensions}:
-            rules.append(f"`{ref}`")
-    return rules
+def _rules_read(graph: SemanticGraph, model: str, texts: list[str]) -> list[str]:
+    """The business rules row filters read, directly or through a rule input bound to another
+    rule, in the order of ``business_rules``."""
+    own = {d.name for d in graph.models[model].spec.dimensions}
+    todo = []
+    for text in texts:
+        for ref in REF_RE.findall(text):
+            dim = graph.resolve_dimension(ref, context=model)
+            if dim.name not in own and dim.name in graph.rules:
+                todo.append(dim.name)
+    found: set[str] = set()
+    while todo:
+        name = todo.pop()
+        if name in found:
+            continue
+        found.add(name)
+        for binding in graph.rules[name].applies_to:
+            spec = {d.name for d in graph.models[binding.model].spec.dimensions}
+            todo += [t for t in binding.bind.values() if t in graph.rules and t not in spec]
+    return [r.name for r in graph.project.business_rules if r.name in found]
 
 
 def _extension(data: dict[str, Any]) -> list[dict[str, str]]:
@@ -643,14 +627,25 @@ class _OssieWriter:
                 filters = [f.model_dump(mode="json") for f in spec.row_filters]
                 context = self.graph.project.user_context
                 used = sorted({u for f in spec.row_filters for u in USER_RE.findall(f.filter)})
-                item["custom_extensions"] = _extension(
-                    {
-                        "row_filters": filters,
-                        "user_context": {
-                            u: context[u].model_dump(mode="json", exclude_none=True) for u in used
-                        },
-                    }
-                )
+                copy: dict[str, Any] = {
+                    "row_filters": filters,
+                    "user_context": {
+                        u: context[u].model_dump(mode="json", exclude_none=True) for u in used
+                    },
+                }
+                if self.graph.project.timezone:
+                    # "Today" for the rules and CURRENT_DATE in these row filters.
+                    copy["timezone"] = self.graph.project.timezone
+                read = _rules_read(self.graph, spec.name, [f.filter for f in spec.row_filters])
+                if read:
+                    # The fallback import needs the rules these row filters read.
+                    copy["business_rules"] = [
+                        self.graph.rules[r].model_dump(
+                            mode="json", exclude_none=True, exclude_defaults=True
+                        )
+                        for r in read
+                    ]
+                item["custom_extensions"] = _extension(copy)
             out.append(item)
         self._ai_context(out)
         return out
@@ -832,7 +827,9 @@ class _OssieWriter:
             if dim.grain:
                 raise _NotNative(f"its filter uses a time grain (`{text}`)")
             if dim.name not in own:
-                raise _NotNative(f"its filter uses the business rule `{text}`, not exported yet")
+                raise _NotNative(
+                    f"its filter uses the business rule `{text}`, which only Cosmos evaluates"
+                )
             return dim.name
 
         return sqlglot.parse_one(REF_RE.sub(ref, flt))
