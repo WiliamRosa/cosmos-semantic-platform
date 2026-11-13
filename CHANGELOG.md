@@ -7,6 +7,12 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-13
+
+Import and export with other tools grow: Ossie and Cube export, `cosmos query --csv`, and more
+Power BI measures. A TPC-H performance baseline, impact analysis and replay over REST and MCP, and
+a supervised agent team are also new.
+
 ### Added
 
 - `cosmos query --csv` prints the result as CSV for spreadsheets and scripts: a header, then one
@@ -42,9 +48,10 @@ format or the API; such changes are listed under **Changed**.
 - `GET /v1/impact/{kind:name}` and the MCP tool `impact` expose `cosmos impact` to applications and
   agents: what a change to a metric, measure, rule, dimension, model, concept, system or process
   affects, grouped by owner, source systems and processes. Who queried the affected members, from
-  the audit log, is personal data and is returned only to the subjects in `COSMOS_CONSOLE_ADMINS`;
-  for everyone else `consumers` is absent and `consumers_visible` is `false`. An unknown member is
-  a `QueryError` (HTTP 400).
+  the audit log, is personal data and is returned only to the subjects in `COSMOS_CONSOLE_ADMINS`
+  and to the local anonymous user that `--allow-anonymous` creates (local development); for
+  everyone else `consumers` is absent and `consumers_visible` is `false`. An unknown member is a
+  `QueryError` (HTTP 400).
 
 - The MCP server has a `replay` tool, the equivalent of `POST /v1/replay/{query_id}`: it re-runs
   one of the user's audited queries and tells whether the model, the SQL or the data changed.
@@ -225,7 +232,8 @@ and on the lowest dependency versions this release allows.
   `GET /v1/glossary`.
 - `cosmos init` creates a starter project with the e-commerce example and a local DuckDB source.
 
-[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.3.0
 [0.2.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.2.0
 [0.1.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.1.0
