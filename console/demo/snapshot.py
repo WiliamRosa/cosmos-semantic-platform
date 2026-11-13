@@ -64,7 +64,9 @@ QUESTIONS = [
     # Refused on purpose: personal data never reaches agents.
     (CFO_AGENT, {"metrics": ["customer_count"], "dimensions": ["customers.email"]}),
 ]
-VIEWER = Principal(subject="anonymous", channel="api")  # the demo shows everything
+# The demo shows everything, as the local user of `cosmos serve --allow-anonymous` sees it. Admin
+# rights come from how a principal was created, never from its name (see service.py).
+VIEWER = Principal(subject="anonymous", channel="api", local_anonymous=True)
 
 
 def slug(path: str) -> str:
