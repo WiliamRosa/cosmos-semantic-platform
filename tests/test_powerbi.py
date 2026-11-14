@@ -196,7 +196,7 @@ def test_dependent_measures_fail_together(tmp_path):
             "columns": [{"name": "v", "dataType": "double", "sourceColumn": "v"}],
             "partitions": [{"name": "T", "source": {"type": "query", "query": "SELECT * FROM t"}}],
             "measures": [
-              {"name": "A", "expression": "AVERAGEX(T, T[v] * 2)"},
+              {"name": "A", "expression": "COUNTX(T, T[v] * 2)"},
               {"name": "B", "expression": "[A] + 1"},
               {"name": "C", "expression": "[C] + 1"},
               {"name": "D", "expression": "DIVIDE([A], 2, -1)"}
@@ -326,7 +326,8 @@ def test_sumx_over_own_table_becomes_a_sum_measure(tmp_path, dax, expr):
 @pytest.mark.parametrize(
     ("dax", "reason"),
     [
-        ("AVERAGEX(Items, [quantity] * [unit_price])", "(DAX AVERAGEX has no equivalent)"),
+        ("COUNTX(Items, [quantity] * [unit_price])", "(DAX COUNTX has no equivalent)"),
+        ("PRODUCTX(Items, [quantity])", "(DAX PRODUCTX has no equivalent)"),
         ("SUMX(Other, Other[x] * 2)", "SUMX over `Other`, which is not the measure's own table"),
         ("SUMX(FILTER(Items, [quantity] > 1), [quantity])", "(DAX FILTER has no equivalent)"),
         ("SUMX(Items, RELATED(Other[x]) * [quantity])", "(DAX RELATED has no equivalent)"),
@@ -344,6 +345,68 @@ def test_sumx_over_own_table_becomes_a_sum_measure(tmp_path, dax, expr):
     ],
 )
 def test_other_sumx_forms_stay_warnings(tmp_path, dax, reason):
+    result = import_model("powerbi", _items_bim(tmp_path, {"M": dax}))
+    items = next(m for m in result.project.semantic_models if m.name == "items")
+    assert "m" not in {m.name for m in items.measures}
+    warning = next(w for w in result.warnings if w.startswith("measure `M` not imported"))
+    assert reason in warning, warning
+
+
+@pytest.mark.parametrize(
+    ("dax", "agg", "expr"),
+    [
+        (
+            "AVERAGEX('Items', 'Items'[quantity] * 'Items'[unit_price])",
+            "avg",
+            "quantity * unit_price",
+        ),
+        ("AVERAGEX(Items, [quantity])", "avg", "quantity"),
+        ("MINX(Items, [unit_price] * 0.5)", "min", "unit_price * 0.5"),
+        ("MAXX(Items, -2 * ([quantity]))", "max", "(-2) * quantity"),
+        # A row with one BLANK side of `+` or `-` is a value in DAX (BLANK + 5 = 5), so it is
+        # averaged, not skipped; a row with both sides BLANK is BLANK and skipped.
+        (
+            "AVERAGEX(Items, [quantity] + [discount])",
+            "avg",
+            "COALESCE(quantity + discount, quantity, discount)",
+        ),
+        (
+            "MINX(Items, [unit_price] - [discount])",
+            "min",
+            "COALESCE(unit_price - discount, unit_price, -discount)",
+        ),
+        (
+            "MAXX(Items, ([quantity] - 1) * [unit_price] * 0.5)",
+            "max",
+            "(COALESCE(quantity, 0) - 1) * unit_price * 0.5",
+        ),
+        ("AVERAGEX(Items, 1 + [discount])", "avg", "1 + COALESCE(discount, 0)"),
+    ],
+)
+def test_averagex_minx_maxx_over_own_table_become_measures(tmp_path, dax, agg, expr):
+    result = import_model("powerbi", _items_bim(tmp_path, {"M": dax}))
+    items = next(m for m in result.project.semantic_models if m.name == "items")
+    measure = next(m for m in items.measures if m.name == "m")
+    assert (measure.agg, measure.expr) == (agg, expr)
+    assert not any("`M`" in w for w in result.warnings)
+
+
+@pytest.mark.parametrize(
+    ("dax", "reason"),
+    [
+        ("AVERAGEX(Other, Other[x])", "AVERAGEX over `Other`, which is not the measure's own"),
+        ("MINX(FILTER(Items, [quantity] > 1), [quantity])", "(DAX FILTER has no equivalent)"),
+        ("MAXX(Items, RELATED(Other[x]) * [quantity])", "(DAX RELATED has no equivalent)"),
+        ("AVERAGEX(Items, [quantity] / [unit_price])", "AVERAGEX row expression divides"),
+        ("MINX(Items, [quantity] / 2)", "MINX row expression divides"),
+        ("MAXX(Items, Other[x] * [quantity])", "`Other[x]`, a column of another table"),
+        ("AVERAGEX(Items, [quantity] * [Base])", "references the measure `[Base]`"),
+        ("MINX(Items, [category])", "MINX over the non-numeric column `Items[category]`"),
+        ("MAXX(Items, -[quantity])", "negates a column or an expression"),
+        ("AVERAGEX(Items)", "AVERAGEX takes a table and a row expression"),
+    ],
+)
+def test_other_averagex_minx_maxx_forms_stay_warnings(tmp_path, dax, reason):
     result = import_model("powerbi", _items_bim(tmp_path, {"M": dax}))
     items = next(m for m in result.project.semantic_models if m.name == "items")
     assert "m" not in {m.name for m in items.measures}
@@ -390,9 +453,8 @@ def _number(value):
     return None if value is None else round(float(value), 6)
 
 
-@pytest.mark.parametrize("source", SOURCES)
-def test_sumx_matches_hand_written_sql_with_nulls(source, request, tmp_path):
-    connector = request.getfixturevalue(source)
+def _load_items(connector) -> str:
+    """Loads SUMX_ROWS as `powerbi_sumx_items` and returns its qualified name."""
     data = pa.table(
         list(zip(*SUMX_ROWS, strict=True)),
         schema=pa.schema(
@@ -405,7 +467,13 @@ def test_sumx_matches_hand_written_sql_with_nulls(source, request, tmp_path):
         ),
     )
     demo_data.load(connector, {"powerbi_sumx_items": data})
-    table = f"{connector.config.schema_map.get('public', 'public')}.powerbi_sumx_items"
+    return f"{connector.config.schema_map.get('public', 'public')}.powerbi_sumx_items"
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_sumx_matches_hand_written_sql_with_nulls(source, request, tmp_path):
+    connector = request.getfixturevalue(source)
+    table = _load_items(connector)
     try:
         other, warnings = imported("powerbi", _items_bim(tmp_path, SUMX_MEASURES))
         assert not [w for w in warnings if "not imported" in w and "`Base`" not in w]
@@ -436,6 +504,86 @@ def test_sumx_matches_hand_written_sql_with_nulls(source, request, tmp_path):
         assert expected == {"a": 20.0, "b": 8.5, "c": None, None: 28.5}
         assert {k: v["item_revenue"] for k, v in got.items()} == expected
         for metric, values in SUMX_EXPECTED.items():
+            assert {k: v[metric] for k, v in got.items()} == values, metric
+    finally:
+        connector.run_script(f"DROP TABLE {table}")
+
+
+# AVERAGEX, MINX and MAXX over the same rows: (DAX, hand-written SQL that spells out the DAX
+# BLANK rules on its own). The DAX results are worked out by hand from SUMX_ROWS.
+ITERATOR_MEASURES = {
+    # Integer column: DAX averages as a decimal (2.5); SQL Server's AVG would truncate to 2.
+    "Avg Quantity": ("AVERAGEX(Items, [quantity])", "AVG(quantity * 1.0)"),
+    # BLANK * x is BLANK: the row is skipped, not averaged as 0.
+    "Avg Revenue": ("AVERAGEX(Items, [quantity] * [unit_price])", "AVG(quantity * unit_price)"),
+    # BLANK + x is x: the row counts; BLANK + BLANK is BLANK and is skipped.
+    "Avg Extra": (
+        "AVERAGEX(Items, [quantity] + [discount])",
+        "AVG(CASE WHEN quantity IS NULL AND discount IS NULL THEN NULL "
+        "ELSE COALESCE(quantity, 0) + COALESCE(discount, 0) END)",
+    ),
+    "Min Net": (
+        "MINX(Items, [unit_price] - [discount])",
+        "MIN(CASE WHEN unit_price IS NULL AND discount IS NULL THEN NULL "
+        "ELSE COALESCE(unit_price, 0) - COALESCE(discount, 0) END)",
+    ),
+    "Max Net": (
+        "MAXX('Items', 'Items'[unit_price] - Items[discount])",
+        "MAX(CASE WHEN unit_price IS NULL AND discount IS NULL THEN NULL "
+        "ELSE COALESCE(unit_price, 0) - COALESCE(discount, 0) END)",
+    ),
+    "Min Scaled": (
+        "MINX(Items, ([quantity] - 1) * [unit_price] * 0.5)",
+        "MIN((COALESCE(quantity, 0) - 1) * unit_price * 0.5)",
+    ),
+    "Max Quantity": ("MAXX(Items, [quantity])", "MAX(quantity)"),
+}
+ITERATOR_EXPECTED = {
+    "avg_quantity": {"a": 2.5, "b": 2.5, "c": None, None: 2.5},
+    "avg_revenue": {"a": 20.0, "b": 4.25, "c": None, None: 9.5},
+    "avg_extra": {"a": 2.666667, "b": 2.75, "c": None, None: 2.7},
+    "min_net": {"a": 3.0, "b": 1.0, "c": 7.0, None: 1.0},
+    "max_net": {"a": 9.0, "b": 2.5, "c": 7.0, None: 9.0},
+    "min_scaled": {"a": -2.5, "b": 0.0, "c": -3.5, None: -3.5},
+    "max_quantity": {"a": 3.0, "b": 4.0, "c": None, None: 4.0},
+}
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_averagex_minx_maxx_match_hand_written_sql_with_nulls(source, request, tmp_path):
+    connector = request.getfixturevalue(source)
+    table = _load_items(connector)
+    try:
+        measures = {name: dax for name, (dax, _) in ITERATOR_MEASURES.items()}
+        other, warnings = imported("powerbi", _items_bim(tmp_path, measures))
+        assert not [w for w in warnings if "not imported" in w and "`Base`" not in w]
+        planner = Planner(other, connector.dialect, connector.config.schema_map)
+        metrics = list(ITERATOR_EXPECTED)
+
+        def cosmos(dimensions: list[str]) -> dict:
+            sql = planner.plan(QueryRequest(metrics=metrics, dimensions=dimensions)).sql
+            out = {}
+            for raw in connector.execute(sql).to_pylist():
+                row = {k.lower(): v for k, v in raw.items()}
+                key = row["items__category"] if dimensions else None
+                out[key] = {m: _number(row[m]) for m in metrics}
+            return out
+
+        got = {**cosmos([]), **cosmos(["items.category"])}
+        # Aliased: some drivers name every unaliased AVG column alike.
+        columns = ", ".join(
+            f"{sql} AS {metric}"
+            for metric, (_, sql) in zip(metrics, ITERATOR_MEASURES.values(), strict=True)
+        )
+        expected = {}
+        for row in connector.execute(f"SELECT {columns} FROM {table}").to_pylist():
+            expected[None] = dict(zip(metrics, map(_number, row.values()), strict=True))
+        grouped = f"SELECT category, {columns} FROM {table} GROUP BY category"
+        for row in connector.execute(grouped).to_pylist():
+            key, *values = row.values()
+            expected[key] = dict(zip(metrics, map(_number, values), strict=True))
+        for metric, values in ITERATOR_EXPECTED.items():
+            assert {k: v[metric] for k, v in expected.items()} == values, metric
             assert {k: v[metric] for k, v in got.items()} == values, metric
     finally:
         connector.run_script(f"DROP TABLE {table}")
