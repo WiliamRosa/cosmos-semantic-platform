@@ -92,6 +92,22 @@ format or the API; such changes are listed under **Changed**.
   the Cosmos importer and planner, on every database
   ([interoperability](docs/interoperability.md#exporting-cube)).
 
+- `cosmos export dbt` writes the model as dbt Semantic Layer (MetricFlow) YAML (DEC-11, first
+  slice): semantic models with entities, dimensions and measures (each with `create_metric`),
+  and simple, ratio, derived and cumulative metrics. Filters become
+  `{{ Dimension('entity__dimension') }}`; division in derived metrics and AVG get the Cube
+  export's `1e0 *` factor; cumulative metrics keep `grain_to_date` and use `period_agg: last`,
+  the engine's running total. `cosmos import dbt --schema <schema>` reads the export back with
+  the same numbers in Cosmos, and now also reads measure descriptions, owners from
+  `config.meta.owner`, and `number` and `boolean` dimension types kept in
+  `config.meta.cosmos_type`. Row filters and sensitivity fail closed unless
+  `--allow-policy-loss` is given, and rolling windows, cumulative metrics over other
+  aggregations, and filters with a time grain, a business rule or `$user` unless
+  `--allow-metric-loss` is given. Business rules, the glossary, business context, user context
+  and the time zone are listed as warnings on standard error. Round-trip and same-numbers tests,
+  through the Cosmos importer and planner, on every database
+  ([interoperability](docs/interoperability.md#exporting-dbt)).
+
 ### Changed
 
 - Tests render CLI help as plain, unwrapped text everywhere, so a test reading `--help` behaves

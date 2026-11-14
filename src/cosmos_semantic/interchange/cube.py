@@ -392,6 +392,58 @@ def _cube_sql(text: str) -> str:
     return _prefixed(text, "{CUBE}")
 
 
+def refuse_policy_loss(project: Project, target: str, allow: bool, warnings: list[str]) -> None:
+    """Refuses, unless ``allow``, an export to ``target`` that would drop row filters or
+    sensitivity; with ``allow``, each one dropped is a warning."""
+    from cosmos_semantic.errors import PolicyLossError
+
+    row_filters = [f"{m.name}.{f.name}" for m in project.semantic_models for f in m.row_filters]
+    sensitive = [
+        f"{m.name}.{d.name}" for m in project.semantic_models for d in m.dimensions if d.sensitivity
+    ]
+    if (row_filters or sensitive) and not allow:
+        parts = []
+        if row_filters:
+            parts.append(f"{_plural(len(row_filters), 'row filter')} ({', '.join(row_filters)})")
+        if sensitive:
+            parts.append(
+                f"the sensitivity of {_plural(len(sensitive), 'dimension')} "
+                f"({', '.join(sensitive)})"
+            )
+        raise PolicyLossError(
+            f"{' and '.join(parts)} would NOT be exported: the {target} export does not carry "
+            f"access or personal-data policies yet; the {target} model would not have this "
+            "row-level security or personal-data marking. Pass --allow-policy-loss to export anyway"
+        )
+    for name in row_filters:
+        model, member = name.split(".", 1)
+        warnings.append(
+            f"semantic_models.{model}.row_filters.{member}: not exported to {target}; the "
+            f"{target} model does not have this row-level security"
+        )
+    for name in sensitive:
+        model, member = name.split(".", 1)
+        warnings.append(
+            f"semantic_models.{model}.dimensions.{member}: its sensitivity is not exported to "
+            f"{target}; the {target} model does not mark it as personal data"
+        )
+
+
+def real_division(tree: exp.Expression) -> exp.Expression:
+    """Each division as the planner computes it: real, and null on a zero denominator.
+    Innermost first, so a division inside another one is rewritten too."""
+    for node in reversed(list(tree.find_all(exp.Div, bfs=False))):
+        real = exp.Div(
+            this=exp.Mul(this=exp.Literal.number("1e0"), expression=node.this.copy()),
+            expression=exp.Nullif(this=node.expression.copy(), expression=exp.Literal.number(0)),
+        )
+        if node is tree:
+            tree = exp.Paren(this=real)
+        else:
+            node.replace(exp.Paren(this=real))
+    return tree
+
+
 class _NotExported(Exception):
     """A metric the Cube export cannot carry; the message is the reason."""
 
@@ -406,41 +458,11 @@ def export_cube(
     not export. Refuses, unless ``allow_policy_loss``, a project with row filters or
     sensitivity, and, unless ``allow_metric_loss``, one with metrics Cube cannot carry here."""
     from cosmos_semantic.compiler import compile_project
-    from cosmos_semantic.errors import MetricLossError, PolicyLossError
+    from cosmos_semantic.errors import MetricLossError
 
     graph = compile_project(project)  # only valid models are exported
     warnings: list[str] = []
-
-    row_filters = [f"{m.name}.{f.name}" for m in project.semantic_models for f in m.row_filters]
-    sensitive = [
-        f"{m.name}.{d.name}" for m in project.semantic_models for d in m.dimensions if d.sensitivity
-    ]
-    if (row_filters or sensitive) and not allow_policy_loss:
-        parts = []
-        if row_filters:
-            parts.append(f"{_plural(len(row_filters), 'row filter')} ({', '.join(row_filters)})")
-        if sensitive:
-            parts.append(
-                f"the sensitivity of {_plural(len(sensitive), 'dimension')} "
-                f"({', '.join(sensitive)})"
-            )
-        raise PolicyLossError(
-            f"{' and '.join(parts)} would NOT be exported: the Cube export does not carry access "
-            "or personal-data policies yet; the Cube model would not have this row-level "
-            "security or personal-data marking. Pass --allow-policy-loss to export anyway"
-        )
-    for name in row_filters:
-        model, member = name.split(".", 1)
-        warnings.append(
-            f"semantic_models.{model}.row_filters.{member}: not exported to Cube; the Cube model "
-            "does not have this row-level security"
-        )
-    for name in sensitive:
-        model, member = name.split(".", 1)
-        warnings.append(
-            f"semantic_models.{model}.dimensions.{member}: its sensitivity is not exported to "
-            "Cube; the Cube model does not mark it as personal data"
-        )
+    refuse_policy_loss(project, "Cube", allow_policy_loss, warnings)
 
     writer = _CubeWriter(graph, warnings)
     if writer.lost and not allow_metric_loss:
@@ -662,23 +684,10 @@ class _CubeWriter:
             it = iter(names)
             sql = REF_RE.sub(lambda m: self._ref(next(it), cube), metric.expr)
         else:
-            # Division as the planner computes it: real, and null on a zero denominator.
-            # Innermost first, so a division inside another one is rewritten too.
-            for node in reversed(list(tree.find_all(exp.Div, bfs=False))):
-                real = exp.Div(
-                    this=exp.Mul(this=exp.Literal.number("1e0"), expression=node.this.copy()),
-                    expression=exp.Nullif(
-                        this=node.expression.copy(), expression=exp.Literal.number(0)
-                    ),
-                )
-                if node is tree:
-                    tree = exp.Paren(this=real)
-                else:
-                    node.replace(exp.Paren(this=real))
             sql = re.sub(
                 r"__ref_(\d+)",
                 lambda m: self._ref(names[int(m.group(1))], cube),
-                tree.sql(),
+                real_division(tree).sql(),
             )
         return cube, {"name": metric.name, "type": "number", "sql": sql}, leaves
 

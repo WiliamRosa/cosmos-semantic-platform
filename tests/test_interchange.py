@@ -18,6 +18,7 @@ from cosmos_semantic.errors import MetricLossError, PolicyLossError
 from cosmos_semantic.expressions import REF_RE
 from cosmos_semantic.interchange import dump_project, import_model
 from cosmos_semantic.interchange.cube import export_cube
+from cosmos_semantic.interchange.dbt import export_dbt
 from cosmos_semantic.interchange.ossie import VENDOR, export_ossie
 from cosmos_semantic.ontology import run_rule_tests
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
@@ -1201,3 +1202,287 @@ def test_cli_export_cube(tmp_path):
     assert result.exit_code == 0, result.output
     assert "15 warnings" in result.stdout
     assert import_model("cube", out).warnings == []
+
+
+# -- dbt export (semantic models, simple, ratio, derived and cumulative metrics) ---------------
+
+# Reference queries the dbt export answers: without the policies, and with them put back.
+DBT_CASES = (27, 42)
+
+
+def _dbt_round_trip(project: Project, tmp_path: Path, **options):
+    exported = export_dbt(project, **options)
+    path = tmp_path / "dbt" / "semantic_models.yml"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(exported.text, encoding="utf-8")
+    return exported, import_model("dbt", path, schema="public")
+
+
+def _dbt_cases(project: Project, *, policies: bool) -> list:
+    """Reference queries the dbt export must answer: none with a business rule (not exported),
+    and, without the policies, none that reads the user or expects a policy error."""
+    return [c for c in _numbers_cases(project) if policies or not (c.user or c.expect_error)]
+
+
+def _dbt_test_metrics(project: Project) -> Project:
+    """The Cube test model plus the shapes dbt carries and Cube does not: a filter on another
+    model's dimension, a ratio with a filter, and cumulative metrics over sum and count."""
+    data = _cube_test_metrics(project).model_dump(mode="json")
+    data["metrics"] += [
+        {
+            "name": "midwest_revenue",
+            "type": "simple",
+            "measure": "revenue",
+            "filter": "{customers.region} = 'Midwest'",
+        },
+        {
+            "name": "completed_rate",
+            "type": "ratio",
+            "numerator": "revenue",
+            "denominator": "order_count",
+            "filter": "{status} = 'completed'",
+        },
+        {"name": "orders_to_date", "type": "cumulative", "measure": "order_count"},
+        {
+            "name": "revenue_ytd",
+            "type": "cumulative",
+            "measure": "revenue",
+            "grain_to_date": "year",
+        },
+    ]
+    return Project.model_validate(data)
+
+
+def test_dbt_export_fails_closed(graph):
+    """Row filters and sensitivity are refused until the caller accepts their loss; the
+    example's metrics all go to dbt, so only a metric dbt cannot carry needs the other flag."""
+    with pytest.raises(PolicyLossError) as exc:
+        export_dbt(graph.project)
+    assert str(exc.value) == (
+        "1 row filter (customers.by_region) and the sensitivity of 3 dimensions "
+        "(customers.email, customers.tax_id, customers.health_plan) would NOT be exported: the "
+        "dbt export does not carry access or personal-data policies yet; the dbt model would "
+        "not have this row-level security or personal-data marking. Pass --allow-policy-loss to "
+        "export anyway"
+    )
+    assert export_dbt(graph.project, allow_policy_loss=True).text
+    data = graph.project.model_dump(mode="json")
+    data["metrics"].append(
+        {"name": "revenue_7d", "type": "cumulative", "measure": "revenue", "window": "7 days"}
+    )
+    with pytest.raises(MetricLossError) as exc:
+        export_dbt(Project.model_validate(data), allow_policy_loss=True)
+    assert str(exc.value) == (
+        "1 metric (revenue_7d) would NOT be exported (revenue_7d: it has a rolling window "
+        "(`7 days`), which the engine does not compute yet); the dbt model would not have "
+        "them. Pass --allow-metric-loss to export anyway"
+    )
+
+
+def test_dbt_export_round_trip(graph, tmp_path):
+    exported, back = _dbt_round_trip(graph.project, tmp_path, allow_policy_loss=True)
+    # The importer reads the whole export, with nothing to report.
+    assert back.warnings == []
+    doc = yaml.safe_load(exported.text)
+    models = {m["name"]: m for m in doc["semantic_models"]}
+    orders = models["orders"]
+    assert orders["model"] == "ref('orders')"
+    assert orders["defaults"] == {"agg_time_dimension": "ordered_at"}
+    assert orders["entities"][1] == {"name": "customer", "type": "foreign", "expr": "customer_id"}
+    assert orders["measures"][0]["expr"] == "1"
+    assert all(m["create_metric"] for s in doc["semantic_models"] for m in s.get("measures", []))
+    metrics = {m["name"]: m for m in doc["metrics"]}
+    assert metrics["completed_revenue"]["filter"] == (
+        "{{ Dimension('order__status') }} = 'completed'"
+    )
+    assert metrics["orders_per_buyer"]["type_params"] == {
+        "expr": "(1e0 * order_count / NULLIF(buyers, 0))",
+        "metrics": [{"name": "order_count"}, {"name": "buyers"}],
+    }
+    assert metrics["revenue_year_to_date"]["type_params"] == {
+        "measure": "revenue",
+        "cumulative_type_params": {"grain_to_date": "year", "period_agg": "last"},
+    }
+
+    # Models, tables, owners, entities, dimensions and measures come back as they were (AVG
+    # with a `1e0 *` factor, so it is real in dbt too).
+    def shape(project: Project) -> dict:
+        return {
+            m.name: (
+                m.table,
+                m.owner,
+                m.description,
+                [e.model_dump() for e in m.entities],
+                [(d.name, d.type, d.expr, d.description) for d in m.dimensions],
+                [(x.name, x.agg, x.expr, x.description) for x in m.measures],
+            )
+            for m in project.semantic_models
+        }
+
+    want = shape(Project.model_validate(_without_policies(graph.project.model_dump(mode="json"))))
+    avg = want["order_items"][5][2]
+    want["order_items"][5][2] = (avg[0], avg[1], "1e0 * quantity", avg[3])
+    assert shape(back.project) == want
+
+    # Every metric comes back with its type, owner and description; dbt requires a label, so
+    # a metric without one gets its name. Filters name the model, and division is real.
+    def metric_shape(project: Project) -> dict:
+        out = {}
+        for m in project.metrics:
+            data = m.model_dump(exclude_none=True)
+            if data.get("label") == m.name:
+                del data["label"]
+            out[m.name] = data
+        return out
+
+    want = metric_shape(graph.project)
+    want["completed_revenue"]["filter"] = "{orders.status} = 'completed'"
+    want["orders_per_buyer"]["expr"] = "(1e0 * {order_count} / NULLIF({buyers}, 0))"
+    want["items_per_order"]["expr"] = "(1e0 * {items_sold} / NULLIF({order_count}, 0))"
+    assert metric_shape(back.project) == want
+
+    # Every loss is a warning: policies, the schema, and what a later slice exports.
+    joined = "\n".join(exported.warnings)
+    assert "semantic_models.customers.row_filters.by_region: not exported to dbt" in joined
+    assert sum("its sensitivity is not exported" in w for w in exported.warnings) == 3
+    assert "import with `cosmos import dbt --schema public`" in joined
+    for name in ("products", "order_items"):
+        assert f"semantic_models.{name}: it has measures but no time dimension" in joined
+    for name in ("revenue_year_to_date", "revenue_month_to_date"):
+        assert f"metrics.{name}: exported with `period_agg: last`" in joined
+    for key in ("business_rules", "glossary", "teams", "systems", "processes"):
+        assert f"{key}: not exported to dbt yet" in joined
+    assert "user_context: region" in joined
+    assert "not America/New_York" in joined
+    assert len(exported.warnings) == 16
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_dbt_export_same_numbers(graph, tmp_path, source, request):
+    """Exported to dbt and imported back, the model answers the reference queries with the
+    hand-written SQL's numbers, cumulative metrics included, on every database available."""
+    connector = request.getfixturevalue(source)
+    _, back = _dbt_round_trip(graph.project, tmp_path, allow_policy_loss=True)
+    other = compile_project(back.project)
+    cases = _dbt_cases(graph.project, policies=False)
+    assert len(cases) == DBT_CASES[0]
+    for case in cases:
+        result = run_case(case, other, connector)
+        assert result.status == "pass", f"{case.id}: {result.detail}"
+    # With the original policies put back, the queries that read the user pass too.
+    governed = compile_project(_with_policies(back.project, graph.project))
+    cases = _dbt_cases(graph.project, policies=True)
+    assert {"R17", "R18"} <= {c.id for c in cases}
+    assert len(cases) == DBT_CASES[1]
+    for case in cases:
+        result = run_case(case, governed, connector)
+        assert result.status == "pass", f"{case.id}: {result.detail}"
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_dbt_export_metric_shapes_same_numbers(graph, tmp_path, source, request):
+    """Every measure and metric the export writes returns the native numbers after the round
+    trip: alone and by order status, and the cumulative ones by month."""
+    connector = request.getfixturevalue(source)
+    project = _dbt_test_metrics(graph.project)
+    full = compile_project(project)
+    exported, back = _dbt_round_trip(project, tmp_path)
+    assert back.warnings == []
+    metrics = {m["name"]: m for m in yaml.safe_load(exported.text)["metrics"]}
+    assert metrics["midwest_revenue"]["filter"] == (
+        "{{ Dimension('customer__region') }} = 'Midwest'"
+    )
+    assert metrics["discounted_revenue"]["filter"] == (
+        "{{ Dimension('order__has_discount') }} AND {{ Dimension('order__status') }} <> 'canceled'"
+    )
+    assert metrics["share_of_net"]["type_params"]["expr"] == (
+        "(1e0 * net_revenue / NULLIF(((1e0 * revenue / NULLIF(2, 0))), 0))"
+    )
+    other = compile_project(back.project)
+    cumulative = {"orders_to_date", "revenue_ytd"}
+    names = [*full.measure_owner, *(m.name for m in project.metrics)]
+    assert len(names) == 34
+    for name in names:
+        if name in cumulative:
+            query = QueryRequest(metrics=[name], dimensions=["orders.ordered_at__month"])
+            same(rows(full, connector, query), rows(other, connector, query))
+            continue
+        for dims in ([], ["orders.status"]):
+            query = QueryRequest(metrics=[name], dimensions=dims)
+            if dims and full.measure_owner.get(name) in ("customers", "products", "sellers"):
+                continue  # those models do not reach orders
+            same(rows(full, connector, query), rows(other, connector, query))
+    # The boolean dimension keeps its type (SQL Server selects it through a CASE).
+    query = QueryRequest(metrics=["revenue"], dimensions=["orders.has_discount"])
+    same(rows(full, connector, query), rows(other, connector, query))
+
+
+def test_dbt_export_states_each_reason(graph):
+    data = _without_policies(_without_business(graph.project))
+    data["metrics"] += [
+        {
+            "name": "recent_revenue",
+            "type": "simple",
+            "measure": "revenue",
+            "filter": "{orders.ordered_at__month} >= DATE '2026-01-01'",
+        },
+        {"name": "my_revenue", "type": "simple", "measure": "revenue", "filter": "$user.id = 1"},
+        {"name": "raw_gap", "type": "derived", "expr": "{revenue} - amount"},
+        {"name": "gap_share", "type": "ratio", "numerator": "raw_gap", "denominator": "revenue"},
+        {"name": "buyers_to_date", "type": "cumulative", "measure": "buyers"},
+        {"name": "revenue_7d", "type": "cumulative", "measure": "revenue", "window": "7 days"},
+    ]
+    project = Project.model_validate(data)
+    with pytest.raises(MetricLossError) as exc:
+        export_dbt(project)
+    assert str(exc.value).startswith("6 metrics (recent_revenue, my_revenue, raw_gap, ")
+    result = export_dbt(project, allow_metric_loss=True)
+    reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in result.warnings}
+    assert reasons["metrics.recent_revenue"].startswith(
+        "its filter uses a time grain (`orders.ordered_at__month`)"
+    )
+    assert reasons["metrics.my_revenue"].startswith("its filter uses $user")
+    assert reasons["metrics.raw_gap"].startswith("its expression uses bare columns (amount)")
+    assert reasons["metrics.gap_share"].startswith("it uses `raw_gap`, which is not exported")
+    assert reasons["metrics.buyers_to_date"].startswith("its measure is `count_distinct`")
+    assert reasons["metrics.revenue_7d"].startswith("it has a rolling window (`7 days`)")
+    lost = ("recent_revenue", "my_revenue", "raw_gap", "gap_share", "buyers_to_date", "revenue_7d")
+    assert all(reasons[f"metrics.{m}"].endswith("it is not exported to dbt") for m in lost)
+    assert not {m["name"] for m in yaml.safe_load(result.text)["metrics"]} & set(lost)
+    # A business rule in a filter is refused too.
+    rules = graph.project.model_dump(mode="json")
+    rules["metrics"].append(
+        {
+            "name": "active_customers",
+            "type": "simple",
+            "measure": "customer_count",
+            "filter": "{rule.active_customer}",
+        }
+    )
+    warnings = export_dbt(
+        Project.model_validate(rules), allow_policy_loss=True, allow_metric_loss=True
+    ).warnings
+    assert (
+        "metrics.active_customers: its filter uses the business rule `rule.active_customer`, "
+        "not exported yet; it is not exported to dbt"
+    ) in warnings
+
+
+def test_cli_export_dbt(tmp_path):
+    runner = CliRunner()
+    refused = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE)])
+    assert refused.exit_code == 1
+    assert refused.stdout == ""
+    assert "1 row filter (customers.by_region) and the sensitivity" in refused.stderr
+    result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "--allow-policy-loss"])
+    assert result.exit_code == 0, result.output
+    assert yaml.safe_load(result.stdout)["semantic_models"]
+    assert "warning:" not in result.stdout
+    assert "warning: semantic_models.customers.row_filters.by_region" in result.stderr
+    out = tmp_path / "models" / "semantic_models.yml"
+    result = runner.invoke(
+        app, ["export", "dbt", "-m", str(EXAMPLE), "-o", str(out), "--allow-policy-loss"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "16 warnings" in result.stdout
+    assert import_model("dbt", out, schema="public").warnings == []
