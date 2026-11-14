@@ -6,11 +6,11 @@ Only the YAML is read; the dbt project is never executed. ``ref('x')`` becomes t
 
 Export (first slice): the legacy spec, which MetricFlow still reads. One semantic model per
 model with entities, dimensions and measures (each measure also a metric, ``create_metric``),
-and simple, ratio, derived and cumulative metrics; filters become ``{{ Dimension('e__d') }}``.
-Division in derived metrics and AVG are written with a ``1e0 *`` factor, as in the Cube export.
+and simple, ratio and derived metrics; filters become ``{{ Dimension('e__d') }}``. Division in
+derived metrics and AVG are written with a ``1e0 *`` factor, as in the Cube export.
 ``import_dbt`` reads the export back with the same numbers in Cosmos. The export fails closed on
-row filters and sensitivity, and on metrics it cannot carry (rolling windows, filters with a
-time grain, a business rule or ``$user``), unless the caller accepts the loss. Business rules,
+row filters and sensitivity, and on metrics it cannot carry (cumulative metrics, filters on a
+time dimension, a business rule or ``$user``), unless the caller accepts the loss. Business rules,
 the glossary and the business context are not exported yet; each one present is a warning.
 """
 
@@ -602,7 +602,8 @@ class _DbtWriter:
         elif isinstance(metric, DerivedMetric):
             return self._derived(metric)
         else:
-            return self._cumulative(metric)
+            # MetricFlow's periods differ from the engine's partitions at coarser grains.
+            raise _NotExported("it is cumulative, and the dbt export does not carry it yet")
         if metric.filter:
             item["filter"] = self._filter(metric.filter, self._leaves(metric.name))
         return item
@@ -632,29 +633,6 @@ class _DbtWriter:
             text = REF_RE.sub(lambda m: next(it), metric.expr)
         params = {"expr": text, "metrics": [{"name": n} for n in dict.fromkeys(names)]}
         return {"type": "derived", "type_params": params}
-
-    def _cumulative(self, metric) -> dict[str, Any]:
-        if metric.window:
-            raise _NotExported(
-                f"it has a rolling window (`{metric.window}`), which the engine does not "
-                "compute yet"
-            )
-        _, measure = self.graph.measure(metric.measure)
-        if measure.agg not in ("sum", "count"):
-            raise _NotExported(
-                f"its measure is `{measure.agg}`: the engine adds up the periods, while "
-                "MetricFlow aggregates the whole window"
-            )
-        cparams: dict[str, Any] = {"period_agg": "last"}
-        if metric.grain_to_date:
-            cparams = {"grain_to_date": metric.grain_to_date, **cparams}
-        self.warnings.append(
-            f"metrics.{metric.name}: exported with `period_agg: last`, the engine's running "
-            "total at the end of each period; MetricFlow also fills periods without data from "
-            "its time spine"
-        )
-        params = {"measure": metric.measure, "cumulative_type_params": cparams}
-        return {"type": "cumulative", "type_params": params}
 
     def _leaves(self, name: str) -> set[str]:
         """The models whose measures a metric aggregates."""
@@ -689,14 +667,15 @@ class _DbtWriter:
                     "measure it filters"
                 )
             dim = found.pop()
-            if dim.grain:
-                raise _NotExported(
-                    f"its filter uses a time grain (`{text}`), which `cosmos import dbt` does "
-                    "not read back"
-                )
             spec = self.graph.models[dim.model].spec
-            if dim.name not in {d.name for d in spec.dimensions}:
+            own = {d.name: d for d in spec.dimensions}
+            if dim.name not in own:
                 raise _NotExported(f"its filter uses the business rule `{text}`, not exported yet")
+            if own[dim.name].type == "time":
+                raise _NotExported(
+                    f"its filter uses the time dimension `{text}`, which MetricFlow compares "
+                    "truncated to its time_granularity"
+                )
             entity = next((e.name for e in spec.entities if e.type == "primary"), None)
             if entity is None:
                 raise _NotExported(
@@ -725,6 +704,8 @@ def _dbt_dimension(dim) -> dict[str, Any]:
     if dim.description:
         item["description"] = dim.description
     if dim.type == "time":
+        # The model does not say how fine a time column is, so every time dimension is written
+        # as day: dbt groups and filters it by day, never by hour as the engine can.
         item["type_params"] = {"time_granularity": "day"}
     elif dim.type != "categorical":
         # dbt has only categorical and time dimensions; `import_dbt` reads the type back.

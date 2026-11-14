@@ -1068,9 +1068,8 @@ def export_dbt_cmd(
             "--allow-metric-loss",
             help=(
                 "Export even though metrics dbt cannot carry here are dropped: cumulative "
-                "metrics with a rolling window or over a measure other than sum or count, "
-                "metrics filtered by a time grain, a business rule or $user, derived metrics "
-                "over bare columns, and metrics that use one of these."
+                "metrics, metrics filtered by a time dimension, a business rule or $user, "
+                "derived metrics over bare columns, and metrics that use one of these."
             ),
         ),
     ] = False,

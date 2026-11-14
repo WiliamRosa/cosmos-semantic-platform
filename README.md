@@ -127,8 +127,8 @@ uv run cosmos export ossie -m examples/ecommerce/semantic -o ecommerce.ossie.yam
 uv run cosmos export cube -m examples/ecommerce/semantic -o model/cubes/ecommerce.yml --allow-policy-loss --allow-metric-loss
 
 # The model as dbt Semantic Layer (MetricFlow) YAML, which `cosmos import dbt` reads back with the
-# same numbers. Row filters and sensitivity are not exported yet, so the example needs the flag
-uv run cosmos export dbt -m examples/ecommerce/semantic -o models/semantic_models.yml --allow-policy-loss
+# same numbers. Row filters, sensitivity and cumulative metrics are not exported yet, so the example needs both flags
+uv run cosmos export dbt -m examples/ecommerce/semantic -o models/semantic_models.yml --allow-policy-loss --allow-metric-loss
 
 # Draft a model from the database catalog (keys, joins, measures, LGPD suggestions), then review it
 uv run cosmos bootstrap -c examples/ecommerce/connections.yml -o semantic/draft.yml
