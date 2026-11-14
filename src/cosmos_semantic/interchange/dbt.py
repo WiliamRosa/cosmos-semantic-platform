@@ -571,6 +571,15 @@ class _DbtWriter:
             self._place(name)
         if name not in self.done:
             raise _NotExported(f"it uses `{name}`, which is not exported")
+        metric = self.graph.metrics.get(name)
+        if isinstance(metric, SimpleMetric) and metric.filter:
+            # MetricFlow filters each input in its own subquery and joins them, so a group
+            # with no matching rows is NULL there; the engine counts it as 0.
+            if self.graph.measure(metric.measure)[1].agg in ("count", "count_distinct"):
+                raise _NotExported(
+                    f"it uses `{name}`, a filtered count, which MetricFlow returns as NULL "
+                    "where the engine returns 0"
+                )
         return name
 
     def _place(self, name: str) -> None:

@@ -1069,7 +1069,8 @@ def export_dbt_cmd(
             help=(
                 "Export even though metrics dbt cannot carry here are dropped: cumulative "
                 "metrics, metrics filtered by a time dimension, a business rule or $user, "
-                "derived metrics over bare columns, and metrics that use one of these."
+                "derived metrics over bare columns, ratio and derived metrics over a filtered "
+                "count, and metrics that use one of these."
             ),
         ),
     ] = False,

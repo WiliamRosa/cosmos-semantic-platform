@@ -102,8 +102,10 @@ format or the API; such changes are listed under **Changed**.
   `config.meta.cosmos_type`. Row filters and sensitivity fail closed unless
   `--allow-policy-loss` is given, and cumulative metrics, filters on a time dimension, a
   business rule or `$user`, and metrics that use one of these unless `--allow-metric-loss` is
-  given; cumulative metrics come in a later slice. In MetricFlow a metric filter drops groups
-  with no matching rows, which the engine keeps. Business rules, the glossary, business
+  given; cumulative metrics come in a later slice. Where a metric filter matches no rows in a
+  group, the engine returns 0 for a count, and MetricFlow no row (alone) or NULL (alongside
+  other metrics), so ratio and derived metrics over a filtered count are refused the same way.
+  Business rules, the glossary, business
   context, user context and the time zone are listed as warnings on standard error. Round-trip
   and same-numbers tests, through the Cosmos importer and planner, on every database
   ([interoperability](docs/interoperability.md#exporting-dbt)).
