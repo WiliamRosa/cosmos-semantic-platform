@@ -205,6 +205,7 @@ EXTENSION_ONLY = {
     "items_per_order": "it spans datasets",
     "revenue_year_to_date": "it is cumulative",
     "revenue_month_to_date": "it is cumulative",
+    "revenue_rolling_7_days": "it is cumulative",
 }
 # A row filter that reads a business rule.
 RULE_FILTER = {"name": "active_only", "filter": "{rule.active_customer} AND {segment} <> 'x'"}
@@ -770,7 +771,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 48
+    assert len(REFERENCE) == 50
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -861,7 +862,7 @@ def test_cli_export_ossie(tmp_path, graph):
         app, ["export", "ossie", "-m", str(EXAMPLE), "-o", str(out), "-f", "json"]
     )
     assert result.exit_code == 0, result.output
-    assert "4 warnings" in result.stdout
+    assert "5 warnings" in result.stdout
     assert json.loads(out.read_text(encoding="utf-8"))["name"] == "ecommerce"
     back = import_model("ossie", out).project
     assert _policies(back) == _policies(graph.project)
@@ -885,7 +886,7 @@ def test_cli_export_ossie(tmp_path, graph):
 
 # -- Cube export (cubes, joins, dimensions, measures, metrics) --------------------------------
 
-CUMULATIVE = ("revenue_year_to_date", "revenue_month_to_date")
+CUMULATIVE = ("revenue_year_to_date", "revenue_month_to_date", "revenue_rolling_7_days")
 SPANS_CUBES = ("collection_gap", "items_per_order")
 LOSS_FLAGS = {"allow_policy_loss": True, "allow_metric_loss": True}
 
@@ -941,7 +942,8 @@ def test_cube_export_fails_closed(graph, tmp_path):
     with pytest.raises(MetricLossError) as exc:
         export_cube(graph.project, allow_policy_loss=True)
     assert str(exc.value).startswith(
-        "2 metrics (revenue_year_to_date, revenue_month_to_date) would NOT be exported "
+        "3 metrics (revenue_year_to_date, revenue_month_to_date, revenue_rolling_7_days) "
+        "would NOT be exported "
         "(revenue_year_to_date: it is cumulative"
     )
     assert str(exc.value).endswith("Pass --allow-metric-loss to export anyway")
@@ -1017,7 +1019,7 @@ def test_cube_export_round_trip(graph, tmp_path):
     assert "user_context: region" in joined
     assert "timezone: not exported to Cube. Model timestamps are local time, so keep" in joined
     assert "relative dates such as today then follow UTC in Cube, not America/New_York" in joined
-    assert len(exported.warnings) == 15
+    assert len(exported.warnings) == 16
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -1141,7 +1143,9 @@ def test_cube_export_states_each_reason(graph):
     project = Project.model_validate(data)
     with pytest.raises(MetricLossError) as exc:
         export_cube(project)
-    assert str(exc.value).startswith("8 metrics (revenue_year_to_date, revenue_month_to_date, ")
+    assert str(exc.value).startswith(
+        "9 metrics (revenue_year_to_date, revenue_month_to_date, revenue_rolling_7_days, "
+    )
     warnings = export_cube(project, allow_metric_loss=True).warnings
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in warnings}
     assert reasons["metrics.midwest_revenue"].startswith(
@@ -1189,7 +1193,10 @@ def test_cli_export_cube(tmp_path):
     assert "1 row filter (customers.by_region) and the sensitivity" in refused.stderr
     refused = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "--allow-policy-loss"])
     assert refused.exit_code == 1
-    assert "2 metrics (revenue_year_to_date, revenue_month_to_date)" in refused.stderr
+    assert (
+        "3 metrics (revenue_year_to_date, revenue_month_to_date, revenue_rolling_7_days)"
+        in refused.stderr
+    )
     flags = ["--allow-policy-loss", "--allow-metric-loss"]
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), *flags])
     assert result.exit_code == 0, result.output
@@ -1199,5 +1206,5 @@ def test_cli_export_cube(tmp_path):
     out = tmp_path / "model" / "cubes.yml"
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "15 warnings" in result.stdout
+    assert "16 warnings" in result.stdout
     assert import_model("cube", out).warnings == []

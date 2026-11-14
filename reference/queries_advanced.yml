@@ -502,3 +502,64 @@ cases:
     sql: |
       SELECT status AS orders__status, COUNT(*) AS order_count, SUM(amount) AS revenue
       FROM public.orders WHERE NOT (discount > 0) GROUP BY status
+
+  # -- Rolling windows ------------------------------------------------------
+  # The value on day D sums the facts dated from D - 6 days to D. Days with no orders are not
+  # in the output (as with grain_to_date), but they still count as days of the window; the
+  # first days of the data have fewer than 7 days before them.
+  - id: A29
+    category: tempo
+    phase: 3
+    title: Rolling 7-day revenue by day, from the first day of the data
+    request:
+      metrics: [revenue_rolling_7_days]
+      dimensions: [orders.ordered_at__day]
+    sql: |
+      SELECT d.dd AS orders__ordered_at__day, SUM(o.amount) AS revenue_rolling_7_days
+      FROM (SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM public.orders) d
+      JOIN public.orders o
+        ON o.ordered_at >= d.dd - INTERVAL '6' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.dd
+    sql_by_dialect:
+      tsql: |
+        SELECT d.dd AS orders__ordered_at__day, SUM(o.amount) AS revenue_rolling_7_days
+        FROM (SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM public.orders) d
+        JOIN public.orders o
+          ON o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.dd
+
+  - id: A30
+    category: tempo
+    phase: 3
+    title: Rolling 7-day revenue by status and day, over the last 45 days only
+    request:
+      metrics: [revenue_rolling_7_days, revenue]
+      dimensions: [orders.status, orders.ordered_at__day]
+      filters: ["{orders.ordered_at} >= CURRENT_DATE - INTERVAL '45' DAY"]
+    sql: |
+      WITH f AS (
+        SELECT status, ordered_at, amount FROM public.orders
+        WHERE ordered_at >= CURRENT_DATE - INTERVAL '45' DAY
+      )
+      SELECT d.status AS orders__status, d.dd AS orders__ordered_at__day,
+             SUM(f.amount) AS revenue_rolling_7_days,
+             SUM(CASE WHEN f.ordered_at >= d.dd THEN f.amount END) AS revenue
+      FROM (SELECT DISTINCT status, DATE_TRUNC('day', ordered_at) AS dd FROM f) d
+      JOIN f
+        ON f.status = d.status
+        AND f.ordered_at >= d.dd - INTERVAL '6' DAY AND f.ordered_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.status, d.dd
+    sql_by_dialect:
+      tsql: |
+        WITH f AS (
+          SELECT status, ordered_at, amount FROM public.orders
+          WHERE ordered_at >= DATEADD(day, -45, CAST(GETDATE() AS DATE))
+        )
+        SELECT d.status AS orders__status, d.dd AS orders__ordered_at__day,
+               SUM(f.amount) AS revenue_rolling_7_days,
+               SUM(CASE WHEN f.ordered_at >= d.dd THEN f.amount END) AS revenue
+        FROM (SELECT DISTINCT status, DATETRUNC(day, ordered_at) AS dd FROM f) d
+        JOIN f
+          ON f.status = d.status
+          AND f.ordered_at >= DATEADD(day, -6, d.dd) AND f.ordered_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.status, d.dd

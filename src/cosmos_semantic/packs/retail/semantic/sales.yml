@@ -152,3 +152,9 @@ metrics:
     measure: revenue
     grain_to_date: month
     description: Month-to-date revenue
+  - name: revenue_rolling_7_days
+    type: cumulative
+    owner: controllership
+    measure: revenue
+    window: 7 days
+    description: Revenue of the 7 days ending on each day

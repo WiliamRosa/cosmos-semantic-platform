@@ -63,6 +63,12 @@ def trunc(value: exp.Expression, unit: str, dialect: str) -> exp.Expression:
     return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit))
 
 
+def add_days(value: exp.Expression, days: int) -> exp.Expression:
+    """``value`` plus ``days`` days. SQLGlot prints it in each dialect (``DATEADD``,
+    ``DATE_ADD``, ``+ INTERVAL``); ``adapt`` rewrites it for Oracle."""
+    return exp.DateAdd(this=value, expression=exp.Literal.number(days), unit=exp.Var(this="DAY"))
+
+
 def adapt(tree: exp.Expression, dialect: str) -> exp.Expression:
     """Rewrites what ``dialect`` cannot run; a no-op for the other dialects."""
     if dialect not in _TRUNC_TEMPLATES:

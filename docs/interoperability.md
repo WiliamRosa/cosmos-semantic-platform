@@ -63,7 +63,7 @@ Cube is the most adopted open source semantic layer, so importing from it is the
 | Measures `count`, `count_distinct`, `sum`, `avg`, `min`, `max` | Measure of the same type | Direct |
 | `number` measure referencing other measures | Derived metric | Requires reading the SQL expression |
 | `segments` | Business rule | Comes in with owner and effective date pending; validation warns until they are set |
-| `rolling_window` and multi-stage measures | Cumulative metric (rolling windows are not in the MVP) | Warning and `custom_extensions` |
+| `rolling_window` and multi-stage measures | Cumulative metric (rolling windows in days only) | Warning and `custom_extensions` |
 | `pre_aggregations` and `views` | No MVP equivalent | Kept in `custom_extensions` |
 | Access control in `cube.js` | `row_filters` and `sensitivity` | Manual: it is JavaScript code; the report lists the rules to recreate |
 

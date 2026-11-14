@@ -285,8 +285,11 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
         for ref in _metric_refs(metric):
             if ref not in g.measure_owner and ref not in g.metrics:
                 err(loc, f"reference `{ref}` is neither a measure nor a metric")
-        if isinstance(metric, CumulativeMetric) and metric.window:
-            warn(loc, "metrics with `window` are not in the MVP; queries will be refused")
+        if isinstance(metric, CumulativeMetric) and metric.window and not metric.window_days():
+            warn(
+                loc,
+                "only windows in days, such as `7 days`, are supported; queries will be refused",
+            )
     _check_metric_cycles(g, err)
 
     # Join ambiguity between any two reachable models
