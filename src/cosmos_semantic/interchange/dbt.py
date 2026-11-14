@@ -608,6 +608,8 @@ class _DbtWriter:
             params = {"numerator": self._use(metric.numerator)}
             params["denominator"] = self._use(metric.denominator)
             item = {"type": "ratio", "type_params": params}
+            if metric.filter:
+                self._check_ratio_filter(metric)
         elif isinstance(metric, DerivedMetric):
             return self._derived(metric)
         else:
@@ -643,17 +645,39 @@ class _DbtWriter:
         params = {"expr": text, "metrics": [{"name": n} for n in dict.fromkeys(names)]}
         return {"type": "derived", "type_params": params}
 
-    def _leaves(self, name: str) -> set[str]:
-        """The models whose measures a metric aggregates."""
+    def _measures(self, name: str) -> set[str]:
+        """The measures a metric aggregates, through nested ratio and derived metrics."""
         if name in self.graph.measure_owner:
-            return {self.graph.measure_owner[name]}
+            return {name}
         metric = self.graph.metrics[name]
         if isinstance(metric, RatioMetric):
-            return self._leaves(metric.numerator) | self._leaves(metric.denominator)
+            return self._measures(metric.numerator) | self._measures(metric.denominator)
         if isinstance(metric, DerivedMetric):
             refs = REF_RE.findall(metric.expr)
-            return set().union(*(self._leaves(r.split(".")[-1]) for r in refs))
-        return {self.graph.measure_owner[metric.measure]}
+            return set().union(*(self._measures(r.split(".")[-1]) for r in refs))
+        return {metric.measure}
+
+    def _leaves(self, name: str) -> set[str]:
+        """The models whose measures a metric aggregates."""
+        return {self.graph.measure_owner[m] for m in self._measures(name)}
+
+    def _check_ratio_filter(self, metric) -> None:
+        """The engine applies a ratio's filter inside every input's aggregation, so a count
+        input becomes a filtered count: 0 where MetricFlow's WHERE and join give NULL. Only a
+        ratio of two plain inputs on one model, computed in one MetricFlow query, is safe."""
+        measures = self._measures(metric.name)
+        counts = sorted(
+            m for m in measures if self.graph.measure(m)[1].agg in ("count", "count_distinct")
+        )
+        nested = any(
+            isinstance(self.graph.metrics.get(side), RatioMetric | DerivedMetric)
+            for side in (metric.numerator, metric.denominator)
+        )
+        if counts and (len(self._leaves(metric.name)) > 1 or nested):
+            raise _NotExported(
+                f"its filter turns the count `{counts[0]}` into a filtered count, which "
+                "MetricFlow returns as NULL where the engine returns 0"
+            )
 
     def _filter(self, flt: str, models: set[str]) -> str:
         """A metric filter as MetricFlow Jinja: ``{{ Dimension('entity__dimension') }}``."""

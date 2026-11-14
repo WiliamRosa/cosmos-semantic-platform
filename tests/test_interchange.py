@@ -1443,11 +1443,35 @@ def test_dbt_export_states_each_reason(graph):
             "denominator": "buyers",
         },
         {"name": "open_revenue", "type": "derived", "expr": "{revenue} - {completed_revenue}"},
+        # A ratio's own filter reaches every input: refused over a count across models or
+        # over a nested metric, exported for two plain inputs on one model.
+        {
+            "name": "pay_per_order_f",
+            "type": "ratio",
+            "numerator": "payment_count",
+            "denominator": "order_count",
+            "filter": "{orders.status} = 'completed'",
+        },
+        {"name": "cnt_diff", "type": "derived", "expr": "{order_count} - {payment_count}"},
+        {
+            "name": "cnt_diff_share",
+            "type": "ratio",
+            "numerator": "cnt_diff",
+            "denominator": "revenue",
+            "filter": "{orders.status} = 'completed'",
+        },
+        {
+            "name": "completed_aov",
+            "type": "ratio",
+            "numerator": "revenue",
+            "denominator": "order_count",
+            "filter": "{status} = 'completed'",
+        },
     ]
     project = Project.model_validate(data)
     with pytest.raises(MetricLossError) as exc:
         export_dbt(project)
-    assert str(exc.value).startswith("12 metrics (revenue_year_to_date, revenue_month_to_date, ")
+    assert str(exc.value).startswith("14 metrics (revenue_year_to_date, revenue_month_to_date, ")
     result = export_dbt(project, allow_metric_loss=True)
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in result.warnings}
     for name in (*CUMULATIVE, "revenue_7d"):
@@ -1474,11 +1498,17 @@ def test_dbt_export_states_each_reason(graph):
             f"it uses `{ref}`, a filtered count, which MetricFlow returns as NULL where the "
             "engine returns 0; it is not exported to dbt"
         )
+    for name, count in (("pay_per_order_f", "order_count"), ("cnt_diff_share", "order_count")):
+        assert reasons[f"metrics.{name}"] == (
+            f"its filter turns the count `{count}` into a filtered count, which MetricFlow "
+            "returns as NULL where the engine returns 0; it is not exported to dbt"
+        )
     lost = {k.split(".", 1)[1] for k, r in reasons.items() if r.endswith("not exported to dbt")}
-    assert len(lost) == 12
+    assert len(lost) == 14
     exported = {m["name"] for m in yaml.safe_load(result.text)["metrics"]}
     assert not exported & lost
-    assert {"completed_orders", "completed_buyers", "open_revenue"} <= exported
+    assert {"completed_orders", "completed_buyers", "open_revenue", "cnt_diff"} <= exported
+    assert "completed_aov" in exported
     # A business rule in a filter is refused too.
     rules = graph.project.model_dump(mode="json")
     rules["metrics"].append(
