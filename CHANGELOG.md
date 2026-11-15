@@ -125,10 +125,23 @@ format or the API; such changes are listed under **Changed**.
   and same-numbers tests, through the Cosmos importer and planner, on every database
   ([interoperability](docs/interoperability.md#exporting-dbt)).
 
+- The console pages every long list: the catalog (search, filters, sort and page in the address,
+  so a link reproduces the view), audited answers, check runs and the usage tables, each sortable
+  by column. `GET /v1/console/answers` and `GET /v1/console/runs` take `offset` next to `limit`
+  and return `total`, so every answer in the audit log is reachable, not only the latest 50.
+  `Ctrl+K` (`⌘K`) jumps to any metric, measure, rule, concept, process or page, and `/` searches
+  the list on the page ([console](docs/console.md#find-your-way)).
+
 ### Changed
 
 - Tests render CLI help as plain, unwrapped text everywhere, so a test reading `--help` behaves
   the same on CI, where Typer otherwise forces a coloured terminal (#25).
+
+- The console has a new layout: a collapsible sidebar (a drawer on phones), a light, dark or
+  system theme remembered in the browser, the Inter font self-hosted at build time, loading
+  skeletons instead of a "Loading" line, a visible focus ring for keyboard users, and "Back"
+  links that return to the filtered list. The public demo greets first-time visitors with three
+  places to start.
 
 ## [0.3.0] - 2026-11-04
 

@@ -49,6 +49,17 @@ With a DuckDB file as the data source, run `cosmos check` while `cosmos serve` i
 | Checks | What did each check run find? Rule tests and reconciliations with the likely cause of each divergence |
 | Usage and cost | Who asks what, and at what estimated cost? Admins only |
 
+## Find your way
+
+| To | Do this |
+| --- | --- |
+| Jump to any metric, measure, rule, concept, process or page | Press `Ctrl+K` (`⌘K` on a Mac) and type part of its name |
+| Search the list on the page | Press `/` |
+| Switch between light, dark and the system's theme | The theme button at the top right; the choice is remembered in the browser |
+| Get more room | Collapse the sidebar at its bottom; on a phone the menu opens as a drawer |
+
+Long lists are paged and can be sorted by any column. The catalog keeps its search, filters, sort and page in the address, so a link reproduces the same view and "Back" from a metric returns to it. Answers and check runs are paged by the server: `GET /v1/console/answers` and `GET /v1/console/runs` take `limit` (at most 500) and `offset`, and return `total`, so every answer in the audit log is reachable, not only the latest ones.
+
 Health always uses the same four states:
 
 | State | Meaning |
@@ -63,7 +74,7 @@ Health always uses the same four states:
 [wiliamrosa.github.io/cosmos-semantic-platform](https://wiliamrosa.github.io/cosmos-semantic-platform/) is the console on the example model with synthetic data. The `demo` workflow rebuilds it on every change to `main`, and it needs no server:
 
 1. `console/demo/snapshot.py` runs the example model on an in-memory DuckDB, answers a set of questions as people and as agents, records a check run, and writes each console view as JSON.
-2. The demo build (`NEXT_PUBLIC_COSMOS_DEMO=1`) reads those files instead of calling the API.
+2. The demo build (`NEXT_PUBLIC_COSMOS_DEMO=1`) reads those files instead of calling the API. With no server to page answers and check runs, it filters and pages them in the browser. A first visit shows three places to start.
 
 Replaying an answer needs a data source, so the demo explains that instead.
 
@@ -71,6 +82,8 @@ Replaying an answer needs a data source, so the demo explains that instead.
 uv run python console/demo/snapshot.py console/public/demo-data
 cd console && NEXT_PUBLIC_COSMOS_DEMO=1 NEXT_PUBLIC_BASE_PATH=/cosmos-semantic-platform npx next build
 ```
+
+On Git Bash for Windows, prefix the build with `MSYS_NO_PATHCONV=1`, or the base path becomes a Windows path.
 
 ## Develop it
 
@@ -89,3 +102,5 @@ npm run build      # static export, copied into src/cosmos_semantic/console_dist
 ```
 
 Every visible string lives in `console/lib/i18n.tsx`, in English and Portuguese. Add a key to both dictionaries.
+
+Shared pieces live in `console/components/`: `ui.tsx` (cards, badges, skeletons, `BackLink`), `table.tsx` (sortable headers, the pager, the search box) and `Shell.tsx` (sidebar, top bar, theme and `CommandPalette.tsx`). `console/lib/table.ts` sorts and pages lists in the browser. Reuse them so every list behaves the same way. The Inter font is self-hosted at build time by `next/font`, so the console makes no request to Google when it runs.

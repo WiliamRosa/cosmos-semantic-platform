@@ -1,13 +1,24 @@
 "use client";
 
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { AnswerList } from "@/components/AnswerList";
-import { Card, Code, Empty, Loader, MemberLink, PageHeader, Rich } from "@/components/ui";
+import { Pagination, TableFrame } from "@/components/table";
+import {
+  BackLink,
+  Card,
+  Code,
+  Empty,
+  ListSkeleton,
+  Loader,
+  MemberLink,
+  PageHeader,
+  Rich,
+} from "@/components/ui";
 import { type AnswerDetail, ApiError, endpoints } from "@/lib/api";
 import { type Key, useI18n } from "@/lib/i18n";
 import { useLoad } from "@/lib/session";
+import { PAGE_SIZES, pageInfo } from "@/lib/table";
 
 export default function AnswersPage() {
   return (
@@ -17,28 +28,94 @@ export default function AnswersPage() {
   );
 }
 
+const DEFAULT_SIZE = 25;
+
 function Answers() {
-  const { t } = useI18n();
   const params = useSearchParams();
   const id = params.get("id");
-  const metric = params.get("metric") ?? undefined;
-  const loaded = useLoad(() => endpoints.answers(metric), `answers:${metric ?? ""}`);
   if (id) return <AnswerView id={id} />;
+  return <AnswerPages />;
+}
+
+/** The audited answers, newest first; the server pages them, so every answer is reachable. */
+function AnswerPages() {
+  const { t, count } = useI18n();
+  const params = useSearchParams();
+  const router = useRouter();
+  const metric = params.get("metric") ?? undefined;
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const size = PAGE_SIZES.find((s) => s === Number(params.get("size"))) ?? DEFAULT_SIZE;
+  const loaded = useLoad(
+    () => endpoints.answers({ metric, offset: (page - 1) * size, limit: size }),
+    `answers:${metric ?? ""}:${page}:${size}`,
+  );
+  const go = (next: { page?: number; size?: number; metric?: string | null }) => {
+    const q = new URLSearchParams();
+    const m = next.metric === undefined ? metric : next.metric;
+    const s = next.size ?? size;
+    const p = next.page ?? 1;
+    if (m) q.set("metric", m);
+    if (p > 1) q.set("page", String(p));
+    if (s !== DEFAULT_SIZE) q.set("size", String(s));
+    const search = q.toString();
+    router.replace(`/answers/${search ? `?${search}` : ""}`, { scroll: false });
+  };
   return (
     <>
       <PageHeader title={t("answers.title")} lead={t("answers.lead")} />
-      <Loader loaded={loaded}>
-        {(data) => (
-          <Card
-            title={data.scope === "everyone" ? t("answers.scopeAll") : t("answers.scopeMine")}
-          >
-            {data.answers.length ? (
-              <AnswerList answers={data.answers} />
-            ) : (
-              <Empty>{t("answers.empty")}</Empty>
-            )}
-          </Card>
-        )}
+      {metric && (
+        <div className="mb-4 flex items-center gap-2 text-sm">
+          <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-50 px-3 py-1.5 text-sky-800 ring-1 ring-sky-200 dark:bg-sky-950 dark:text-sky-200 dark:ring-sky-800">
+            {t("kind.metric")}: <strong className="font-medium">{metric}</strong>
+            <button onClick={() => go({ metric: null })} aria-label={t("catalog.clearFilters")}>
+              ×
+            </button>
+          </span>
+        </div>
+      )}
+      <Loader
+        loaded={loaded}
+        skeleton={
+          <TableFrame>
+            <ListSkeleton rows={8} />
+          </TableFrame>
+        }
+      >
+        {(data) => {
+          const info = pageInfo(data.total, page, size);
+          return (
+            <>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500">
+                <span>{data.scope === "everyone" ? t("answers.scopeAll") : t("answers.scopeMine")}</span>
+                <span aria-live="polite">{count(data.total, "table.result", "table.results")}</span>
+              </div>
+              <TableFrame
+                footer={
+                  <Pagination
+                    page={info.page}
+                    pages={info.pages}
+                    from={info.from}
+                    to={info.to}
+                    total={data.total}
+                    size={size}
+                    onPage={(p) => go({ page: p })}
+                    onSize={(s) => go({ size: s })}
+                  />
+                }
+              >
+                <div className={`px-3 transition-opacity ${loaded.loading ? "opacity-60" : ""}`}>
+                  {data.answers.length ? (
+                    <AnswerList answers={data.answers} />
+                  ) : (
+                    <div className="p-3">
+                      <Empty>{t("answers.empty")}</Empty>
+                    </div>
+                  )}
+                </div>
+              </TableFrame>
+            </>
+          );
+        }}
       </Loader>
     </>
   );
@@ -49,9 +126,7 @@ function AnswerView({ id }: { id: string }) {
   const loaded = useLoad(() => endpoints.answer(id), `answer:${id}`);
   return (
     <>
-      <Link href="/answers/" className="text-sm text-sky-700 hover:underline dark:text-sky-400">
-        ← {t("common.back")}
-      </Link>
+      <BackLink href="/answers/">{t("common.back")}</BackLink>
       <div className="mt-2">
         <Loader loaded={loaded}>{(a) => <AnswerBody a={a} />}</Loader>
       </div>

@@ -2,13 +2,16 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo } from "react";
 import { AnswerList } from "@/components/AnswerList";
 import { ReconciliationTable } from "@/components/ReconciliationTable";
+import { Pagination, SearchInput, SortHeader, TableFrame } from "@/components/table";
 import {
+  BackLink,
   Card,
   Code,
   Empty,
+  ListSkeleton,
   Loader,
   MemberLink,
   PageHeader,
@@ -18,6 +21,7 @@ import {
 import { type CatalogItem, endpoints, type Labels, type Member, type State } from "@/lib/api";
 import { type Key, useI18n } from "@/lib/i18n";
 import { useLoad } from "@/lib/session";
+import { formatSort, nextSort, PAGE_SIZES, paginate, parseSort, type Sort, sortRows } from "@/lib/table";
 
 export default function CatalogPage() {
   return (
@@ -34,49 +38,62 @@ function Catalog() {
 
 const KINDS = ["metric", "measure", "rule", "concept"] as const;
 const STATES: State[] = ["failing", "attention", "unchecked", "healthy"];
+const SORTS = ["name", "owner", "usage", "status"] as const;
+type SortKey = (typeof SORTS)[number];
+// Worst first when sorting by status, so problems come to the top.
+const STATE_RANK: Record<State, number> = { failing: 0, attention: 1, unchecked: 2, healthy: 3 };
+const DEFAULT_SIZE = 25;
 
 function CatalogList() {
   const { t, label, state: stateLabel } = useI18n();
   const loaded = useLoad(endpoints.catalog, "catalog");
   const params = useSearchParams();
   const router = useRouter();
-  const [query, setQuery] = useState("");
-  // Kind and state live in the URL, so the overview can link to a filtered list.
+  // Every filter lives in the URL: the overview links to filtered lists, and the back button
+  // from a metric returns to the same search, sort and page.
   const kind = KINDS.find((k) => k === params.get("kind")) ?? "all";
   const state = STATES.find((s) => s === params.get("state")) ?? null;
-  const go = (next: { kind?: string; state?: string | null }) => {
+  const query = params.get("q") ?? "";
+  const sort = parseSort<SortKey>(params.get("sort"), SORTS);
+  const page = Number(params.get("page")) || 1;
+  const size = PAGE_SIZES.find((s) => s === Number(params.get("size"))) ?? DEFAULT_SIZE;
+  const go = (next: Record<string, string | number | null | undefined>, resetPage = true) => {
+    const current: Record<string, string | number | null> = {
+      kind: kind === "all" ? null : kind,
+      state,
+      q: query || null,
+      sort: formatSort(sort),
+      page: resetPage ? null : page > 1 ? page : null,
+      size: size === DEFAULT_SIZE ? null : size,
+    };
+    const merged = { ...current, ...next };
     const q = new URLSearchParams();
-    const k = next.kind ?? kind;
-    const s = next.state === undefined ? state : next.state;
-    if (k !== "all") q.set("kind", k);
-    if (s) q.set("state", s);
+    for (const [k, v] of Object.entries(merged)) if (v !== null && v !== undefined && v !== "") q.set(k, String(v));
     const search = q.toString();
     router.replace(`/catalog/${search ? `?${search}` : ""}`, { scroll: false });
   };
-  const setKind = (k: string) => go({ kind: k });
+  const filtered = Boolean(query || state || kind !== "all");
   return (
     <>
       <PageHeader title={t("catalog.title")} lead={t("catalog.lead")} />
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t("catalog.filter")}
-          className="w-full max-w-sm rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-500 dark:border-slate-700 dark:bg-slate-900"
-        />
-        {(["all", ...KINDS] as const).map((k) => (
-          <button
-            key={k}
-            onClick={() => setKind(k)}
-            className={`rounded-lg px-3 py-1.5 text-sm ${
-              kind === k
-                ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-                : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-400 dark:ring-slate-800"
-            }`}
-          >
-            {k === "all" ? t("common.all") : t(`kind.${k}` as Key)}
-          </button>
-        ))}
+        <SearchInput value={query} onChange={(q) => go({ q })} placeholder={t("catalog.filter")} />
+        <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800/60" role="group">
+          {(["all", ...KINDS] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => go({ kind: k === "all" ? null : k })}
+              aria-pressed={kind === k}
+              className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
+                kind === k
+                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white"
+                  : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+              }`}
+            >
+              {k === "all" ? t("common.all") : t(`kind.${k}` as Key)}
+            </button>
+          ))}
+        </div>
         {state && (
           <button
             onClick={() => go({ state: null })}
@@ -86,14 +103,46 @@ function CatalogList() {
             {stateLabel(state)} <span aria-hidden>×</span>
           </button>
         )}
+        {filtered && (
+          <button
+            onClick={() => go({ kind: null, state: null, q: null })}
+            className="text-sm text-slate-500 underline-offset-2 hover:text-slate-900 hover:underline dark:hover:text-white"
+          >
+            {t("catalog.clearFilters")}
+          </button>
+        )}
       </div>
-      <Loader loaded={loaded}>
+      <Loader
+        loaded={loaded}
+        skeleton={
+          <TableFrame>
+            <ListSkeleton rows={8} />
+          </TableFrame>
+        }
+      >
         {({ items }) => (
-          <Filtered items={items} query={query} kind={kind} state={state} label={label} />
+          <Filtered
+            items={items}
+            query={query}
+            kind={kind}
+            state={state}
+            label={label}
+            sort={sort}
+            page={page}
+            size={size}
+            onSort={(column) => go({ sort: formatSort(nextSort(sort, column, column === "usage" ? "desc" : "asc")) })}
+            onPage={(p) => go({ page: p > 1 ? p : null }, false)}
+            onSize={(s) => go({ size: s === DEFAULT_SIZE ? null : s })}
+          />
         )}
       </Loader>
     </>
   );
+}
+
+function usage(i: CatalogItem): number | null {
+  if (i.kind === "rule") return i.tests ?? null;
+  return typeof i.queries === "number" ? i.queries : null;
 }
 
 function Filtered({
@@ -102,17 +151,29 @@ function Filtered({
   kind,
   state,
   label,
+  sort,
+  page,
+  size,
+  onSort,
+  onPage,
+  onSize,
 }: {
   items: CatalogItem[];
   query: string;
   kind: string;
   state: State | null;
   label: (l: Labels | undefined, f: string) => string;
+  sort: Sort<SortKey> | null;
+  page: number;
+  size: number;
+  onSort: (column: SortKey) => void;
+  onPage: (page: number) => void;
+  onSize: (size: number) => void;
 }) {
   const { t, count } = useI18n();
   const shown = useMemo(() => {
     const q = query.toLowerCase();
-    return items.filter(
+    const rows = items.filter(
       (i) =>
         (kind === "all" || i.kind === kind) &&
         (!state || i.state === state) &&
@@ -121,42 +182,88 @@ function Filtered({
             .filter(Boolean)
             .some((v) => String(v).toLowerCase().includes(q))),
     );
-  }, [items, query, kind, state, label]);
+    return sortRows(rows, sort, (i, key) => {
+      if (key === "name") return i.kind === "concept" ? label(i.label, i.name) : i.name;
+      if (key === "owner") return i.kind === "concept" ? i.maps_to : i.owner;
+      if (key === "usage") return usage(i);
+      return i.kind === "concept" ? null : STATE_RANK[i.state ?? "unchecked"];
+    });
+  }, [items, query, kind, state, label, sort]);
+  const paged = paginate(shown, page, size);
   if (!shown.length) return <Empty>{t("common.none")}</Empty>;
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-      <table className="w-full text-sm">
-        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-          {shown.map((i) => (
-            <tr key={i.id} className="align-top hover:bg-slate-50 dark:hover:bg-slate-800/50">
-              <td className="px-4 py-3">
-                <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                  {t(`kind.${i.kind}` as Key)}
-                  {i.type ? ` · ${i.type}` : ""}
-                </div>
-                <MemberLink id={i.id}>{i.kind === "concept" ? label(i.label, i.name) : i.name}</MemberLink>
-                {i.description && (
-                  <div className="mt-0.5 max-w-xl text-slate-600 dark:text-slate-400">{i.description}</div>
-                )}
-              </td>
-              <td className="hidden px-4 py-3 text-slate-600 md:table-cell dark:text-slate-400">
-                {i.kind === "concept" ? i.maps_to : (i.owner ?? t("common.noOwner"))}
-              </td>
-              <td className="hidden px-4 py-3 text-right tabular-nums text-slate-500 sm:table-cell">
-                {i.kind === "rule"
-                  ? `${count(i.versions, "catalog.version", "catalog.versions")} · ${count(i.tests, "catalog.test", "catalog.tests")}`
-                  : typeof i.queries === "number"
-                    ? count(i.queries, "common.query", "common.queries")
-                    : ""}
-              </td>
-              <td className="px-4 py-3 text-right">
-                {i.kind !== "concept" && <StateBadge state={i.state} />}
-              </td>
+    <>
+      <div className="mb-2 text-sm text-slate-500" aria-live="polite">
+        {count(shown.length, "table.result", "table.results")}
+      </div>
+      <TableFrame
+        footer={
+          <Pagination
+            page={paged.page}
+            pages={paged.pages}
+            from={paged.from}
+            to={paged.to}
+            total={shown.length}
+            size={size}
+            onPage={onPage}
+            onSize={onSize}
+          />
+        }
+      >
+        <table className="w-full text-sm">
+          <thead className="border-b border-slate-200 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-900">
+            <tr>
+              <SortHeader label={t("table.name")} column="name" sort={sort} onSort={onSort} />
+              <SortHeader
+                label={t("catalog.colOwner")}
+                column="owner"
+                sort={sort}
+                onSort={onSort}
+                className="hidden md:table-cell"
+              />
+              <SortHeader
+                label={t("catalog.colUsage")}
+                column="usage"
+                sort={sort}
+                onSort={onSort}
+                align="right"
+                className="hidden sm:table-cell"
+              />
+              <SortHeader label={t("table.status")} column="status" sort={sort} onSort={onSort} align="right" />
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            {paged.rows.map((i) => (
+              <tr key={i.id} className="align-top transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                <td className="px-4 py-3">
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                    {t(`kind.${i.kind}` as Key)}
+                    {i.type ? ` · ${i.type}` : ""}
+                  </div>
+                  <MemberLink id={i.id}>{i.kind === "concept" ? label(i.label, i.name) : i.name}</MemberLink>
+                  {i.description && (
+                    <div className="mt-0.5 max-w-xl text-slate-600 dark:text-slate-400">{i.description}</div>
+                  )}
+                </td>
+                <td className="hidden px-4 py-3 text-slate-600 md:table-cell dark:text-slate-400">
+                  {i.kind === "concept" ? i.maps_to : (i.owner ?? t("common.noOwner"))}
+                </td>
+                <td className="hidden px-4 py-3 text-right tabular-nums text-slate-500 sm:table-cell">
+                  {i.kind === "rule"
+                    ? `${count(i.versions, "catalog.version", "catalog.versions")} · ${count(i.tests, "catalog.test", "catalog.tests")}`
+                    : typeof i.queries === "number"
+                      ? count(i.queries, "common.query", "common.queries")
+                      : ""}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  {i.kind !== "concept" && <StateBadge state={i.state} />}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableFrame>
+    </>
   );
 }
 
@@ -165,9 +272,7 @@ function MemberView({ id }: { id: string }) {
   const loaded = useLoad(() => endpoints.member(id), `member:${id}`);
   return (
     <>
-      <Link href="/catalog/" className="text-sm text-sky-700 hover:underline dark:text-sky-400">
-        ← {t("common.back")}
-      </Link>
+      <BackLink href="/catalog/">{t("common.back")}</BackLink>
       <div className="mt-2">
         <Loader loaded={loaded}>{(m) => <MemberBody m={m} />}</Loader>
       </div>
