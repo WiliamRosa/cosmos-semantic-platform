@@ -1259,9 +1259,10 @@ def test_dbt_export_fails_closed(graph):
     with pytest.raises(MetricLossError) as exc:
         export_dbt(graph.project, allow_policy_loss=True)
     assert str(exc.value) == (
-        "2 metrics (revenue_year_to_date, revenue_month_to_date) would NOT be exported "
+        "3 metrics (revenue_year_to_date, revenue_month_to_date, revenue_rolling_7_days) would NOT be exported "
         "(revenue_year_to_date: it is cumulative, and the dbt export does not carry it yet; "
-        "revenue_month_to_date: it is cumulative, and the dbt export does not carry it yet); "
+        "revenue_month_to_date: it is cumulative, and the dbt export does not carry it yet; "
+        "revenue_rolling_7_days: it is cumulative, and the dbt export does not carry it yet); "
         "the dbt model would not have them. Pass --allow-metric-loss to export anyway"
     )
 
@@ -1339,7 +1340,7 @@ def test_dbt_export_round_trip(graph, tmp_path):
         assert f"{key}: not exported to dbt yet" in joined
     assert "user_context: region" in joined
     assert "not America/New_York" in joined
-    assert len(exported.warnings) == 16
+    assert len(exported.warnings) == 17
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -1478,7 +1479,7 @@ def test_dbt_export_states_each_reason(graph):
     project = Project.model_validate(data)
     with pytest.raises(MetricLossError) as exc:
         export_dbt(project)
-    assert str(exc.value).startswith("14 metrics (revenue_year_to_date, revenue_month_to_date, ")
+    assert str(exc.value).startswith("15 metrics (revenue_year_to_date, revenue_month_to_date, ")
     result = export_dbt(project, allow_metric_loss=True)
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in result.warnings}
     for name in (*CUMULATIVE, "revenue_7d"):
@@ -1511,7 +1512,7 @@ def test_dbt_export_states_each_reason(graph):
             "returns as NULL where the engine returns 0; it is not exported to dbt"
         )
     lost = {k.split(".", 1)[1] for k, r in reasons.items() if r.endswith("not exported to dbt")}
-    assert len(lost) == 14
+    assert len(lost) == 15
     exported = {m["name"] for m in yaml.safe_load(result.text)["metrics"]}
     assert not exported & lost
     assert {"completed_orders", "completed_buyers", "open_revenue", "cnt_diff"} <= exported
@@ -1541,7 +1542,10 @@ def test_cli_export_dbt(tmp_path):
     assert "1 row filter (customers.by_region) and the sensitivity" in refused.stderr
     refused = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "--allow-policy-loss"])
     assert refused.exit_code == 1
-    assert "2 metrics (revenue_year_to_date, revenue_month_to_date)" in refused.stderr
+    assert (
+        "3 metrics (revenue_year_to_date, revenue_month_to_date, revenue_rolling_7_days)"
+        in refused.stderr
+    )
     flags = ["--allow-policy-loss", "--allow-metric-loss"]
     result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), *flags])
     assert result.exit_code == 0, result.output
@@ -1551,5 +1555,5 @@ def test_cli_export_dbt(tmp_path):
     out = tmp_path / "models" / "semantic_models.yml"
     result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "16 warnings" in result.stdout
+    assert "17 warnings" in result.stdout
     assert import_model("dbt", out, schema="public").warnings == []
