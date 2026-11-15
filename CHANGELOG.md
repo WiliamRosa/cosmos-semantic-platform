@@ -99,6 +99,25 @@ a supervised agent team are also new.
   the Cosmos importer and planner, on every database
   ([interoperability](docs/interoperability.md#exporting-cube)).
 
+- `cosmos export dbt` writes the model as dbt Semantic Layer (MetricFlow) YAML (DEC-11, first
+  slice): semantic models with entities, dimensions and measures (each with `create_metric`),
+  and simple, ratio and derived metrics. Filters become
+  `{{ Dimension('entity__dimension') }}`, and division in derived metrics and AVG get the Cube
+  export's `1e0 *` factor. `cosmos import dbt --schema <schema>` reads the export back with the
+  same numbers in Cosmos, and now also reads measure descriptions, owners from
+  `config.meta.owner`, and `number` and `boolean` dimension types kept in
+  `config.meta.cosmos_type`. Row filters and sensitivity fail closed unless
+  `--allow-policy-loss` is given, and cumulative metrics, filters on a time dimension, a
+  business rule or `$user`, and metrics that use one of these unless `--allow-metric-loss` is
+  given; cumulative metrics come in a later slice. Where a metric filter matches no rows in a
+  group, the engine returns 0 for a count, and MetricFlow no row (alone) or NULL (alongside
+  other metrics), so ratio and derived metrics over a filtered count are refused the same way,
+  and so is a filtered ratio that reaches a count unless it is two plain inputs on one model.
+  Business rules, the glossary, business
+  context, user context and the time zone are listed as warnings on standard error. Round-trip
+  and same-numbers tests, through the Cosmos importer and planner, on every database
+  ([interoperability](docs/interoperability.md#exporting-dbt)).
+
 ### Changed
 
 - Tests render CLI help as plain, unwrapped text everywhere, so a test reading `--help` behaves
