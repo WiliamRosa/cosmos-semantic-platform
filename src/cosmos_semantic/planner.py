@@ -175,13 +175,14 @@ class Planner:
         groups: dict[str, _Group] = {}
         metric_exprs: dict[str, exp.Expression] = {}
         cumulative: dict[str, CumulativeMetric] = {}
+        windows: dict[str, CumulativeMetric] = {}
         for name in request.metrics:
             if name in metric_exprs:
                 raise QueryError(f"metric `{name}` requested more than once")
             metric_exprs[name] = self._metric_expr(name, groups, set())
             metric = g.metrics.get(name)
             if isinstance(metric, CumulativeMetric):
-                cumulative[name] = metric
+                (windows if metric.window else cumulative)[name] = metric
 
         models = {g.measure_owner[i.measure] for grp in groups.values() for i in grp.inputs}
         data_sources = {g.models[m].spec.data_source for m in models}
@@ -194,6 +195,10 @@ class Planner:
             select, joined = self._group_select(group, dims, filters, principal)
             ctes.append((f"{group.model}_agg", select))
             used_models |= joined
+        for name, metric in windows.items():
+            column = metric_exprs[name]
+            ctes.append((f"{name}_window", self._window_select(column, metric, dims)))
+            metric_exprs[name] = exp.column(column.name, table=f"{name}_window")
 
         final = self._final_select(ctes, dims, metric_exprs, cumulative, request)
         clock = now if request.as_of is None else dt.datetime.combine(request.as_of, dt.time())
@@ -262,7 +267,17 @@ class Planner:
             )
         if isinstance(metric, CumulativeMetric):
             if metric.window:
-                raise QueryError(f"`{name}`: metrics with `window` are not in the MVP")
+                if metric.window_days() is None:
+                    raise QueryError(
+                        f"`{name}`: window `{metric.window}` is not supported; "
+                        "only windows in days, such as `7 days`, for now"
+                    )
+                agg = g.models[g.measure_owner[metric.measure]].measures[metric.measure].agg
+                if agg not in _WINDOW_AGGS:
+                    raise QueryError(
+                        f"`{name}`: a rolling window over a `{agg}` measure is not supported; "
+                        "it cannot be combined from daily values (use sum, count, min or max)"
+                    )
             if extra_filter or stack != {name}:
                 raise QueryError(f"`{name}`: a cumulative metric cannot be part of another metric")
             return self._input(_Input(metric.measure, None), groups)
@@ -546,7 +561,9 @@ class Planner:
         cumulative: dict[str, CumulativeMetric],
         request: QueryRequest,
     ) -> exp.Select:
-        names = [name for name, _ in ctes]
+        # A CTE only feeding another one (an aggregate under a rolling window) is not joined.
+        used = {c.table for e in metric_exprs.values() for c in e.find_all(exp.Column)}
+        names = [name for name, _ in ctes if name in used]
         # With more than one CTE and dimensions, the "spine" is the union of the dimension
         # combinations of all CTEs; each CTE is LEFT JOINed to it with null-safe equality.
         # Postgres rejects FULL JOIN with IS NOT DISTINCT FROM.
@@ -609,11 +626,46 @@ class Planner:
             select = select.limit(request.limit)
         return select
 
-    def _cumulative(self, value, metric: CumulativeMetric, dims, dim_out) -> exp.Expression:
+    def _time_dim(self, metric: CumulativeMetric, dims: list[DimensionRef]) -> DimensionRef:
         time_dims = [d for d in dims if self.graph.dimension(d).type == "time"]
         if len(time_dims) != 1:
             raise QueryError(f"`{metric.name}` needs exactly one time dimension in the request")
-        time = time_dims[0]
+        return time_dims[0]
+
+    def _window_select(
+        self, value: exp.Column, metric: CumulativeMetric, dims: list[DimensionRef]
+    ) -> exp.Select:
+        """Rolling window as a self-join of the daily aggregate, portable to every source (SQL
+        Server has no RANGE frame with an interval): each day ``cur`` combines the rows ``prev``
+        of the same other dimensions whose day is in [cur - (N - 1) days, cur]. The output has
+        the days of the aggregate, as ``grain_to_date``; a null day has a null value."""
+        time = self._time_dim(metric, dims)
+        if time.grain != "day":
+            raise QueryError(
+                f"`{metric.name}`: a window in days needs the time dimension at day grain "
+                f"(`{_dim_member(time)}` requested); other grains are not supported yet"
+            )
+        days = metric.window_days()
+        assert days is not None
+        source = exp.to_table(value.table)
+        cur = {d: exp.column(d.alias, table="cur") for d in dims}
+        prev = {d: exp.column(d.alias, table="prev") for d in dims}
+        on = [
+            exp.LTE(this=prev[time], expression=cur[time]),
+            exp.GTE(this=dialects.add_days(prev[time], days - 1), expression=cur[time]),
+        ] + [exp.NullSafeEQ(this=prev[d], expression=cur[d]) for d in dims if d != time]
+        owner = self.graph.measure_owner[metric.measure]
+        agg = self.graph.models[owner].measures[metric.measure].agg
+        combined = _WINDOW_AGGS[agg](this=exp.column(value.name, table="prev"))
+        return (
+            exp.select(*[c.copy().as_(d.alias) for d, c in cur.items()], combined.as_(value.name))
+            .from_(source.copy().as_("cur"))
+            .join(source.copy().as_("prev"), on=exp.and_(*on), join_type="left")
+            .group_by(*[c.copy() for c in cur.values()])
+        )
+
+    def _cumulative(self, value, metric: CumulativeMetric, dims, dim_out) -> exp.Expression:
+        time = self._time_dim(metric, dims)
         partition = [dim_out(d) for d in dims if d != time]
         if metric.grain_to_date:
             partition.append(self._trunc(dim_out(time), metric.grain_to_date))
@@ -644,6 +696,9 @@ class Planner:
             spec=spec,
         )
 
+
+# How daily aggregates combine over a rolling window; other aggregations are refused.
+_WINDOW_AGGS = {"sum": exp.Sum, "count": exp.Sum, "min": exp.Min, "max": exp.Max}
 
 _LEVEL = {"personal": "personal", "sensitive": "sensitive personal"}
 

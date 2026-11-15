@@ -149,9 +149,29 @@ Time dimensions accept a grain suffix in requests: `orders.ordered_at__day`, `__
 | `simple` | `measure`, optional `filter` | The measure, with an optional filter |
 | `ratio` | `numerator`, `denominator` | Real division, safe against zero; each side aggregated at its own grain |
 | `derived` | `expr` with `{measure}` or `{metric}` references | Expression over already aggregated values; division is real and safe against zero |
-| `cumulative` | `measure` and `grain_to_date` (`window` is not in the MVP) | Running total within each period; requires exactly one time dimension in the request |
+| `cumulative` | `measure`, and `grain_to_date` or `window` | Running total within each period (`grain_to_date`), or over a rolling window (`window`); requires exactly one time dimension in the request |
 
 Because the planner aggregates each measure at its own grain before combining them, ratios and derived metrics can use measures from different models without row multiplication.
+
+#### Rolling windows
+
+A rolling window aggregates the measure over the last N days, today included:
+
+```yaml
+metrics:
+  - name: revenue_rolling_7_days
+    type: cumulative
+    measure: revenue
+    window: 7 days
+```
+
+- **Range.** The value on day D aggregates the facts dated from D − (N − 1) days to D, both included: `7 days` on 10 March covers 4 to 10 March. This is dbt MetricFlow's `window` convention (`metric_time <= D` and `metric_time > D - N days`).
+- **Days in the output.** As with `grain_to_date`, a row appears for each day (and combination of the other requested dimensions) that has facts after the request's filters; there is no time spine yet. Days without facts are not output, but they still count as days of the window, so the window is a calendar range, never "the last N rows". On the first days of the data the window simply has fewer days with facts. MetricFlow, which joins a time spine, also outputs days without facts whose window has some.
+- **Filters.** Request filters apply to the facts before the window is computed: with a filter on the last 45 days, the first days of that range see only the filtered facts.
+- **Other dimensions.** Each combination of the other requested dimensions has its own window.
+- **Measures.** `sum` and `count` add up over the window; `min` and `max` take the minimum or maximum of the window. `avg` and `count_distinct` are refused: they cannot be combined from daily values, and recomputing them over each window is a later slice.
+- **Supported for now.** Only windows in days (`1 day`, `7 days`, `30 days`), queried with the time dimension at day grain (`orders.ordered_at__day`). Other units (`2 weeks`, `1 month`) and other grains are refused with an error.
+- **SQL.** The daily aggregate is joined to itself on the date range, with no window frame, so the same SQL shape runs on every data source (SQL Server has no `RANGE` frame with an interval).
 
 ### Row filters
 
@@ -445,4 +465,4 @@ Whatever Cube does not represent the same way produces a warning on export:
 
 - Conversion (funnel) metrics.
 - A time spine for series without gaps on days without data.
-- Rolling-window cumulative metrics.
+- Rolling windows in units other than days, or at grains other than the day.

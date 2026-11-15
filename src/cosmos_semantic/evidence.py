@@ -309,6 +309,8 @@ class EvidenceBuilder:
             return REF_RE.sub(lambda m: f"({self.formula(m.group(1), seen)})", metric.expr)
         if isinstance(metric, CumulativeMetric):
             inner = self.formula(metric.measure, seen)
+            if metric.window:
+                return f"{inner} over the {metric.window} ending on each day"
             period = metric.grain_to_date or "all time"
             return f"running total of {inner} within each {period}"
         return name

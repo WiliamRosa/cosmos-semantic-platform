@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { ProcessGraph } from "@/components/ProcessGraph";
-import { Card, Empty, Loader, PageHeader, Reasons, StateBadge } from "@/components/ui";
+import { BackLink, Card, Empty, Loader, PageHeader, Reasons, StateBadge } from "@/components/ui";
 import { endpoints } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useLoad } from "@/lib/session";
@@ -26,9 +26,7 @@ function Processes() {
     const focus = name === "*" ? undefined : `process:${name}`;
     return (
       <>
-        <Link href="/processes/" className="text-sm text-sky-700 hover:underline dark:text-sky-400">
-          ← {t("common.back")}
-        </Link>
+        <BackLink href="/processes/">{t("common.back")}</BackLink>
         <PageHeader
           title={name === "*" ? t("processes.whole") : `${t("processes.map")}: ${name}`}
           lead={t("processes.legend")}
@@ -49,13 +47,13 @@ function Processes() {
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {processes.map((p) => (
                 <Link key={p.name} href={`/processes/?name=${encodeURIComponent(p.name)}`}>
-                  <Card className="h-full transition hover:border-sky-300 hover:shadow-md">
+                  <Card className="h-full transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md dark:hover:border-sky-700">
                     <div className="flex items-start justify-between gap-2">
                       <h2 className="font-semibold">{p.name}</h2>
                       <StateBadge state={p.state} />
                     </div>
                     {p.description && (
-                      <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">{p.description}</p>
+                      <p className="mt-2 line-clamp-3 text-sm text-slate-600 dark:text-slate-400">{p.description}</p>
                     )}
                     <Reasons reasons={p.reasons} />
                     <dl className="mt-4 grid grid-cols-2 gap-1 text-sm">

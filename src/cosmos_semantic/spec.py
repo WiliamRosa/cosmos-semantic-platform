@@ -7,6 +7,7 @@ published in ``schema/`` is generated from them (``cosmos schema``).
 from __future__ import annotations
 
 import datetime as dt
+import re
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -100,7 +101,11 @@ class CumulativeMetric(_MetricBase):
     measure: Name
     grain_to_date: Literal["day", "week", "month", "quarter", "year"] | None = None
     window: str | None = Field(
-        None, description="Rolling window, such as `7 days`. Not in the MVP."
+        None,
+        description=(
+            "Rolling window, such as `7 days`: the value on day D aggregates the measure over "
+            "the days D - (N - 1) to D. Only windows in days, queried at day grain, for now."
+        ),
     )
 
     @model_validator(mode="after")
@@ -108,6 +113,11 @@ class CumulativeMetric(_MetricBase):
         if self.grain_to_date and self.window:
             raise ValueError("use `grain_to_date` or `window`, not both")
         return self
+
+    def window_days(self) -> int | None:
+        """N for a `window` of `N days` (or `1 day`); None for any other window."""
+        match = re.fullmatch(r"\s*(\d+)\s+days?\s*", self.window or "", re.IGNORECASE)
+        return int(match.group(1)) if match and int(match.group(1)) > 0 else None
 
 
 Metric = Annotated[

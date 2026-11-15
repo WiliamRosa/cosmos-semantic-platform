@@ -310,7 +310,10 @@ class _Builder:
             item["grain_to_date"] = grain_to_date
         elif window:
             item["window"] = str(window)
-            self.warnings.append(f"metrics.{name}: rolling window `{window}` is not in the MVP")
+            self.warnings.append(
+                f"metrics.{name}: rolling window `{window}`: only windows in days, queried by "
+                "day, are supported, and only days with data appear (MetricFlow uses a time spine)"
+            )
         self.metrics.append(item)
 
     # -- filtros Jinja do MetricFlow -----------------------------------------

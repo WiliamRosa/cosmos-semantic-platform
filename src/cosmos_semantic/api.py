@@ -278,9 +278,11 @@ def _add_console(app: FastAPI, service: SemanticService, User: Any) -> None:
     def console_member(member_id: str, user: User) -> dict[str, Any]:
         return console.member(member_id, user)
 
-    @app.get("/v1/console/answers", summary="Console: recent audited answers")
-    def console_answers(user: User, limit: int = 50, metric: str | None = None) -> dict[str, Any]:
-        return console.answers(user, limit=min(limit, 500), metric=metric)
+    @app.get("/v1/console/answers", summary="Console: audited answers, newest first, paged")
+    def console_answers(
+        user: User, limit: int = 50, offset: int = 0, metric: str | None = None
+    ) -> dict[str, Any]:
+        return console.answers(user, limit=min(limit, 500), offset=offset, metric=metric)
 
     @app.get("/v1/console/answers/{query_id}", summary="Console: one audited answer")
     def console_answer(query_id: str, user: User) -> dict[str, Any]:
@@ -291,8 +293,8 @@ def _add_console(app: FastAPI, service: SemanticService, User: Any) -> None:
         return console.usage(user)
 
     @app.get("/v1/console/runs", summary="Console: check runs (rule tests, reconciliations)")
-    def console_runs(_user: User, limit: int = 30) -> dict[str, Any]:
-        return console.runs(limit=min(limit, 500))
+    def console_runs(_user: User, limit: int = 30, offset: int = 0) -> dict[str, Any]:
+        return console.runs(limit=min(limit, 500), offset=offset)
 
     if (CONSOLE_DIST / "index.html").exists():
         app.mount("/console", _console_files(), name="console")

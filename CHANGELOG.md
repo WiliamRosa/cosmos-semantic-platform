@@ -15,6 +15,13 @@ a supervised agent team are also new.
 
 ### Added
 
+- Rolling-window cumulative metrics in days (DEC-14): `window: 7 days` on a `cumulative` metric
+  aggregates the measure over the facts dated from D − 6 days to D, for each day D of a request
+  at day grain (dbt MetricFlow's convention). Only days with facts appear, as with
+  `grain_to_date`. `sum`, `count`, `min` and `max` measures are supported; `avg` and
+  `count_distinct`, other units and other grains are refused with an error. The example model
+  gains `revenue_rolling_7_days`, with reference cases A29 and A30.
+
 - `cosmos query --csv` prints the result as CSV for spreadsheets and scripts: a header, then one
   line per row, with raw values and nulls as empty fields. Standard output carries only the CSV,
   and `--csv` with `--json` is an error. Contributed by @zheng-guannan577 in #24, the project's
@@ -125,10 +132,23 @@ a supervised agent team are also new.
   and same-numbers tests, through the Cosmos importer and planner, on every database
   ([interoperability](docs/interoperability.md#exporting-dbt)).
 
+- The console pages every long list: the catalog (search, filters, sort and page in the address,
+  so a link reproduces the view), audited answers, check runs and the usage tables, each sortable
+  by column. `GET /v1/console/answers` and `GET /v1/console/runs` take `offset` next to `limit`
+  and return `total`, so every answer in the audit log is reachable, not only the latest 50.
+  `Ctrl+K` (`⌘K`) jumps to any metric, measure, rule, concept, process or page, and `/` searches
+  the list on the page ([console](docs/console.md#find-your-way)).
+
 ### Changed
 
 - Tests render CLI help as plain, unwrapped text everywhere, so a test reading `--help` behaves
   the same on CI, where Typer otherwise forces a coloured terminal (#25).
+
+- The console has a new layout: a collapsible sidebar (a drawer on phones), a light, dark or
+  system theme remembered in the browser, the Inter font self-hosted at build time, loading
+  skeletons instead of a "Loading" line, a visible focus ring for keyboard users, and "Back"
+  links that return to the filtered list. The public demo greets first-time visitors with three
+  places to start.
 
 ## [0.3.0] - 2026-11-04
 

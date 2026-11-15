@@ -263,11 +263,12 @@ def _metric_text(metric) -> str:
     if isinstance(metric, DerivedMetric):
         return f"the expression {metric.expr}"
     if isinstance(metric, CumulativeMetric):
-        period = (
-            f"since the start of each {metric.grain_to_date}"
-            if metric.grain_to_date
-            else "running total"
-        )
+        if metric.grain_to_date:
+            period = f"since the start of each {metric.grain_to_date}"
+        elif metric.window:
+            period = f"over a rolling window of {metric.window} ending on each day"
+        else:
+            period = "running total"
         return f"`{metric.measure}` {period}"
     return ""
 

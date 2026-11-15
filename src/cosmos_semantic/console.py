@@ -415,19 +415,32 @@ class Console:
         return False
 
     def answers(
-        self, principal: Principal, *, limit: int = 50, metric: str | None = None
+        self,
+        principal: Principal,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        metric: str | None = None,
     ) -> dict[str, Any]:
+        """Audited answers the principal may see, newest first, one page at a time.
+
+        ``total`` counts every visible answer, so the console can page through all of them.
+        """
         admin = self.is_admin(principal)
-        rows = []
-        for record in reversed(self._audit()):
-            if not admin and _subject(record) != principal.subject:
-                continue
-            if metric and metric not in (record.get("request") or {}).get("metrics", []):
-                continue
-            rows.append(_answer_row(record))
-            if len(rows) >= limit:
-                break
-        return {"scope": "everyone" if admin else "yours", "answers": rows}
+        visible = [
+            record
+            for record in reversed(self._audit())
+            if (admin or _subject(record) == principal.subject)
+            and (not metric or metric in (record.get("request") or {}).get("metrics", []))
+        ]
+        limit, offset = max(limit, 1), max(offset, 0)
+        return {
+            "scope": "everyone" if admin else "yours",
+            "answers": [_answer_row(r) for r in visible[offset : offset + limit]],
+            "total": len(visible),
+            "offset": offset,
+            "limit": limit,
+        }
 
     def answer(self, query_id: str, principal: Principal) -> dict[str, Any]:
         record = self.service.find_audit(query_id)
@@ -466,11 +479,16 @@ class Console:
         report = usage_report(self.service.audit_path, self.service.engine.connections, self.graph)
         return {"available": True, **report}
 
-    def runs(self, *, limit: int = 30) -> dict[str, Any]:
-        runs = self._runs()
+    def runs(self, *, limit: int = 30, offset: int = 0) -> dict[str, Any]:
+        """Check runs, newest first, one page at a time; ``total`` counts every run."""
+        runs = list(reversed(self._runs()))
+        limit, offset = max(limit, 1), max(offset, 0)
         return {
             "available": self.runs_path is not None,
-            "runs": list(reversed(runs[-limit:])),
+            "runs": runs[offset : offset + limit],
+            "total": len(runs),
+            "offset": offset,
+            "limit": limit,
         }
 
 

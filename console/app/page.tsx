@@ -1,6 +1,8 @@
 "use client";
 
+import { ArrowRight, Sparkles, X } from "lucide-react";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -21,7 +23,7 @@ import {
   STATE_STYLE,
   Stat,
 } from "@/components/ui";
-import { endpoints, type Overview, type State } from "@/lib/api";
+import { DEMO, endpoints, type Overview, type State } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useLoad } from "@/lib/session";
 
@@ -33,8 +35,73 @@ export default function OverviewPage() {
   return (
     <>
       <PageHeader title={t("overview.title")} lead={t("overview.lead")} />
+      {DEMO && <Welcome />}
       <Loader loaded={loaded}>{(o) => <OverviewBody o={o} />}</Loader>
     </>
+  );
+}
+
+const WELCOME = "cosmos.welcome";
+
+/** First visit to the demo: three places to start. Dismissed once, remembered in this browser. */
+function Welcome() {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    try {
+      setOpen(localStorage.getItem(WELCOME) !== "dismissed");
+    } catch {
+      setOpen(true);
+    }
+  }, []);
+  if (!open) return null;
+  const dismiss = () => {
+    setOpen(false);
+    try {
+      localStorage.setItem(WELCOME, "dismissed");
+    } catch {
+      /* shown again next time */
+    }
+  };
+  const steps: { href: string; key: "welcome.step1" | "welcome.step2" | "welcome.step3" }[] = [
+    { href: "/catalog/?kind=metric&sort=status", key: "welcome.step1" },
+    { href: "/answers/", key: "welcome.step2" },
+    { href: "/processes/", key: "welcome.step3" },
+  ];
+  return (
+    <section className="relative mb-6 overflow-hidden rounded-xl border border-sky-200 bg-gradient-to-br from-sky-50 via-white to-white p-5 shadow-sm dark:border-sky-900/60 dark:from-sky-950/50 dark:via-slate-900 dark:to-slate-900">
+      <button
+        onClick={dismiss}
+        aria-label={t("welcome.dismiss")}
+        className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-white hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+      >
+        <X className="h-4 w-4" />
+      </button>
+      <div className="flex items-center gap-2 text-sm font-semibold text-sky-800 dark:text-sky-200">
+        <Sparkles className="h-4 w-4" aria-hidden />
+        {t("welcome.title")}
+      </div>
+      <p className="mt-1 max-w-3xl pr-8 text-sm text-slate-600 dark:text-slate-400">{t("welcome.lead")}</p>
+      <ol className="mt-4 grid gap-3 sm:grid-cols-3">
+        {steps.map((step, i) => (
+          <li key={step.href}>
+            <Link
+              href={step.href}
+              className="group flex h-full items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm transition hover:border-sky-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-sky-700"
+            >
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-slate-900 text-xs font-semibold text-white dark:bg-white dark:text-slate-900">
+                {i + 1}
+              </span>
+              <span className="flex-1 text-slate-700 dark:text-slate-300">{t(step.key)}</span>
+              <ArrowRight
+                className="mt-0.5 h-4 w-4 shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-sky-600"
+                aria-hidden
+              />
+            </Link>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -173,7 +240,7 @@ function OverviewBody({ o }: { o: Overview }) {
                     data={o.usage.by_day.map((d) => ({ ...d, people: d.queries - d.agent }))}
                     margin={{ left: -20, right: 8, top: 4 }}
                   >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="day" tick={{ fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} />
                     <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                     <Tooltip />
@@ -215,7 +282,7 @@ function OverviewBody({ o }: { o: Overview }) {
                 }))}
                 margin={{ left: -20, right: 8 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="at" tick={{ fontSize: 10 }} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                 <Tooltip />
