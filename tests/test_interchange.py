@@ -18,6 +18,7 @@ from cosmos_semantic.errors import MetricLossError, PolicyLossError
 from cosmos_semantic.expressions import REF_RE
 from cosmos_semantic.interchange import dump_project, import_model
 from cosmos_semantic.interchange.cube import export_cube
+from cosmos_semantic.interchange.dbt import export_dbt
 from cosmos_semantic.interchange.ossie import VENDOR, export_ossie
 from cosmos_semantic.ontology import run_rule_tests
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
@@ -1208,3 +1209,347 @@ def test_cli_export_cube(tmp_path):
     assert result.exit_code == 0, result.output
     assert "16 warnings" in result.stdout
     assert import_model("cube", out).warnings == []
+
+
+# -- dbt export (semantic models, simple, ratio and derived metrics) ----------------------------
+
+
+def _dbt_round_trip(project: Project, tmp_path: Path, **options):
+    exported = export_dbt(project, **options)
+    path = tmp_path / "dbt" / "semantic_models.yml"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(exported.text, encoding="utf-8")
+    return exported, import_model("dbt", path, schema="public")
+
+
+def _dbt_test_metrics(project: Project) -> Project:
+    """The Cube test model plus the shapes dbt carries and Cube does not: a filter on another
+    model's dimension and a ratio with a filter."""
+    data = _cube_test_metrics(project).model_dump(mode="json")
+    data["metrics"] += [
+        {
+            "name": "midwest_revenue",
+            "type": "simple",
+            "measure": "revenue",
+            "filter": "{customers.region} = 'Midwest'",
+        },
+        {
+            "name": "completed_rate",
+            "type": "ratio",
+            "numerator": "revenue",
+            "denominator": "order_count",
+            "filter": "{status} = 'completed'",
+        },
+    ]
+    return Project.model_validate(data)
+
+
+def test_dbt_export_fails_closed(graph):
+    """The example has row filters, sensitivity and cumulative metrics: each loss is refused
+    until the caller accepts it."""
+    with pytest.raises(PolicyLossError) as exc:
+        export_dbt(graph.project, allow_metric_loss=True)
+    assert str(exc.value) == (
+        "1 row filter (customers.by_region) and the sensitivity of 3 dimensions "
+        "(customers.email, customers.tax_id, customers.health_plan) would NOT be exported: the "
+        "dbt export does not carry access or personal-data policies yet; the dbt model would "
+        "not have this row-level security or personal-data marking. Pass --allow-policy-loss to "
+        "export anyway"
+    )
+    with pytest.raises(MetricLossError) as exc:
+        export_dbt(graph.project, allow_policy_loss=True)
+    assert str(exc.value) == (
+        "2 metrics (revenue_year_to_date, revenue_month_to_date) would NOT be exported "
+        "(revenue_year_to_date: it is cumulative, and the dbt export does not carry it yet; "
+        "revenue_month_to_date: it is cumulative, and the dbt export does not carry it yet); "
+        "the dbt model would not have them. Pass --allow-metric-loss to export anyway"
+    )
+
+
+def test_dbt_export_round_trip(graph, tmp_path):
+    exported, back = _dbt_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
+    # The importer reads the whole export, with nothing to report.
+    assert back.warnings == []
+    doc = yaml.safe_load(exported.text)
+    models = {m["name"]: m for m in doc["semantic_models"]}
+    orders = models["orders"]
+    assert orders["model"] == "ref('orders')"
+    assert orders["defaults"] == {"agg_time_dimension": "ordered_at"}
+    assert orders["entities"][1] == {"name": "customer", "type": "foreign", "expr": "customer_id"}
+    assert orders["measures"][0]["expr"] == "1"
+    assert all(m["create_metric"] for s in doc["semantic_models"] for m in s.get("measures", []))
+    metrics = {m["name"]: m for m in doc["metrics"]}
+    assert not set(metrics) & set(CUMULATIVE)
+    assert metrics["completed_revenue"]["filter"] == (
+        "{{ Dimension('order__status') }} = 'completed'"
+    )
+    assert metrics["orders_per_buyer"]["type_params"] == {
+        "expr": "(1e0 * order_count / NULLIF(buyers, 0))",
+        "metrics": [{"name": "order_count"}, {"name": "buyers"}],
+    }
+
+    # Models, tables, owners, entities, dimensions and measures come back as they were (AVG
+    # with a `1e0 *` factor, so it is real in dbt too).
+    def shape(project: Project) -> dict:
+        return {
+            m.name: (
+                m.table,
+                m.owner,
+                m.description,
+                [e.model_dump() for e in m.entities],
+                [(d.name, d.type, d.expr, d.description) for d in m.dimensions],
+                [(x.name, x.agg, x.expr, x.description) for x in m.measures],
+            )
+            for m in project.semantic_models
+        }
+
+    want = shape(Project.model_validate(_without_policies(graph.project.model_dump(mode="json"))))
+    avg = want["order_items"][5][2]
+    want["order_items"][5][2] = (avg[0], avg[1], "1e0 * quantity", avg[3])
+    assert shape(back.project) == want
+
+    # Every other metric comes back with its type, owner and description; dbt requires a
+    # label, so a metric without one gets its name. Filters name the model; division is real.
+    def metric_shape(project: Project) -> dict:
+        out = {}
+        for m in project.metrics:
+            data = m.model_dump(exclude_none=True)
+            if data.get("label") == m.name:
+                del data["label"]
+            out[m.name] = data
+        return out
+
+    want = {k: v for k, v in metric_shape(graph.project).items() if k not in CUMULATIVE}
+    want["completed_revenue"]["filter"] = "{orders.status} = 'completed'"
+    want["orders_per_buyer"]["expr"] = "(1e0 * {order_count} / NULLIF({buyers}, 0))"
+    want["items_per_order"]["expr"] = "(1e0 * {items_sold} / NULLIF({order_count}, 0))"
+    assert metric_shape(back.project) == want
+
+    # Every loss is a warning: policies, cumulative metrics, the schema, and what a later
+    # slice exports.
+    joined = "\n".join(exported.warnings)
+    assert "semantic_models.customers.row_filters.by_region: not exported to dbt" in joined
+    assert sum("its sensitivity is not exported" in w for w in exported.warnings) == 3
+    for name in CUMULATIVE:
+        assert f"metrics.{name}: it is cumulative" in joined
+    assert "import with `cosmos import dbt --schema public`" in joined
+    for name in ("products", "order_items"):
+        assert f"semantic_models.{name}: it has measures but no time dimension" in joined
+    for key in ("business_rules", "glossary", "teams", "systems", "processes"):
+        assert f"{key}: not exported to dbt yet" in joined
+    assert "user_context: region" in joined
+    assert "not America/New_York" in joined
+    assert len(exported.warnings) == 16
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_dbt_export_same_numbers(graph, tmp_path, source, request):
+    """Exported to dbt and imported back, the model answers the reference queries with the
+    hand-written SQL's numbers, on every database available."""
+    connector = request.getfixturevalue(source)
+    _, back = _dbt_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
+    other = compile_project(back.project)
+    cases = _cube_cases(graph.project, policies=False)
+    assert len(cases) == 25
+    for case in cases:
+        result = run_case(case, other, connector)
+        assert result.status == "pass", f"{case.id}: {result.detail}"
+    # With the original policies put back, the queries that read the user pass too.
+    governed = compile_project(_with_policies(back.project, graph.project))
+    cases = _cube_cases(graph.project, policies=True)
+    assert {"R17", "R18"} <= {c.id for c in cases}
+    assert len(cases) == 40
+    for case in cases:
+        result = run_case(case, governed, connector)
+        assert result.status == "pass", f"{case.id}: {result.detail}"
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_dbt_export_metric_shapes_same_numbers(graph, tmp_path, source, request):
+    """Every measure and metric the export writes returns the native numbers after the round
+    trip, alone and by order status."""
+    connector = request.getfixturevalue(source)
+    project = _dbt_test_metrics(graph.project)
+    full = compile_project(project)
+    exported, back = _dbt_round_trip(project, tmp_path)
+    assert back.warnings == []
+    metrics = {m["name"]: m for m in yaml.safe_load(exported.text)["metrics"]}
+    assert metrics["midwest_revenue"]["filter"] == (
+        "{{ Dimension('customer__region') }} = 'Midwest'"
+    )
+    assert metrics["discounted_revenue"]["filter"] == (
+        "{{ Dimension('order__has_discount') }} AND {{ Dimension('order__status') }} <> 'canceled'"
+    )
+    assert metrics["share_of_net"]["type_params"]["expr"] == (
+        "(1e0 * net_revenue / NULLIF(((1e0 * revenue / NULLIF(2, 0))), 0))"
+    )
+    other = compile_project(back.project)
+    names = [*full.measure_owner, *(m.name for m in project.metrics)]
+    assert len(names) == 32
+    for name in names:
+        for dims in ([], ["orders.status"]):
+            query = QueryRequest(metrics=[name], dimensions=dims)
+            if dims and full.measure_owner.get(name) in ("customers", "products", "sellers"):
+                continue  # those models do not reach orders
+            same(rows(full, connector, query), rows(other, connector, query))
+    # The boolean dimension keeps its type (SQL Server selects it through a CASE).
+    query = QueryRequest(metrics=["revenue"], dimensions=["orders.has_discount"])
+    same(rows(full, connector, query), rows(other, connector, query))
+
+
+def test_dbt_export_states_each_reason(graph):
+    data = _without_policies(_without_business(graph.project))
+    data["metrics"] += [
+        {
+            "name": "recent_revenue",
+            "type": "simple",
+            "measure": "revenue",
+            "filter": "{orders.ordered_at__month} >= DATE '2026-01-01'",
+        },
+        {
+            "name": "january_revenue",
+            "type": "simple",
+            "measure": "revenue",
+            "filter": "{orders.ordered_at} <= '2026-01-31'",
+        },
+        {"name": "my_revenue", "type": "simple", "measure": "revenue", "filter": "$user.id = 1"},
+        {"name": "raw_gap", "type": "derived", "expr": "{revenue} - amount"},
+        {"name": "gap_share", "type": "ratio", "numerator": "raw_gap", "denominator": "revenue"},
+        {
+            "name": "ytd_share",
+            "type": "ratio",
+            "numerator": "revenue_year_to_date",
+            "denominator": "revenue",
+        },
+        {"name": "revenue_7d", "type": "cumulative", "measure": "revenue", "window": "7 days"},
+        # Filtered counts are exported, but not as inputs of ratio or derived metrics; a
+        # filtered sum is.
+        {
+            "name": "completed_orders",
+            "type": "simple",
+            "measure": "order_count",
+            "filter": "{status} = 'completed'",
+        },
+        {
+            "name": "completed_buyers",
+            "type": "simple",
+            "measure": "buyers",
+            "filter": "{status} = 'completed'",
+        },
+        {"name": "open_orders", "type": "derived", "expr": "{order_count} - {completed_orders}"},
+        {
+            "name": "completion_rate",
+            "type": "ratio",
+            "numerator": "completed_orders",
+            "denominator": "order_count",
+        },
+        {
+            "name": "buyer_share",
+            "type": "ratio",
+            "numerator": "completed_buyers",
+            "denominator": "buyers",
+        },
+        {"name": "open_revenue", "type": "derived", "expr": "{revenue} - {completed_revenue}"},
+        # A ratio's own filter reaches every input: refused over a count across models or
+        # over a nested metric, exported for two plain inputs on one model.
+        {
+            "name": "pay_per_order_f",
+            "type": "ratio",
+            "numerator": "payment_count",
+            "denominator": "order_count",
+            "filter": "{orders.status} = 'completed'",
+        },
+        {"name": "cnt_diff", "type": "derived", "expr": "{order_count} - {payment_count}"},
+        {
+            "name": "cnt_diff_share",
+            "type": "ratio",
+            "numerator": "cnt_diff",
+            "denominator": "revenue",
+            "filter": "{orders.status} = 'completed'",
+        },
+        {
+            "name": "completed_aov",
+            "type": "ratio",
+            "numerator": "revenue",
+            "denominator": "order_count",
+            "filter": "{status} = 'completed'",
+        },
+    ]
+    project = Project.model_validate(data)
+    with pytest.raises(MetricLossError) as exc:
+        export_dbt(project)
+    assert str(exc.value).startswith("14 metrics (revenue_year_to_date, revenue_month_to_date, ")
+    result = export_dbt(project, allow_metric_loss=True)
+    reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in result.warnings}
+    for name in (*CUMULATIVE, "revenue_7d"):
+        assert reasons[f"metrics.{name}"].startswith("it is cumulative")
+    for name, ref in (
+        ("recent_revenue", "orders.ordered_at__month"),
+        ("january_revenue", "orders.ordered_at"),
+    ):
+        assert reasons[f"metrics.{name}"].startswith(
+            f"its filter uses the time dimension `{ref}`, which MetricFlow compares truncated"
+        )
+    assert reasons["metrics.my_revenue"].startswith("its filter uses $user")
+    assert reasons["metrics.raw_gap"].startswith("its expression uses bare columns (amount)")
+    assert reasons["metrics.gap_share"].startswith("it uses `raw_gap`, which is not exported")
+    assert reasons["metrics.ytd_share"].startswith(
+        "it uses `revenue_year_to_date`, which is not exported"
+    )
+    for name, ref in (
+        ("open_orders", "completed_orders"),
+        ("completion_rate", "completed_orders"),
+        ("buyer_share", "completed_buyers"),
+    ):
+        assert reasons[f"metrics.{name}"] == (
+            f"it uses `{ref}`, a filtered count, which MetricFlow returns as NULL where the "
+            "engine returns 0; it is not exported to dbt"
+        )
+    for name, count in (("pay_per_order_f", "order_count"), ("cnt_diff_share", "order_count")):
+        assert reasons[f"metrics.{name}"] == (
+            f"its filter turns the count `{count}` into a filtered count, which MetricFlow "
+            "returns as NULL where the engine returns 0; it is not exported to dbt"
+        )
+    lost = {k.split(".", 1)[1] for k, r in reasons.items() if r.endswith("not exported to dbt")}
+    assert len(lost) == 14
+    exported = {m["name"] for m in yaml.safe_load(result.text)["metrics"]}
+    assert not exported & lost
+    assert {"completed_orders", "completed_buyers", "open_revenue", "cnt_diff"} <= exported
+    assert "completed_aov" in exported
+    # A business rule in a filter is refused too.
+    rules = graph.project.model_dump(mode="json")
+    rules["metrics"].append(
+        {
+            "name": "active_customers",
+            "type": "simple",
+            "measure": "customer_count",
+            "filter": "{rule.active_customer}",
+        }
+    )
+    warnings = export_dbt(Project.model_validate(rules), **LOSS_FLAGS).warnings
+    assert (
+        "metrics.active_customers: its filter uses the business rule `rule.active_customer`, "
+        "not exported yet; it is not exported to dbt"
+    ) in warnings
+
+
+def test_cli_export_dbt(tmp_path):
+    runner = CliRunner()
+    refused = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE)])
+    assert refused.exit_code == 1
+    assert refused.stdout == ""
+    assert "1 row filter (customers.by_region) and the sensitivity" in refused.stderr
+    refused = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "--allow-policy-loss"])
+    assert refused.exit_code == 1
+    assert "2 metrics (revenue_year_to_date, revenue_month_to_date)" in refused.stderr
+    flags = ["--allow-policy-loss", "--allow-metric-loss"]
+    result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), *flags])
+    assert result.exit_code == 0, result.output
+    assert yaml.safe_load(result.stdout)["semantic_models"]
+    assert "warning:" not in result.stdout
+    assert "warning: metrics.revenue_year_to_date: it is cumulative" in result.stderr
+    out = tmp_path / "models" / "semantic_models.yml"
+    result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "-o", str(out), *flags])
+    assert result.exit_code == 0, result.output
+    assert "16 warnings" in result.stdout
+    assert import_model("dbt", out, schema="public").warnings == []

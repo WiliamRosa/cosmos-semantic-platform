@@ -3,6 +3,15 @@ and the legacy spec (``semantic_models`` and ``metrics`` with ``type_params``).
 
 Only the YAML is read; the dbt project is never executed. ``ref('x')`` becomes table ``x``
 (prefixed with ``schema=`` when given).
+
+Export (first slice): the legacy spec, which MetricFlow still reads. One semantic model per
+model with entities, dimensions and measures (each measure also a metric, ``create_metric``),
+and simple, ratio and derived metrics; filters become ``{{ Dimension('e__d') }}``. Division in
+derived metrics and AVG are written with a ``1e0 *`` factor, as in the Cube export.
+``import_dbt`` reads the export back with the same numbers in Cosmos. The export fails closed on
+row filters and sensitivity, and on metrics it cannot carry (cumulative metrics, filters on a
+time dimension, a business rule or ``$user``), unless the caller accepts the loss. Business rules,
+the glossary and the business context are not exported yet; each one present is a warning.
 """
 
 from __future__ import annotations
@@ -11,10 +20,15 @@ import re
 from pathlib import Path
 from typing import Any
 
+import sqlglot
 import yaml
+from sqlglot import exp
 
-from cosmos_semantic.interchange import ImportResult, read_yaml_files
-from cosmos_semantic.spec import Project
+from cosmos_semantic.errors import QueryError
+from cosmos_semantic.expressions import REF_RE, USER_RE
+from cosmos_semantic.interchange import ExportResult, ImportResult, read_yaml_files
+from cosmos_semantic.interchange.cube import _plural, real_division, refuse_policy_loss
+from cosmos_semantic.spec import DerivedMetric, Project, RatioMetric, SimpleMetric
 
 _REF_RE = re.compile(r"""ref\(\s*['"]([^'"]+)['"]\s*\)""")
 _JINJA_DIM_RE = re.compile(
@@ -73,23 +87,26 @@ class _Builder:
         model: dict[str, Any] = {"name": name, "table": self.table(sm.get("model"), name)}
         if sm.get("description"):
             model["description"] = sm["description"]
+        if _meta(sm).get("owner"):
+            model["owner"] = str(_meta(sm)["owner"])
         for entity in sm.get("entities") or []:
             self.entity(model, entity, f"semantic_models.{name}")
         for dim in sm.get("dimensions") or []:
-            item = {"name": dim["name"], "type": _dim_type(dim.get("type"))}
+            item = {"name": dim["name"], "type": _dim_type(dim.get("type"), _meta(dim))}
             if dim.get("expr") and dim["expr"] != dim["name"]:
                 item["expr"] = str(dim["expr"])
             if dim.get("description"):
                 item["description"] = dim["description"]
             model.setdefault("dimensions", []).append(item)
         for measure in sm.get("measures") or []:
-            self.measure(
+            if self.measure(
                 model,
                 measure["name"],
                 measure.get("agg", "sum"),
                 measure.get("expr"),
                 f"semantic_models.{name}",
-            )
+            ) and measure.get("description"):
+                model["measures"][-1]["description"] = measure["description"]
         self.models.append(model)
 
     def entity(self, model: dict, entity: dict, where: str, column: str | None = None) -> None:
@@ -107,7 +124,7 @@ class _Builder:
     def legacy_metric(self, metric: dict[str, Any]) -> None:
         name, kind = metric["name"], metric.get("type")
         params = metric.get("type_params") or {}
-        base = {k: metric[k] for k in ("description", "label") if metric.get(k)}
+        base = _base(metric)
         where = f"metrics.{name}"
         if kind == "simple":
             measure = params.get("measure")
@@ -211,7 +228,7 @@ class _Builder:
         if metric.get("type", "simple") != "simple":
             self.top_metric(metric)
             return
-        base = {k: metric[k] for k in ("description", "label") if metric.get(k)}
+        base = _base(metric)
         if metric.get("filter"):
             measure_name = f"{name}__base"
             if self.measure(
@@ -232,7 +249,7 @@ class _Builder:
 
     def top_metric(self, metric: dict[str, Any]) -> None:
         name, kind = metric["name"], metric.get("type")
-        base = {k: metric[k] for k in ("description", "label") if metric.get(k)}
+        base = _base(metric)
         where = f"metrics.{name}"
         if kind == "ratio":
             item = {
@@ -366,8 +383,26 @@ def import_dbt(path: str | Path, *, schema: str | None = None) -> ImportResult:
     return ImportResult(project, builder.warnings)
 
 
-def _dim_type(kind: str | None) -> str:
-    return {"time": "time", "categorical": "categorical"}.get(kind or "categorical", "categorical")
+def _dim_type(kind: str | None, meta: dict | None = None) -> str:
+    out = {"time": "time", "categorical": "categorical"}.get(kind or "categorical", "categorical")
+    # `export_dbt` keeps the Cosmos types dbt lacks in `meta`.
+    if out == "categorical" and (meta or {}).get("cosmos_type") in ("number", "boolean"):
+        return meta["cosmos_type"]
+    return out
+
+
+def _meta(item: dict) -> dict:
+    """``config.meta`` (or the older top-level ``meta``) of a dbt node."""
+    config = item.get("config") if isinstance(item.get("config"), dict) else {}
+    meta = config.get("meta") or item.get("meta")
+    return meta if isinstance(meta, dict) else {}
+
+
+def _base(metric: dict) -> dict[str, Any]:
+    base = {k: metric[k] for k in ("description", "label") if metric.get(k)}
+    if _meta(metric).get("owner"):
+        base["owner"] = str(_meta(metric)["owner"])
+    return base
 
 
 def _measure_ref(value: Any) -> tuple[str, str | None]:
@@ -386,3 +421,346 @@ def _and(a: str | None, b: str | None) -> str | None:
     if a and b:
         return f"({a}) AND ({b})"
     return a or b
+
+
+# -- export -----------------------------------------------------------------------------------
+
+_DBT_AGG = {
+    "count": "count",
+    "count_distinct": "count_distinct",
+    "sum": "sum",
+    "avg": "average",
+    "min": "min",
+    "max": "max",
+}
+# Members of the authoring format that a later slice maps to dbt.
+_DBT_LATER = ("business_rules", "glossary", "teams", "systems", "processes")
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+class _NotExported(Exception):
+    """A metric the dbt export cannot carry; the message is the reason."""
+
+
+def export_dbt(
+    project: Project,
+    *,
+    allow_policy_loss: bool = False,
+    allow_metric_loss: bool = False,
+) -> ExportResult:
+    """Writes the project as dbt Semantic Layer (MetricFlow) YAML, with a warning for each
+    member this slice does not export. Refuses, unless ``allow_policy_loss``, a project with
+    row filters or sensitivity, and, unless ``allow_metric_loss``, one with metrics that
+    ``import_dbt`` cannot read back or that MetricFlow would compute differently."""
+    from cosmos_semantic.compiler import compile_project
+    from cosmos_semantic.errors import MetricLossError
+
+    graph = compile_project(project)  # only valid models are exported
+    warnings: list[str] = []
+    refuse_policy_loss(project, "dbt", allow_policy_loss, warnings)
+
+    writer = _DbtWriter(graph, warnings)
+    if writer.lost and not allow_metric_loss:
+        reasons = "; ".join(f"{k}: {v}" for k, v in writer.lost.items())
+        raise MetricLossError(
+            f"{_plural(len(writer.lost), 'metric')} ({', '.join(writer.lost)}) would NOT be "
+            f"exported ({reasons}); the dbt model would not have them. Pass "
+            "--allow-metric-loss to export anyway"
+        )
+    for name, reason in writer.lost.items():
+        warnings.append(f"metrics.{name}: {reason}; it is not exported to dbt")
+    models = writer.semantic_models()
+
+    if project.user_context:
+        warnings.append(
+            f"user_context: {', '.join(project.user_context)} not exported to dbt (only row "
+            "filters use it)"
+        )
+    if project.timezone:
+        warnings.append(
+            "timezone: not exported to dbt; MetricFlow has no model time zone, so relative "
+            f"dates such as today follow the warehouse session, not {project.timezone}"
+        )
+    for key in _DBT_LATER:
+        items = getattr(project, key)
+        if items:
+            warnings.append(f"{key}: not exported to dbt yet ({len(items)} in the project)")
+    if project.custom_extensions:
+        warnings.append(
+            f"custom_extensions: {', '.join(project.custom_extensions)} not exported to dbt yet"
+        )
+    doc: dict[str, Any] = {"semantic_models": models}
+    if writer.metrics:
+        doc["metrics"] = writer.metrics
+    text = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100)
+    return ExportResult(text, list(dict.fromkeys(warnings)))
+
+
+class _DbtWriter:
+    """Builds the semantic models and metrics from a compiled graph. Every measure is a dbt
+    metric too (``create_metric``), since the engine lets metrics use measures directly."""
+
+    def __init__(self, graph, warnings: list[str]) -> None:
+        self.graph = graph
+        self.warnings = warnings
+        self.lost: dict[str, str] = {}
+        self.metrics: list[dict[str, Any]] = []
+        self.done: set[str] = set(graph.measure_owner)  # names dbt has as metrics
+        for metric in graph.project.metrics:
+            self._place(metric.name)
+
+    # -- semantic models --------------------------------------------------------------------
+
+    def semantic_models(self) -> list[dict[str, Any]]:
+        out = []
+        schemas: dict[str, list[str]] = {}
+        for node in self.graph.models.values():
+            spec = node.spec
+            where = f"semantic_models.{spec.name}"
+            schema, _, table = spec.table.rpartition(".")
+            if schema:
+                schemas.setdefault(schema, []).append(spec.name)
+            item: dict[str, Any] = {"name": spec.name}
+            if spec.description:
+                item["description"] = spec.description
+            item["model"] = f"ref('{table}')"
+            times = [d.name for d in spec.dimensions if d.type == "time"]
+            if spec.measures and times:
+                item["defaults"] = {"agg_time_dimension": times[0]}
+            elif spec.measures:
+                self.warnings.append(
+                    f"{where}: it has measures but no time dimension; MetricFlow needs an "
+                    "agg_time_dimension for them, so add one in dbt"
+                )
+            if spec.data_source:
+                self.warnings.append(
+                    f"{where}: data_source `{spec.data_source}` not exported (a dbt project "
+                    "reads one warehouse)"
+                )
+            if spec.dimensions and not any(e.type == "primary" for e in spec.entities):
+                self.warnings.append(
+                    f"{where}: it has dimensions but no primary entity, which MetricFlow needs"
+                )
+            if spec.entities:
+                item["entities"] = [_dbt_entity(e) for e in spec.entities]
+            if spec.dimensions:
+                item["dimensions"] = [_dbt_dimension(d) for d in spec.dimensions]
+            if spec.measures:
+                item["measures"] = [_dbt_measure(m) for m in spec.measures]
+            if spec.owner:
+                item["config"] = {"meta": {"owner": spec.owner}}
+            out.append(item)
+        if len(schemas) == 1:
+            schema = next(iter(schemas))
+            self.warnings.append(
+                "semantic_models: tables are written as ref() to the dbt model of the same "
+                f"name, without their schema `{schema}`; import with "
+                f"`cosmos import dbt --schema {schema}`"
+            )
+        else:
+            for schema, names in schemas.items():
+                self.warnings.append(
+                    f"semantic_models: {', '.join(names)} are written as ref() without their "
+                    f"schema `{schema}`, which `cosmos import dbt` does not read back"
+                )
+        return out
+
+    # -- metrics ----------------------------------------------------------------------------
+
+    def _use(self, ref: str) -> str:
+        """A member a metric references, placed first when it is a metric."""
+        name = ref.split(".")[-1]
+        if name in self.graph.metrics:
+            self._place(name)
+        if name not in self.done:
+            raise _NotExported(f"it uses `{name}`, which is not exported")
+        metric = self.graph.metrics.get(name)
+        if isinstance(metric, SimpleMetric) and metric.filter:
+            # MetricFlow filters each input in its own subquery and joins them, so a group
+            # with no matching rows is NULL there; the engine counts it as 0.
+            if self.graph.measure(metric.measure)[1].agg in ("count", "count_distinct"):
+                raise _NotExported(
+                    f"it uses `{name}`, a filtered count, which MetricFlow returns as NULL "
+                    "where the engine returns 0"
+                )
+        return name
+
+    def _place(self, name: str) -> None:
+        if name in self.done or name in self.lost:
+            return
+        metric = self.graph.metrics[name]
+        try:
+            body = self._metric(metric)
+        except _NotExported as exc:
+            self.lost[name] = str(exc)
+            return
+        # dbt requires a label.
+        item: dict[str, Any] = {"name": name, "label": metric.label or name}
+        if metric.description:
+            item["description"] = metric.description
+        item.update(body)
+        if metric.owner:
+            item["config"] = {"meta": {"owner": metric.owner}}
+        self.done.add(name)
+        self.metrics.append(item)
+
+    def _metric(self, metric) -> dict[str, Any]:
+        if isinstance(metric, SimpleMetric):
+            item: dict[str, Any] = {"type": "simple", "type_params": {"measure": metric.measure}}
+        elif isinstance(metric, RatioMetric):
+            params = {"numerator": self._use(metric.numerator)}
+            params["denominator"] = self._use(metric.denominator)
+            item = {"type": "ratio", "type_params": params}
+            if metric.filter:
+                self._check_ratio_filter(metric)
+        elif isinstance(metric, DerivedMetric):
+            return self._derived(metric)
+        else:
+            # MetricFlow's periods differ from the engine's partitions at coarser grains.
+            raise _NotExported("it is cumulative, and the dbt export does not carry it yet")
+        if metric.filter:
+            item["filter"] = self._filter(metric.filter, self._leaves(metric.name))
+        return item
+
+    def _derived(self, metric) -> dict[str, Any]:
+        refs: list[str] = []
+
+        def mask(match):
+            refs.append(match.group(1))
+            return f"__ref_{len(refs) - 1}"
+
+        tree = sqlglot.parse_one(REF_RE.sub(mask, metric.expr))
+        bare = [c.sql() for c in tree.find_all(exp.Column) if not c.name.startswith("__ref_")]
+        if bare:
+            raise _NotExported(
+                f"its expression uses bare columns ({', '.join(bare)}), and a dbt derived "
+                "metric references metrics only"
+            )
+        names = [self._use(ref) for ref in refs]
+        if tree.find(exp.Div):
+            # Division as the planner computes it: real, and null on a zero denominator.
+            text = re.sub(
+                r"__ref_(\d+)", lambda m: names[int(m.group(1))], real_division(tree).sql()
+            )
+        else:
+            it = iter(names)
+            text = REF_RE.sub(lambda m: next(it), metric.expr)
+        params = {"expr": text, "metrics": [{"name": n} for n in dict.fromkeys(names)]}
+        return {"type": "derived", "type_params": params}
+
+    def _measures(self, name: str) -> set[str]:
+        """The measures a metric aggregates, through nested ratio and derived metrics."""
+        if name in self.graph.measure_owner:
+            return {name}
+        metric = self.graph.metrics[name]
+        if isinstance(metric, RatioMetric):
+            return self._measures(metric.numerator) | self._measures(metric.denominator)
+        if isinstance(metric, DerivedMetric):
+            refs = REF_RE.findall(metric.expr)
+            return set().union(*(self._measures(r.split(".")[-1]) for r in refs))
+        return {metric.measure}
+
+    def _leaves(self, name: str) -> set[str]:
+        """The models whose measures a metric aggregates."""
+        return {self.graph.measure_owner[m] for m in self._measures(name)}
+
+    def _check_ratio_filter(self, metric) -> None:
+        """The engine applies a ratio's filter inside every input's aggregation, so a count
+        input becomes a filtered count: 0 where MetricFlow's WHERE and join give NULL. Only a
+        ratio of two plain inputs on one model, computed in one MetricFlow query, is safe."""
+        measures = self._measures(metric.name)
+        counts = sorted(
+            m for m in measures if self.graph.measure(m)[1].agg in ("count", "count_distinct")
+        )
+        nested = any(
+            isinstance(self.graph.metrics.get(side), RatioMetric | DerivedMetric)
+            for side in (metric.numerator, metric.denominator)
+        )
+        if counts and (len(self._leaves(metric.name)) > 1 or nested):
+            raise _NotExported(
+                f"its filter turns the count `{counts[0]}` into a filtered count, which "
+                "MetricFlow returns as NULL where the engine returns 0"
+            )
+
+    def _filter(self, flt: str, models: set[str]) -> str:
+        """A metric filter as MetricFlow Jinja: ``{{ Dimension('entity__dimension') }}``."""
+        if USER_RE.search(flt):
+            raise _NotExported("its filter uses $user, which only Cosmos resolves")
+
+        def ref(match):
+            text = match.group(1)
+            found = set()
+            for model in sorted(models):
+                try:
+                    found.add(self.graph.resolve_dimension(text, context=model))
+                except QueryError as exc:
+                    raise _NotExported(
+                        f"its filter reference `{text}` does not resolve ({exc})"
+                    ) from None
+            if len(found) > 1:
+                raise _NotExported(
+                    f"its filter reference `{text}` names a different dimension for each "
+                    "measure it filters"
+                )
+            dim = found.pop()
+            spec = self.graph.models[dim.model].spec
+            own = {d.name: d for d in spec.dimensions}
+            if dim.name not in own:
+                raise _NotExported(f"its filter uses the business rule `{text}`, not exported yet")
+            if own[dim.name].type == "time":
+                raise _NotExported(
+                    f"its filter uses the time dimension `{text}`, which MetricFlow compares "
+                    "truncated to its time_granularity"
+                )
+            entity = next((e.name for e in spec.entities if e.type == "primary"), None)
+            if entity is None:
+                raise _NotExported(
+                    f"its filter uses `{text}`, and its model `{dim.model}` has no primary "
+                    "entity to name it by"
+                )
+            return "{{ Dimension('" + f"{entity}__{dim.name}" + "') }}"
+
+        return REF_RE.sub(ref, flt)
+
+
+def _dbt_entity(entity) -> dict[str, Any]:
+    item: dict[str, Any] = {"name": entity.name, "type": entity.type}
+    if entity.expr and entity.expr != entity.name:
+        item["expr"] = entity.expr
+    return item
+
+
+def _dbt_dimension(dim) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "name": dim.name,
+        "type": "time" if dim.type == "time" else "categorical",
+    }
+    if dim.expr:
+        item["expr"] = dim.expr
+    if dim.description:
+        item["description"] = dim.description
+    if dim.type == "time":
+        # The model does not say how fine a time column is, so every time dimension is written
+        # as day: dbt groups and filters it by day, never by hour as the engine can.
+        item["type_params"] = {"time_granularity": "day"}
+    elif dim.type != "categorical":
+        # dbt has only categorical and time dimensions; `import_dbt` reads the type back.
+        item["config"] = {"meta": {"cosmos_type": dim.type}}
+    return item
+
+
+def _dbt_measure(measure) -> dict[str, Any]:
+    item: dict[str, Any] = {"name": measure.name, "agg": _DBT_AGG[measure.agg]}
+    if measure.description:
+        item["description"] = measure.description
+    text = measure.expr
+    if measure.agg == "count" and text is None:
+        text = "1"  # COUNT(*): dbt would count the column named like the measure
+    elif measure.agg == "avg":
+        # Real, as the planner averages: an integer AVG truncates in SQL Server.
+        text = text or measure.name
+        text = f"1e0 * {text}" if _IDENT.fullmatch(text) else f"1e0 * ({text})"
+    if text is not None:
+        item["expr"] = text
+    item["create_metric"] = True
+    return item
