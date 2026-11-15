@@ -257,6 +257,38 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/** One page of a list the server pages: `total` counts every item, not only this page. */
+export interface Page {
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface AnswersPage extends Page {
+  scope: "everyone" | "yours";
+  answers: AnswerRow[];
+}
+
+export interface RunsPage extends Page {
+  available: boolean;
+  runs: Run[];
+}
+
+function query(params: Record<string, string | number | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") q.set(k, String(v));
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+/**
+ * The demo snapshot holds every answer and run in one file (it has no server to page them), so
+ * the demo filters and pages in the browser, with the same response shape as the API.
+ */
+function pageLocally<T>(items: T[], offset: number, limit: number): { items: T[] } & Page {
+  return { items: items.slice(offset, offset + limit), total: items.length, offset, limit };
+}
+
 export const endpoints = {
   overview: () => api<Overview>("/v1/console/overview"),
   processes: () => api<Process[]>("/v1/console/processes"),
@@ -264,16 +296,32 @@ export const endpoints = {
     api<GraphData>(`/v1/console/graph${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`),
   catalog: () => api<{ items: CatalogItem[] }>("/v1/console/catalog"),
   member: (id: string) => api<Member>(`/v1/console/members/${encodeURIComponent(id)}`),
-  answers: (metric?: string) =>
-    api<{ scope: "everyone" | "yours"; answers: AnswerRow[] }>(
-      `/v1/console/answers${metric ? `?metric=${encodeURIComponent(metric)}` : ""}`,
-    ),
+  answers: async ({
+    metric,
+    offset = 0,
+    limit = 25,
+  }: { metric?: string; offset?: number; limit?: number } = {}): Promise<AnswersPage> => {
+    if (DEMO) {
+      const all = await api<AnswersPage>("/v1/console/answers");
+      const rows = metric ? all.answers.filter((a) => a.metrics.includes(metric)) : all.answers;
+      const { items, ...page } = pageLocally(rows, offset, limit);
+      return { scope: all.scope, answers: items, ...page };
+    }
+    return api<AnswersPage>(`/v1/console/answers${query({ metric, offset, limit })}`);
+  },
   answer: (id: string) => api<AnswerDetail>(`/v1/console/answers/${encodeURIComponent(id)}`),
   replay: (id: string) =>
     api<{ verdict: string; explanation: string; matches: Record<string, boolean> }>(
       `/v1/replay/${encodeURIComponent(id)}`,
       { method: "POST" },
     ),
-  runs: () => api<{ available: boolean; runs: Run[] }>("/v1/console/runs"),
+  runs: async ({ offset = 0, limit = 10 }: { offset?: number; limit?: number } = {}): Promise<RunsPage> => {
+    if (DEMO) {
+      const all = await api<RunsPage>("/v1/console/runs");
+      const { items, ...page } = pageLocally(all.runs, offset, limit);
+      return { available: all.available, runs: items, ...page };
+    }
+    return api<RunsPage>(`/v1/console/runs${query({ offset, limit })}`);
+  },
   usage: () => api<Record<string, unknown> & { available: boolean }>("/v1/console/usage"),
 };

@@ -109,6 +109,41 @@ def test_answers_are_private_unless_admin(setup):
     assert client.get("/v1/console/usage", headers=ADMIN).json()["available"] is True
 
 
+def test_answers_page_through_everything_the_viewer_may_see(setup):
+    client, _, _ = setup
+    mine = [_ask(client, ANALYST, ["revenue"]) for _ in range(5)]
+    _ask(client, ADMIN, ["order_count"])  # someone else's: never counted for the analyst
+
+    first = client.get("/v1/console/answers?limit=2", headers=ANALYST).json()
+    assert first["total"] == 5 and first["offset"] == 0 and first["limit"] == 2
+    assert [a["query_id"] for a in first["answers"]] == mine[::-1][:2]  # newest first
+    last = client.get("/v1/console/answers?limit=2&offset=4", headers=ANALYST).json()
+    assert [a["query_id"] for a in last["answers"]] == [mine[0]]
+    beyond = client.get("/v1/console/answers?limit=2&offset=10", headers=ANALYST).json()
+    assert beyond["answers"] == [] and beyond["total"] == 5
+
+    everyone = client.get("/v1/console/answers?limit=1", headers=ADMIN).json()
+    assert everyone["total"] == 6
+    by_metric = client.get("/v1/console/answers?metric=order_count", headers=ADMIN).json()
+    assert by_metric["total"] == 1
+
+    # Out-of-range values are clamped instead of failing or returning more than a page.
+    odd = client.get("/v1/console/answers?limit=0&offset=-3", headers=ANALYST).json()
+    assert odd["limit"] == 1 and odd["offset"] == 0 and len(odd["answers"]) == 1
+    huge = client.get("/v1/console/answers?limit=100000", headers=ANALYST).json()
+    assert huge["limit"] == 500
+
+
+def test_check_runs_page_newest_first(setup, graph, duckdb_connector):
+    client, _, runs = setup
+    ids = [_check(graph, duckdb_connector, runs, [MATCHING])["run_id"] for _ in range(3)]
+    page = client.get("/v1/console/runs?limit=2", headers=ANALYST).json()
+    assert page["total"] == 3
+    assert [r["run_id"] for r in page["runs"]] == ids[::-1][:2]
+    rest = client.get("/v1/console/runs?limit=2&offset=2", headers=ANALYST).json()
+    assert [r["run_id"] for r in rest["runs"]] == [ids[0]]
+
+
 def test_check_runs_drive_health(setup, graph, duckdb_connector):
     client, _, runs = setup
     run = _check(graph, duckdb_connector, runs, [LEGACY_REVENUE, MATCHING])

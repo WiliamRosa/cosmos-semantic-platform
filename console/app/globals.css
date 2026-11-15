@@ -1,25 +1,68 @@
 @import "tailwindcss";
 
-@custom-variant dark (@media (prefers-color-scheme: dark));
+/* Dark mode follows the `dark` class on <html>, set from the saved theme or the system's. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans:
+    var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
 
 :root {
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    sans-serif;
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+:root.dark {
+  color-scheme: dark;
 }
 
 body {
   background: #f8fafc;
+  font-feature-settings: "cv11", "ss01";
 }
 
-@media (prefers-color-scheme: dark) {
-  body {
-    background: #020617;
-  }
+.dark body {
+  background: #020617;
+}
+
+/* A visible focus ring for keyboard users, everywhere. */
+:focus-visible {
+  outline: 2px solid #0ea5e9;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Recharts: readable grid, axes and tooltips in both themes. */
+.recharts-cartesian-grid line {
+  stroke: rgb(148 163 184 / 0.25);
+}
+.recharts-cartesian-axis-tick-value {
+  fill: #64748b;
+}
+.recharts-default-tooltip {
+  border-radius: 8px !important;
+  border-color: rgb(148 163 184 / 0.35) !important;
+  font-size: 12px;
+}
+.dark .recharts-default-tooltip {
+  background: #0f172a !important;
+  color: #e2e8f0;
+}
+.recharts-tooltip-cursor {
+  fill: rgb(148 163 184 / 0.12);
 }
 
 /* React Flow: keep its controls readable in both themes. */
 .react-flow__attribution {
   display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

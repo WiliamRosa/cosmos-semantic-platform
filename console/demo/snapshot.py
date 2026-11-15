@@ -105,8 +105,9 @@ def main(out: Path) -> None:
         "/v1/console/processes": console.processes(),
         "/v1/console/graph": console.graph_view(None),
         "/v1/console/catalog": console.catalog(),
-        "/v1/console/answers": console.answers(VIEWER, limit=50),
-        "/v1/console/runs": console.runs(),
+        # Every answer and run: the static demo pages through them in the browser.
+        "/v1/console/answers": console.answers(VIEWER, limit=500),
+        "/v1/console/runs": console.runs(limit=500),
         "/v1/console/usage": console.usage(VIEWER),
     }
     for process in graph.project.processes:

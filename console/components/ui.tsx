@@ -1,6 +1,8 @@
 "use client";
 
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { Reason, State } from "@/lib/api";
 import { causeKey, useI18n } from "@/lib/i18n";
 import type { Loaded } from "@/lib/session";
@@ -37,7 +39,7 @@ export function StateBadge({ state }: { state?: State }) {
   const s = STATE_STYLE[state ?? "unchecked"];
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.badge}`}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.badge}`}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
       {label(state)}
@@ -167,17 +169,77 @@ export function Progress({ value, total, label }: { value: number; total: number
   );
 }
 
-export function PageHeader({ title, lead }: { title: string; lead?: string }) {
+export function PageHeader({
+  title,
+  lead,
+  action,
+}: {
+  title: string;
+  lead?: string;
+  action?: React.ReactNode;
+}) {
   return (
-    <div className="mb-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
-        {title}
-      </h1>
-      {lead && (
-        <p className="mt-1 max-w-3xl text-slate-600 dark:text-slate-400">
-          <Rich text={lead} />
-        </p>
-      )}
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div className="min-w-0">
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+          {title}
+        </h1>
+        {lead && (
+          <p className="mt-1.5 max-w-3xl text-[15px] leading-relaxed text-slate-600 dark:text-slate-400">
+            <Rich text={lead} />
+          </p>
+        )}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+/** A grey placeholder block that pulses while content loads. */
+export function Skeleton({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse rounded-md bg-slate-200/80 dark:bg-slate-800 ${className}`} />;
+}
+
+/** The shape of a page while it loads: a row of tiles and a list, so nothing jumps. */
+export function PageSkeleton() {
+  const { t } = useI18n();
+  return (
+    <div role="status" aria-live="polite" className="space-y-6">
+      <span className="sr-only">{t("common.loading")}</span>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="mt-3 h-7 w-16" />
+          </div>
+        ))}
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <div key={i} className="flex items-center gap-4 border-b border-slate-100 py-3 last:border-0 dark:border-slate-800">
+            <Skeleton className="h-4 w-1/3" />
+            <Skeleton className="h-4 w-1/5" />
+            <Skeleton className="ml-auto h-5 w-20 rounded-full" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** A list-shaped skeleton for content inside a card or a table. */
+export function ListSkeleton({ rows = 6 }: { rows?: number }) {
+  const { t } = useI18n();
+  return (
+    <div role="status" aria-live="polite">
+      <span className="sr-only">{t("common.loading")}</span>
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="flex items-center gap-4 border-b border-slate-100 px-4 py-3.5 last:border-0 dark:border-slate-800">
+          <Skeleton className="h-4 w-2/5" />
+          <Skeleton className="h-4 w-1/6" />
+          <Skeleton className="ml-auto h-4 w-16" />
+        </div>
+      ))}
     </div>
   );
 }
@@ -211,13 +273,16 @@ export function Rich({ text }: { text: string }) {
 export function Loader<T>({
   loaded,
   children,
+  skeleton,
 }: {
   loaded: Loaded<T>;
   children: (data: T) => React.ReactNode;
+  /** What shows while the first load runs; a page-shaped skeleton by default. */
+  skeleton?: React.ReactNode;
 }) {
   const { t } = useI18n();
   if (loaded.loading && !loaded.data) {
-    return <div className="animate-pulse text-sm text-slate-500">{t("common.loading")}</div>;
+    return <>{skeleton ?? <PageSkeleton />}</>;
   }
   if (loaded.error && !loaded.data) {
     return (
@@ -230,6 +295,29 @@ export function Loader<T>({
     );
   }
   return loaded.data ? <>{children(loaded.data)}</> : null;
+}
+
+/**
+ * "Back" that returns to the previous page with its filters, sort and page when there is one
+ * in this tab, and to `href` otherwise (a link opened directly).
+ */
+export function BackLink({ href, children }: { href: string; children: React.ReactNode }) {
+  const router = useRouter();
+  return (
+    <Link
+      href={href}
+      onClick={(e) => {
+        if (window.history.length > 1) {
+          e.preventDefault();
+          router.back();
+        }
+      }}
+      className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+    >
+      <ArrowLeft className="h-4 w-4" aria-hidden />
+      {children}
+    </Link>
+  );
 }
 
 export function MemberLink({ id, children }: { id: string; children?: React.ReactNode }) {
