@@ -9,6 +9,13 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Rolling-window cumulative metrics in days (DEC-14): `window: 7 days` on a `cumulative` metric
+  aggregates the measure over the facts dated from D − 6 days to D, for each day D of a request
+  at day grain (dbt MetricFlow's convention). Only days with facts appear, as with
+  `grain_to_date`. `sum`, `count`, `min` and `max` measures are supported; `avg` and
+  `count_distinct`, other units and other grains are refused with an error. The example model
+  gains `revenue_rolling_7_days`, with reference cases A29 and A30.
+
 - `cosmos query --csv` prints the result as CSV for spreadsheets and scripts: a header, then one
   line per row, with raw values and nulls as empty fields. Standard output carries only the CSV,
   and `--csv` with `--json` is an error. Contributed by @zheng-guannan577 in #24, the project's

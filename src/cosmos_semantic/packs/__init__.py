@@ -393,7 +393,8 @@ def _smoke(project: Project, connector: Connector) -> list[dict[str, Any]]:
                 if owner
                 else []
             )
-            dimensions = [f"{owner}.{times[0]}__month"] if times else []
+            grain = "day" if metric.window else "month"  # windows in days need day grain
+            dimensions = [f"{owner}.{times[0]}__{grain}"] if times else []
         try:
             request = QueryRequest(metrics=[metric.name], dimensions=dimensions, limit=1)
             compiled = planner.plan(request, Principal(user=user))
