@@ -32,6 +32,13 @@ a supervised agent team are also new.
   BLANK keeps its DAX meaning: `BLANK * x` is NULL, and `+`/`-` treat one missing side as zero.
   Division, functions, `RELATED`, `FILTER`, other tables and the other iterators stay warnings.
 
+- `cosmos import powerbi` imports `AVERAGEX`, `MINX` and `MAXX` over the measure's own table as
+  `avg`, `min` and `max` measures, with the same row expressions as `SUMX` (DEC-12). The row
+  expression is NULL exactly where DAX gives BLANK, so the skipped rows match: a row with
+  `BLANK + 5` counts as 5, a row with `BLANK * 5` is skipped. `avg` averages as a decimal on
+  every database, as DAX does, even over integer columns. Division, functions, `RELATED`,
+  `FILTER` and other tables stay warnings.
+
 - A TPC-H model in `examples/tpch` and a performance baseline on DuckDB (DEC-4). Seven metric
   requests in the shapes of TPC-H queries (only one is exactly a TPC-H query, Q14's promotional
   revenue share), among them a ratio across two grains, have hand-written SQL: the default test
