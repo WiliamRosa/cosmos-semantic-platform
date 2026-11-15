@@ -217,6 +217,56 @@ class Planner:
             trace=self._trace,
         )
 
+    def plan_values(
+        self, dimension: str, principal: Principal | None = None, *, limit: int
+    ) -> CompiledQuery:
+        """Distinct values of a categorical or boolean dimension, each with the number of rows
+        of the dimension's own model that carry it, after that model's row filters; most
+        frequent first, then by value, nulls last. Personal or sensitive dimensions are refused
+        for every channel: listing their values would enumerate personal data."""
+        principal = principal or Principal()
+        g = self.graph
+        self._trace = QueryTrace()
+        now = self.now()
+        self._rules_as_of = now.date()
+        ref = g.resolve_dimension(dimension)
+        dim = g.dimension(ref)
+        if dim.sensitivity:
+            raise PolicyError(
+                f"`{ref.model}.{ref.name}` is {_LEVEL[dim.sensitivity]} data (LGPD); "
+                "its values are never listed"
+            )
+        if ref.grain or dim.type not in ("categorical", "boolean"):
+            raise QueryError(
+                f"`{dimension}` is a {dim.type} dimension; values are listed only for "
+                "categorical and boolean dimensions"
+            )
+        counts, joined = self._group_select(
+            _Group(ref.model), [ref], [], principal, label="dimension_values"
+        )
+        counts = counts.select(exp.Count(this=exp.Star()).as_("value_count"))
+        final = (
+            exp.select(exp.column(ref.alias), exp.column("value_count"))
+            .from_("dimension_values")
+            .with_("dimension_values", as_=counts)
+            .order_by(
+                exp.Ordered(this=exp.column("value_count"), desc=True, nulls_first=False),
+                exp.Ordered(this=exp.column(ref.alias), nulls_first=False),
+            )
+            .limit(limit)
+        )
+        final = _pin_clock(final, now.date(), now)
+        return CompiledQuery(
+            sql=dialects.adapt(final, self.dialect).sql(dialect=self.dialect, pretty=True),
+            dialect=self.dialect,
+            columns=[OutputColumn(ref.alias, "dimension", _dim_member(ref))],
+            data_source=g.models[ref.model].spec.data_source,
+            models=sorted(joined),
+            as_of=now.date(),
+            rules_as_of=self._rules_as_of,
+            trace=self._trace,
+        )
+
     def _rule_expr(self, ref: DimensionRef) -> str:
         """The rule version in effect on ``rules_as_of``, bound to the model's columns."""
         rule = self.graph.rules[ref.name]

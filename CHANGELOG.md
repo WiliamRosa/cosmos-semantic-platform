@@ -7,6 +7,18 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+### Added
+
+- Dimension values for agents (DEC-17): the MCP tool `dimension_values` and
+  `GET /v1/dimensions/{name}/values` return the distinct values of a categorical or boolean
+  dimension, each with the number of rows of the dimension's model that carry it (nulls included),
+  most frequent first, then by value. An agent wanting "revenue in Brazil" no longer guesses
+  `Brazil` against `BR`. The SQL comes from the planner, so the caller's row filters apply as in
+  `query`; personal and sensitive dimensions are refused on every channel; time and number
+  dimensions are refused; at most 100 values are returned (`limit` asks for fewer). Each call is
+  written to the audit log as a `dimension_values` event, which `replay` and the usage report
+  ignore.
+
 ## [0.4.0] - 2026-11-13
 
 Import and export with other tools grow: Ossie and Cube export, `cosmos query --csv`, and more

@@ -162,9 +162,11 @@ curl -X POST localhost:8080/v1/query -H "X-API-Key: <key>" -H "content-type: app
 
 `GET /v1/impact/{kind:name}` (and the MCP tool `impact`) tells what a change to a member affects, grouped by owner, source systems and processes; who queried the affected members, from the audit log, is returned only to the subjects in `COSMOS_CONSOLE_ADMINS`.
 
+`GET /v1/dimensions/{model.dimension}/values` (and the MCP tool `dimension_values`) lists the distinct values of a categorical or boolean dimension with the number of rows of its model carrying each one, most frequent first, so an agent filters by `BR` instead of guessing `Brazil`. The caller's row filters apply, personal and sensitive dimensions are refused, at most 100 values are returned (`limit` asks for fewer), and every call is audited.
+
 Remote MCP clients use `/mcp` as an OAuth protected resource: requests without a valid token get HTTP 401 with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`, which names the identity provider (set `COSMOS_PUBLIC_URL` behind a proxy).
 
-For local MCP clients (Claude Desktop, Claude Code), use the stdio transport: `cosmos mcp -m ... -c ...` with `COSMOS_API_KEY` set. The tools are `search_concepts`, `explain`, `list_members`, `query`, `show_sql`, `replay` and `impact`. Every call runs as the user who owns the token; personal data never reaches agents.
+For local MCP clients (Claude Desktop, Claude Code), use the stdio transport: `cosmos mcp -m ... -c ...` with `COSMOS_API_KEY` set. The tools are `search_concepts`, `explain`, `list_members`, `query`, `show_sql`, `replay`, `impact` and `dimension_values`. Every call runs as the user who owns the token; personal data never reaches agents.
 
 ### Data sources
 
