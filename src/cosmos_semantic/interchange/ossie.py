@@ -437,7 +437,7 @@ def export_ossie(
     lives only in the Cosmos extension.
 
     ``allow_policy_loss`` is no longer needed, since every row filter is exported; it is kept
-    for compatibility with 0.4.0 and does nothing."""
+    for compatibility and does nothing."""
     del allow_policy_loss  # deprecated, no effect
     if fmt not in ("yaml", "json"):
         raise ValueError(f"unknown format: {fmt} (use yaml or json)")
