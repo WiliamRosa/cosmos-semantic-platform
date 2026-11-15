@@ -169,7 +169,9 @@ def test_dimension_values_of_booleans_and_rules(server, monkeypatch):
     assert {v["value"]: v["count"] for v in result["values"]} == expected
     rule = call(server, "dimension_values", name="rule.active_customer")
     assert {v["value"] for v in rule["values"]} <= {True, False, None}
-    assert [r["name"] for r in rule["evidence"]["rules"]] == ["active_customer"]
+    assert rule["evidence"]["rules"] == [
+        {"name": "active_customer", "effective_from": "2026-07-01"}
+    ]
 
 
 def test_dimension_values_refuse_personal_and_non_categorical(server, monkeypatch):

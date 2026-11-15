@@ -222,7 +222,8 @@ class Planner:
     ) -> CompiledQuery:
         """Distinct values of a categorical or boolean dimension, each with the number of rows
         of the dimension's own model that carry it, after that model's row filters; most
-        frequent first, then by value, nulls last. Personal or sensitive dimensions are refused
+        frequent first; the caller breaks ties, not each database's collation. Personal or
+        sensitive dimensions are refused
         for every channel: listing their values would enumerate personal data."""
         principal = principal or Principal()
         g = self.graph
@@ -249,10 +250,7 @@ class Planner:
             exp.select(exp.column(ref.alias), exp.column("value_count"))
             .from_("dimension_values")
             .with_("dimension_values", as_=counts)
-            .order_by(
-                exp.Ordered(this=exp.column("value_count"), desc=True, nulls_first=False),
-                exp.Ordered(this=exp.column(ref.alias), nulls_first=False),
-            )
+            .order_by(exp.Ordered(this=exp.column("value_count"), desc=True))
             .limit(limit)
         )
         final = _pin_clock(final, now.date(), now)

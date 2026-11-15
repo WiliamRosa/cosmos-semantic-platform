@@ -16,7 +16,7 @@ from cosmos_semantic.auth import Authenticator, AuthError
 from cosmos_semantic.errors import CosmosError, QueryError
 from cosmos_semantic.evidence import engine_version
 from cosmos_semantic.planner import Principal, QueryRequest
-from cosmos_semantic.service import MAX_DIMENSION_VALUES, SemanticService
+from cosmos_semantic.service import MAX_DIMENSION_VALUES, VALUES_FETCH_CEILING, SemanticService
 
 INSTRUCTIONS = """\
 Cosmos semantic layer. Before querying:
@@ -124,7 +124,9 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
             "Distinct values of a categorical or boolean dimension (`model.dimension`), with the "
             "number of rows of its model carrying each one, most frequent first, after the "
             "user's row filters. Use it to filter by an exact value. Personal data is refused. "
-            f"Returns at most {MAX_DIMENSION_VALUES} values."
+            f"Returns at most {MAX_DIMENSION_VALUES} values; ties in count are ordered by value. "
+            f"Past {VALUES_FETCH_CEILING} distinct values the list is marked truncated, and ties "
+            "at that cut-off may differ between databases."
         )
     )
     def dimension_values(name: str, ctx: Context, limit: int | None = None) -> dict[str, Any]:

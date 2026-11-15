@@ -19,12 +19,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
+
 from cosmos_semantic.catalog import Catalog
 from cosmos_semantic.engine import Engine
 from cosmos_semantic.errors import CosmosError, PolicyError, QueryError
 from cosmos_semantic.evidence import (
     EvidenceBuilder,
-    _merge_row_filters,
+    merge_row_filters,
     new_query_id,
     result_hash,
     sql_hash,
@@ -35,6 +37,9 @@ audit_log = logging.getLogger("cosmos.audit")
 
 # Most values `dimension_values` returns: the default and the hard maximum.
 MAX_DIMENSION_VALUES = 100
+# Most distinct values fetched (most frequent first) before the top ones are chosen in Python.
+# Past it, `truncated` is set and ties at that far cut-off may differ between databases.
+VALUES_FETCH_CEILING = 10_000
 
 
 def jsonable(value: Any) -> Any:
@@ -132,45 +137,58 @@ class SemanticService:
         of the dimension's own model (after the caller's row filters) carrying each value.
         At most ``MAX_DIMENSION_VALUES``; audited like a query (event `dimension_values`)."""
         started = time.perf_counter()
-        if limit is not None and limit < 1:
-            raise QueryError("limit must be at least 1")
-        limit = min(limit or MAX_DIMENSION_VALUES, MAX_DIMENSION_VALUES)
-        context: dict[str, Any] = {
-            "request": {"dimensions": [dimension], "limit": limit},
-            "principal": principal,
-        }
+        request: dict[str, Any] = {"dimensions": [dimension], "limit": limit}
+        context: dict[str, Any] = {"request": request, "principal": principal}
         try:
-            # One row more than the limit tells whether the list was cut.
-            compiled = self.engine.compile_values(dimension, principal, limit=limit + 1)
+            if limit is not None and limit < 1:
+                raise QueryError("limit must be at least 1")
+            limit = request["limit"] = min(limit or MAX_DIMENSION_VALUES, MAX_DIMENSION_VALUES)
+            # One row more than the ceiling tells whether even the fetched list was cut.
+            fetch = VALUES_FETCH_CEILING + 1
+            compiled = self.engine.compile_values(dimension, principal, limit=fetch)
             context["compiled"] = compiled
             with self._lock:
-                table = self.engine.connector(compiled.data_source).execute(compiled.sql)
+                connector = self.engine.connector(compiled.data_source)
+                table = connector.execute(compiled.sql, max_rows=fetch)
         except CosmosError as exc:
             self._audit(context, error=exc, event="dimension_values")
             raise
         column = compiled.columns[0].name
-        pairs = [(row[column], row["value_count"]) for row in table.to_pylist()]
-        # Sorted again here, so ties come out in the same order on every database.
-        pairs.sort(key=lambda p: (-p[1], p[0] is None, "" if p[0] is None else p[0]))
-        values = [{"value": jsonable(v), "count": int(n)} for v, n in pairs[:limit]]
+        pairs = [(row[column], int(row["value_count"])) for row in table.to_pylist()]
+        # The top values are chosen here, not by each database's collation, so ties at the
+        # cut-off keep the same values everywhere: count desc, nulls last, then the value.
+        beyond_ceiling = len(pairs) > VALUES_FETCH_CEILING
+        pairs = sorted(
+            pairs[:VALUES_FETCH_CEILING],
+            key=lambda p: (-p[1], p[0] is None, "" if p[0] is None else p[0]),
+        )
+        kept = pairs[:limit]
+        returned = pa.table({"value": [v for v, _ in kept], "count": [n for _, n in kept]})
+        versions = compiled.trace.rule_versions
         evidence = {
             "query_id": new_query_id(),
             "as_of": compiled.as_of.isoformat() if compiled.as_of else None,
             "data_source": {"name": self._source(compiled), "dialect": compiled.dialect},
             "model_hash": self.evidence.model_hash,
             "count_of": f"rows of `{self.engine.graph.resolve_dimension(dimension).model}`",
-            "row_filters": _merge_row_filters(compiled.trace.row_filters),
-            "rules": [{"name": r} for r in sorted(compiled.trace.rules)],
+            "row_filters": merge_row_filters(compiled.trace.row_filters),
+            "rules": [
+                {
+                    "name": r,
+                    "effective_from": versions[r].isoformat() if versions.get(r) else None,
+                }
+                for r in sorted(compiled.trace.rules)
+            ],
             "sql": {"text": compiled.sql, "hash": sql_hash(compiled.sql)},
-            "result": {"row_count": len(values), "hash": result_hash(table)},
+            "result": {"row_count": len(kept), "hash": result_hash(returned)},
         }
         self._audit(
             context, evidence=evidence, ms=time.perf_counter() - started, event="dimension_values"
         )
         return {
             "dimension": compiled.columns[0].member,
-            "values": values,
-            "truncated": len(pairs) > limit,
+            "values": [{"value": jsonable(v), "count": n} for v, n in kept],
+            "truncated": len(pairs) > limit or beyond_ceiling,
             "limit": limit,
             "evidence": evidence,
         }

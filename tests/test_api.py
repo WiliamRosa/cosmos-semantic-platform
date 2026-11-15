@@ -231,6 +231,8 @@ def test_dimension_values_endpoint_is_audited(graph, duckdb_connector, tmp_path)
     assert personal.status_code == 403
     assert client.get("/v1/dimensions/orders.ordered_at/values", headers=headers).status_code == 400
     assert client.get("/v1/dimensions/nope.nope/values", headers=headers).status_code == 400
+    zero = client.get("/v1/dimensions/orders.status/values", params={"limit": 0}, headers=headers)
+    assert zero.status_code == 400
 
     records = [json.loads(line) for line in audit_path.read_text().splitlines()]
     values = [r for r in records if r["event"] == "dimension_values"]
@@ -239,8 +241,9 @@ def test_dimension_values_endpoint_is_audited(graph, duckdb_connector, tmp_path)
     assert first["principal"]["subject"] == "dev@local"
     assert first["request"] == {"dimensions": ["orders.status"], "limit": 100}
     assert "GROUP BY" in first["sql"] and first["row_count"] == len(body["values"])
-    assert [r["outcome"] for r in values[-3:]] == ["error"] * 3
-    assert "PolicyError" in values[-3]["error"]
+    assert [r["outcome"] for r in values[-4:]] == ["error"] * 4
+    assert "PolicyError" in values[-4]["error"]
+    assert values[-1]["request"]["limit"] == 0 and "at least 1" in values[-1]["error"]
     # A dimension_values record is not a query: it does not replay.
     replay = client.post(f"/v1/replay/{first['query_id']}", headers=headers)
     assert replay.status_code == 400

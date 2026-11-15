@@ -15,9 +15,11 @@ format or the API; such changes are listed under **Changed**.
   most frequent first, then by value. An agent wanting "revenue in Brazil" no longer guesses
   `Brazil` against `BR`. The SQL comes from the planner, so the caller's row filters apply as in
   `query`; personal and sensitive dimensions are refused on every channel; time and number
-  dimensions are refused; at most 100 values are returned (`limit` asks for fewer). Each call is
-  written to the audit log as a `dimension_values` event, which `replay` and the usage report
-  ignore.
+  dimensions are refused; at most 100 values are returned (`limit` asks for fewer). Ties are
+  broken by value in the engine, so every database keeps the same values at the cut-off; past
+  10,000 distinct values the list is marked `truncated` and ties at that cut-off may differ.
+  Each call is written to the audit log as a `dimension_values` event, which `replay` and the
+  usage report ignore.
 
 ## [0.4.0] - 2026-11-13
 
