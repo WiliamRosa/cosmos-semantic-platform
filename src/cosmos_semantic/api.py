@@ -195,7 +195,7 @@ def create_app(
 
     @app.get("/v1/explain/{name}", summary="Explain a metric, rule, dimension or concept")
     def explain(name: str, _user: User) -> dict[str, Any]:
-        return service.catalog.explain(name)
+        return service.explain(name)
 
     @app.get(
         "/v1/impact/{name}",

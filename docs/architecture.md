@@ -223,7 +223,7 @@ Every inference goes into the report (`--report report.json`); the draft is a st
 | Tool | What it returns |
 | --- | --- |
 | `search_concepts` | Glossary concepts matching the question's terms, including synonyms, with the member or rule behind each one |
-| `explain` | The definition of a metric, concept or rule in natural language: owner, effective date and logic |
+| `explain` | The definition of a metric, concept or rule in natural language: owner, effective date and logic, plus `health` (`healthy`, `attention`, `failing` or `unchecked`, with reasons), as the console shows it |
 | `list_members` | Available metrics, dimensions and rules |
 | `query` | The result of a metrics request, with policies already applied |
 | `show_sql` | The SQL the engine generated for a request |

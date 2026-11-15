@@ -7,6 +7,14 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+### Added
+
+- `explain` over MCP and `GET /v1/explain/{name}` carry the member's `health` (DEC-15), so an
+  agent about to quote a number can tell whether it is checked: `healthy`, `attention`,
+  `failing` or `unchecked`, with the reasons (rule tests, last reconciliation). Metrics,
+  measures, rules and processes have it, and so does the member a concept maps to. It is the
+  console's computation, now shared in `cosmos_semantic.health`; the console is unchanged.
+
 ## [0.4.0] - 2026-11-13
 
 Import and export with other tools grow: Ossie and Cube export, `cosmos query --csv`, and more

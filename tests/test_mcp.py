@@ -137,3 +137,47 @@ def test_impact_of_an_unknown_member_is_an_error(server, monkeypatch):
     assert "does not exist in the model" in result["detail"]
     bare = call(server, "impact", name="active_customer")
     assert bare["error"] == "QueryError" and "kind:name" in bare["detail"]
+
+
+def test_explain_tells_the_agent_whether_the_number_is_checked(graph, monkeypatch, tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    reconciliations = [
+        {
+            "id": "R1",
+            "title": "Legacy revenue",
+            "metrics": ["completed_revenue"],
+            "outcome": "fail",
+        },
+        {"id": "R2", "title": "Orders", "metrics": ["order_count"], "outcome": "pass"},
+    ]
+    runs.write_text(json.dumps({"event": "check", "reconciliations": reconciliations}) + "\n")
+    monkeypatch.setenv("COSMOS_RUNS_LOG", str(runs))
+    engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
+    settings = AuthSettings(dev_keys={"agente-sul": DevKey(subject="agente", user={})})
+    server = build_mcp(SemanticService(engine), Authenticator(settings, graph.project.user_context))
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+
+    failing = call(server, "explain", name="metric:completed_revenue")
+    assert failing["kind"] == "metric" and failing["definition"]
+    assert failing["health"] == {
+        "state": "failing",
+        "reasons": [{"code": "reconciliation_failed", "case": "R1", "title": "Legacy revenue"}],
+    }
+    order_count = call(server, "explain", name="order_count")
+    assert order_count["health"] == {
+        "state": "healthy",
+        "reasons": [{"code": "reconciled", "count": 1}],
+    }
+    assert call(server, "explain", name="discount_rate")["health"]["state"] == "unchecked"
+    rule = call(server, "explain", name="rule:active_customer")
+    assert rule["health"] == {
+        "state": "healthy",
+        "reasons": [{"code": "rule_tests_pass", "total": 4}],
+    }
+    concept = call(server, "explain", name="active_customer")
+    assert "health" not in concept and concept["defined_by"]["health"] == rule["health"]
+    assert "health" not in call(server, "explain", name="customers.region")
+
+    monkeypatch.delenv("COSMOS_API_KEY")
+    denied = call(server, "explain", name="metric:completed_revenue")
+    assert denied["error"] == "AuthError" and "health" not in denied

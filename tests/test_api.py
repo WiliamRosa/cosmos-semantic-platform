@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 
 import jwt
@@ -112,6 +113,36 @@ def test_concepts_and_explain(client):
     assert hits[0]["maps_to"] == "metric:net_revenue"
     rule = client.get("/v1/explain/rule:order_size_band", headers=headers).json()
     assert rule["kind"] == "rule" and "Large" in rule["text"]
+    assert rule["health"] == {
+        "state": "healthy",
+        "reasons": [{"code": "rule_tests_pass", "total": 3}],
+    }
+
+
+def test_explain_carries_the_console_health(graph, monkeypatch, tmp_path):
+    runs = tmp_path / "runs.jsonl"
+    case = {"id": "R1", "title": "Legacy", "metrics": ["completed_revenue"], "outcome": "error"}
+    run = {"event": "check", "at": "2026-11-15T12:00:00+00:00", "run_id": "run_1"}
+    runs.write_text(json.dumps(run | {"reconciliations": [case]}) + "\n")
+    monkeypatch.setenv("COSMOS_RUNS_LOG", str(runs))
+    engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
+    settings = AuthSettings(dev_keys={"analyst": DevKey(subject="analyst@example.com", user={})})
+    service = SemanticService(engine, admins=set())
+    client = TestClient(create_app(service, Authenticator(settings, graph.project.user_context)))
+    headers = {"X-API-Key": "analyst"}
+
+    assert client.get("/v1/explain/metric:completed_revenue").status_code == 401
+    metric = client.get("/v1/explain/metric:completed_revenue", headers=headers).json()
+    console = client.get("/v1/console/members/metric:completed_revenue", headers=headers).json()
+    assert metric["health"] == console["health"]
+    assert metric["health"]["state"] == "failing"
+    assert {k: v for k, v in metric.items() if k != "health"} == console["detail"]
+    assert client.get("/v1/explain/metric:net_revenue", headers=headers).json()["health"] == {
+        "state": "unchecked",
+        "reasons": [{"code": "never_reconciled"}],
+    }
+    unknown = client.get("/v1/explain/metric:does_not_exist", headers=headers)
+    assert unknown.status_code == 400 and "health" not in unknown.text
 
 
 def test_glossary_as_skos(client):

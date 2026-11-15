@@ -4,15 +4,9 @@ Everything here is computed from the semantic model, the audit log (``COSMOS_AUD
 the check runs log (``COSMOS_RUNS_LOG``). Nothing is written and no data source is queried,
 except by ``replay``, which goes through the service as before.
 
-Health reasons are codes with parameters (``{"code": "rule_tests_fail", "failed": 1,
-"total": 4}``), never sentences, so the console can show them in English or Portuguese.
-
-Health vocabulary, the same everywhere:
-
-- ``failing``: a rule test fails, or a reconciliation of the metric fails or errors.
-- ``attention``: the member depends on something failing.
-- ``healthy``: tests pass and, for a metric, its last reconciliation matched.
-- ``unchecked``: nothing verifies it yet (no rule tests, or a metric never reconciled).
+Health (state and reasons per member, see ``cosmos_semantic.health``) is shared with
+``explain``. Its reasons are codes with parameters, never sentences, so the console can show
+them in English or Portuguese.
 
 Who sees what: any authenticated user sees the model, the graph and the health. The audit
 records (who asked what) and usage per person are shown only to the subjects listed in
@@ -22,20 +16,18 @@ records (who asked what) and usage per person are shown only to the subjects lis
 from __future__ import annotations
 
 import datetime as dt
-import os
 from collections import Counter, defaultdict
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from cosmos_semantic.checks import read_runs, run_ok
+from cosmos_semantic.checks import run_ok
 from cosmos_semantic.errors import PolicyError, QueryError
+from cosmos_semantic.health import RANK, Health
 
 if TYPE_CHECKING:
     from cosmos_semantic.planner import Principal
     from cosmos_semantic.service import SemanticService
-
-RANK = {"failing": 3, "attention": 2, "unchecked": 1, "healthy": 0}
 
 
 def _worst(*states: str) -> str:
@@ -52,8 +44,11 @@ class Console:
     ) -> None:
         self.service = service
         self.graph = service.engine.graph
-        path = runs_path or os.environ.get("COSMOS_RUNS_LOG")
-        self.runs_path = Path(path) if path else None
+        # The service's health (COSMOS_RUNS_LOG), unless another runs log is given here.
+        self.health = (
+            service.health if runs_path is None else Health(self.graph, runs_path=runs_path)
+        )
+        self.runs_path = self.health.runs_path
         # The same admins as the service (COSMOS_CONSOLE_ADMINS), unless given here.
         self.admins = service.admins if admins is None else admins
 
@@ -72,31 +67,14 @@ class Console:
     # -- model facts (fixed for the life of the process) -------------------------
 
     @cached_property
-    def _deps(self):
-        from cosmos_semantic.impact import DependencyGraph
-
-        return DependencyGraph(self.graph)
-
-    @cached_property
     def _knowledge(self):
         from cosmos_semantic.knowledge import build_graph
 
         return build_graph(self.graph)
 
-    @cached_property
+    @property
     def _rule_tests(self) -> dict[str, dict[str, Any]]:
-        from cosmos_semantic.ontology import run_rule_tests
-
-        out: dict[str, dict[str, Any]] = {
-            name: {"total": 0, "failed": 0, "failures": []} for name in self.graph.rules
-        }
-        for result in run_rule_tests(self.graph.project):
-            item = out.setdefault(result.rule, {"total": 0, "failed": 0, "failures": []})
-            item["total"] += 1
-            if not result.passed:
-                item["failed"] += 1
-                item["failures"].append(result.detail)
-        return out
+        return self.health.rule_tests
 
     @cached_property
     def _owners(self) -> dict[str, str]:
@@ -115,76 +93,13 @@ class Console:
         return list(read_audit(path))
 
     def _runs(self) -> list[dict[str, Any]]:
-        return list(read_runs(self.runs_path))
+        return self.health.runs()
 
     # -- health ----------------------------------------------------------------------
 
     def _health(self) -> dict[str, dict[str, Any]]:
         """State and reasons per knowledge-graph node id (`metric:x`, `rule:y`, ...)."""
-        states: dict[str, dict[str, Any]] = {}
-        failing_rules = []
-        for name, tests in self._rule_tests.items():
-            if tests["failed"]:
-                state = "failing"
-                reason = {
-                    "code": "rule_tests_fail",
-                    "failed": tests["failed"],
-                    "total": tests["total"],
-                }
-                failing_rules.append(f"rule:{name}")
-            elif tests["total"]:
-                state, reason = "healthy", {"code": "rule_tests_pass", "total": tests["total"]}
-            else:
-                state, reason = "unchecked", {"code": "no_tests"}
-            states[f"rule:{name}"] = {"state": state, "reasons": [reason]}
-
-        runs = self._runs()
-        latest = runs[-1] if runs else None
-        reconciled: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for case in latest["reconciliations"] if latest else []:
-            for metric in case["metrics"]:
-                reconciled[metric].append(case)
-        members = [f"metric:{n}" for n in self.graph.metrics]
-        members += [f"measure:{n}" for n in self.graph.measure_owner]
-        for member in members:
-            cases = reconciled.get(member.partition(":")[2], [])
-            if not cases:
-                states[member] = {"state": "unchecked", "reasons": [{"code": "never_reconciled"}]}
-                continue
-            bad = [c for c in cases if c["outcome"] in ("fail", "error")]
-            if bad:
-                reasons = [
-                    {"code": "reconciliation_failed", "case": c["id"], "title": c["title"]}
-                    for c in bad
-                ]
-                states[member] = {"state": "failing", "reasons": reasons}
-            else:
-                states[member] = {
-                    "state": "healthy",
-                    "reasons": [{"code": "reconciled", "count": len(cases)}],
-                }
-
-        # Whatever depends on a failing rule, metric or measure needs attention.
-        failing = list(
-            dict.fromkeys(failing_rules + [k for k, v in states.items() if v["state"] == "failing"])
-        )
-        for source in failing:
-            impact = self._deps.impact([source])
-            affected = (
-                [f"metric:{m}" for m in impact.metrics]
-                + [f"measure:{m}" for m in impact.measures]
-                + [f"process:{p}" for p in impact.processes]
-            )
-            for node in affected:
-                if node == source:
-                    continue
-                current = states.setdefault(node, {"state": "healthy", "reasons": []})
-                if RANK[current["state"]] < RANK["attention"]:
-                    current["state"] = "attention"
-                current["reasons"].append({"code": "depends_on_failing", "member": source})
-        for process in self.graph.project.processes:
-            states.setdefault(f"process:{process.name}", {"state": "healthy", "reasons": []})
-        return states
+        return self.health.states()
 
     # -- views -------------------------------------------------------------------------
 

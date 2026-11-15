@@ -77,11 +77,14 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
     @mcp.tool(
         description=(
             "Explain a metric, business rule, dimension, concept, team, system or process: "
-            "definition, owner, source systems, processes and logic."
+            "definition, owner, source systems, processes and logic. Metrics, measures, rules "
+            "and processes also carry `health`: whether the number is checked (`healthy`, "
+            "`attention`, `failing` or `unchecked`), with the reasons (rule tests, last "
+            "reconciliation). Mention it when you quote a number that is not healthy."
         )
     )
     def explain(name: str, ctx: Context) -> dict[str, Any]:
-        return guarded(lambda: _check(principal(ctx), service.catalog.explain(name)))()
+        return guarded(lambda: _check(principal(ctx), service.explain(name)))()
 
     @mcp.tool(description="List the available metrics, dimensions and business rules.")
     def list_members(ctx: Context) -> dict[str, Any]:

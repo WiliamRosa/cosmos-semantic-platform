@@ -23,6 +23,7 @@ from cosmos_semantic.catalog import Catalog
 from cosmos_semantic.engine import Engine
 from cosmos_semantic.errors import CosmosError, PolicyError, QueryError
 from cosmos_semantic.evidence import EvidenceBuilder, new_query_id, result_hash, sql_hash
+from cosmos_semantic.health import Health
 from cosmos_semantic.planner import CompiledQuery, Principal, QueryRequest
 
 audit_log = logging.getLogger("cosmos.audit")
@@ -51,6 +52,7 @@ class SemanticService:
         self.engine = engine
         self.catalog = Catalog(engine.graph)
         self.evidence = EvidenceBuilder(engine.graph)
+        self.health = Health(engine.graph)  # rule tests and check runs (COSMOS_RUNS_LOG)
         path = audit_path or os.environ.get("COSMOS_AUDIT_LOG")
         self.audit_path = Path(path) if path else None
         if admins is None:
@@ -121,6 +123,25 @@ class SemanticService:
         if principal.local_anonymous:
             return True
         return principal.subject is not None and principal.subject in self.admins
+
+    # -- explain -----------------------------------------------------------------
+
+    def explain(self, name: str) -> dict[str, Any]:
+        """The catalog's explanation plus `health` (state and reasons, as the console shows
+        them) for the members that have one: metrics, measures, rules and processes, and the
+        member that defines a concept. Health holds no audit data; it is the same for everyone."""
+        detail = self.catalog.explain(name)
+        states = self.health.states()
+
+        def attach(item: dict[str, Any]) -> None:
+            health = states.get(f"{item.get('kind')}:{item.get('name')}")
+            if health is not None:
+                item["health"] = health
+            if isinstance(item.get("defined_by"), dict):
+                attach(item["defined_by"])
+
+        attach(detail)
+        return detail
 
     # -- impact ------------------------------------------------------------------
 
