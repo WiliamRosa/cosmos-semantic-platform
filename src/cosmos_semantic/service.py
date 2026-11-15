@@ -27,6 +27,7 @@ from cosmos_semantic.health import Health
 from cosmos_semantic.planner import CompiledQuery, Principal, QueryRequest
 
 audit_log = logging.getLogger("cosmos.audit")
+log = logging.getLogger(__name__)
 
 
 def jsonable(value: Any) -> Any:
@@ -131,7 +132,17 @@ class SemanticService:
         them) for the members that have one: metrics, measures, rules and processes, and the
         member that defines a concept. Health holds no audit data; it is the same for everyone."""
         detail = self.catalog.explain(name)
-        states = self.health.states()
+        try:
+            states = self.health.states()
+        except (OSError, ValueError) as exc:  # unreadable runs log; JSON errors are ValueErrors
+            # The type only: the message of a parse error may quote the file.
+            log.warning("cannot read the check runs log: %s", type(exc).__name__)
+            g = self.engine.graph
+            unreadable = {"state": "unchecked", "reasons": [{"code": "runs_log_unreadable"}]}
+            keys = [f"rule:{n}" for n in g.rules] + [f"metric:{n}" for n in g.metrics]
+            keys += [f"measure:{n}" for n in g.measure_owner]
+            keys += [f"process:{p.name}" for p in g.project.processes]
+            states = {k: unreadable for k in keys}
 
         def attach(item: dict[str, Any]) -> None:
             health = states.get(f"{item.get('kind')}:{item.get('name')}")

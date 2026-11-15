@@ -145,6 +145,25 @@ def test_explain_carries_the_console_health(graph, monkeypatch, tmp_path):
     assert unknown.status_code == 400 and "health" not in unknown.text
 
 
+def test_explain_survives_an_unreadable_runs_log(graph, monkeypatch, tmp_path, caplog):
+    runs = tmp_path / "runs.jsonl"
+    runs.write_text('{"event": "check", "secret-ish": \n', encoding="utf-8")
+    monkeypatch.setenv("COSMOS_RUNS_LOG", str(runs))
+    engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
+    settings = AuthSettings(dev_keys={"analyst": DevKey(subject="analyst@example.com", user={})})
+    service = SemanticService(engine, admins=set())
+    client = TestClient(create_app(service, Authenticator(settings, graph.project.user_context)))
+
+    with caplog.at_level("WARNING", logger="cosmos_semantic.service"):
+        response = client.get("/v1/explain/metric:net_revenue", headers={"X-API-Key": "analyst"})
+    assert response.status_code == 200, response.text
+    assert response.json()["health"] == {
+        "state": "unchecked",
+        "reasons": [{"code": "runs_log_unreadable"}],
+    }
+    assert "cannot read the check runs log" in caplog.text and "secret-ish" not in caplog.text
+
+
 def test_glossary_as_skos(client):
     response = client.get(
         "/v1/glossary", params={"format": "jsonld"}, headers={"X-API-Key": "dev-sul"}
