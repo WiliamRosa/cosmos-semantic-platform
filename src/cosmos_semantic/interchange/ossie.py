@@ -31,7 +31,11 @@ glossary, business rules and business context):
   systems and processes have no native Ossie field: they are in the root extension, so a row
   filter that reads a rule and a glossary concept that maps to one are exported too. The rules
   a dataset's row filters read (with the rules those bind to) are also copied into that
-  dataset's extension, with the business time zone, so the fallback import still has them. A metric whose filter reads a rule lives only in the root extension.
+  dataset's extension, so the fallback import still has them. A metric whose filter reads a
+  rule lives only in the root extension.
+- The business time zone is copied into every dataset's extension, so the fallback import
+  keeps "today" (CURRENT_DATE, rule versions) even for a model without row filters; copies
+  that disagree are refused.
 - User context fields that nothing exported reads are not exported; each one becomes a warning,
   and the extension records how many were omitted, which ``import_ossie`` reports again.
 """
@@ -137,7 +141,7 @@ def import_ossie(path: str | Path) -> ImportResult:
             copies += [f"{mname}.{f['name']}" for f in policies["row_filters"]]
             _merge_user_context(user_context, policies.get("user_context") or {}, where)
             _merge_rules(rules, policies.get("business_rules") or [], where)
-            _merge_timezone(zones, policies, where)
+        _merge_timezone(zones, policies, where)
         for fld in ds.get("fields") or []:
             fexpr = _expression(fld.get("expression"), f"{where}.fields.{fld['name']}", warnings)
             exprs[fld["name"]] = fexpr or fld["name"]
@@ -646,6 +650,10 @@ class _OssieWriter:
                         for r in read
                     ]
                 item["custom_extensions"] = _extension(copy)
+            elif self.graph.project.timezone:
+                # "Today" for CURRENT_DATE and rule versions: on every dataset, so the fallback
+                # import keeps it for a model without row filters too.
+                item["custom_extensions"] = _extension({"timezone": self.graph.project.timezone})
             out.append(item)
         self._ai_context(out)
         return out
