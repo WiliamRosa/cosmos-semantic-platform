@@ -26,6 +26,18 @@ format or the API; such changes are listed under **Changed**.
   Each call is written to the audit log as a `dimension_values` event, which `replay` and the
   usage report ignore.
 
+### Changed
+
+- Rolling windows close the gaps of the #57 review (DEC-22). `cosmos validate`, `cosmos check`
+  and every strict model load now refuse a cumulative metric with `window` over an `avg` or
+  `count_distinct` measure, with the reason the query used to give; before, the model was valid
+  and only a query of the metric was refused. No number changes and the SQL of existing requests
+  is the same. The example model gains `smallest_order` (`min`), `customer_records` (`count`) and
+  their rolling metrics `smallest_order_rolling_7_days` and `customers_rolling_30_days`, with
+  reference cases A31 (null segments and null days under a row filter) and A32 (a `min` window).
+  The randomized cross-database test draws rolling metrics at day grain of its own, and the TPC-H
+  model gains `revenue_rolling_7_days` with case T08, so the baseline times the range self-join.
+
 ### Fixed
 
 - Ossie import without the root `COSMOS_SEMANTIC` extension keeps the business time zone for

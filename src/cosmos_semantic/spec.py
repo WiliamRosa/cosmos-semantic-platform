@@ -96,6 +96,22 @@ class DerivedMetric(_MetricBase):
     expr: str = Field(description="Expression over measures or metrics, referenced as `{name}`.")
 
 
+# Aggregations whose daily values combine over a rolling window (sums add up, min and max
+# combine); an average or a distinct count cannot be rebuilt from daily values.
+WINDOW_AGGS = ("sum", "count", "min", "max")
+
+
+def window_agg_refusal(agg: str) -> str | None:
+    """Why a rolling window cannot run over a measure with this aggregation; None if it can.
+    Model validation and the planner give the same reason."""
+    if agg in WINDOW_AGGS:
+        return None
+    return (
+        f"a rolling window over a `{agg}` measure is not supported; "
+        "it cannot be combined from daily values (use sum, count, min or max)"
+    )
+
+
 class CumulativeMetric(_MetricBase):
     type: Literal["cumulative"]
     measure: Name

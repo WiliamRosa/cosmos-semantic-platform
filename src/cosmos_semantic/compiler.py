@@ -20,6 +20,7 @@ from cosmos_semantic.spec import (
     RatioMetric,
     SemanticModel,
     SimpleMetric,
+    window_agg_refusal,
 )
 
 TIME_GRAINS = ("hour", "day", "week", "month", "quarter", "year")
@@ -285,11 +286,17 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
         for ref in _metric_refs(metric):
             if ref not in g.measure_owner and ref not in g.metrics:
                 err(loc, f"reference `{ref}` is neither a measure nor a metric")
-        if isinstance(metric, CumulativeMetric) and metric.window and not metric.window_days():
-            warn(
-                loc,
-                "only windows in days, such as `7 days`, are supported; queries will be refused",
-            )
+        if isinstance(metric, CumulativeMetric) and metric.window:
+            if not metric.window_days():
+                warn(
+                    loc,
+                    "only windows in days, such as `7 days`, are supported; "
+                    "queries will be refused",
+                )
+            owner = g.measure_owner.get(metric.measure)
+            refusal = owner and window_agg_refusal(g.models[owner].measures[metric.measure].agg)
+            if refusal:
+                err(loc, refusal)
     _check_metric_cycles(g, err)
 
     # Join ambiguity between any two reachable models

@@ -563,3 +563,69 @@ cases:
           ON f.status = d.status
           AND f.ordered_at >= DATEADD(day, -6, d.dd) AND f.ordered_at < DATEADD(day, 1, d.dd)
         GROUP BY d.status, d.dd
+
+  # A rolling window over null groups: a null segment is a group of its own inside the window
+  # (rows are matched null-safely), and a null day (customers without orders have no
+  # last_order_at) is a row whose value is null: no day is within N days of an unknown day.
+  - id: A31
+    category: tempo
+    phase: 3
+    title: Rolling 30-day count with null segments and null days, under a row filter
+    request:
+      metrics: [customers_rolling_30_days]
+      dimensions: [customers.segment, customers.last_order_at__day]
+    user: { region: Northeast }
+    sql: |
+      WITH c AS (
+        SELECT segment, last_order_at FROM public.customers WHERE region = 'Northeast'
+      )
+      SELECT d.segment AS customers__segment, d.dd AS customers__last_order_at__day,
+             SUM(CASE WHEN c.last_order_at IS NOT NULL THEN 1 END) AS customers_rolling_30_days
+      FROM (SELECT DISTINCT segment, DATE_TRUNC('day', last_order_at) AS dd FROM c) d
+      LEFT JOIN c
+        ON (c.segment = d.segment OR (c.segment IS NULL AND d.segment IS NULL))
+        AND c.last_order_at >= d.dd - INTERVAL '29' DAY
+        AND c.last_order_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.segment, d.dd
+    sql_by_dialect:
+      tsql: |
+        WITH c AS (
+          SELECT segment, last_order_at FROM public.customers WHERE region = 'Northeast'
+        )
+        SELECT d.segment AS customers__segment, d.dd AS customers__last_order_at__day,
+               SUM(CASE WHEN c.last_order_at IS NOT NULL THEN 1 END) AS customers_rolling_30_days
+        FROM (SELECT DISTINCT segment, DATETRUNC(day, last_order_at) AS dd FROM c) d
+        LEFT JOIN c
+          ON (c.segment = d.segment OR (c.segment IS NULL AND d.segment IS NULL))
+          AND c.last_order_at >= DATEADD(day, -29, d.dd)
+          AND c.last_order_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.segment, d.dd
+
+  # min and max combine over the window: the smallest order of the 7 days ending on day D is
+  # the smallest of the daily minimums. The daily minimum is alongside.
+  - id: A32
+    category: tempo
+    phase: 3
+    title: Rolling 7-day minimum by status and day, with the daily minimum alongside
+    request:
+      metrics: [smallest_order_rolling_7_days, smallest_order]
+      dimensions: [orders.status, orders.ordered_at__day]
+    sql: |
+      SELECT d.status AS orders__status, d.dd AS orders__ordered_at__day,
+             MIN(o.amount) AS smallest_order_rolling_7_days,
+             MIN(CASE WHEN o.ordered_at >= d.dd THEN o.amount END) AS smallest_order
+      FROM (SELECT DISTINCT status, DATE_TRUNC('day', ordered_at) AS dd FROM public.orders) d
+      JOIN public.orders o
+        ON o.status = d.status
+        AND o.ordered_at >= d.dd - INTERVAL '6' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.status, d.dd
+    sql_by_dialect:
+      tsql: |
+        SELECT d.status AS orders__status, d.dd AS orders__ordered_at__day,
+               MIN(o.amount) AS smallest_order_rolling_7_days,
+               MIN(CASE WHEN o.ordered_at >= d.dd THEN o.amount END) AS smallest_order
+        FROM (SELECT DISTINCT status, DATETRUNC(day, ordered_at) AS dd FROM public.orders) d
+        JOIN public.orders o
+          ON o.status = d.status
+          AND o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.status, d.dd

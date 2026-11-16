@@ -207,16 +207,12 @@ semantic_models:
       - {name: amount, agg: sum}
       - {name: lines, agg: count}
       - {name: top_amount, agg: max, expr: amount}
-      - {name: mean_amount, agg: avg, expr: amount}
-      - {name: buyers, agg: count_distinct, expr: buyer_id}
 metrics:
   - {name: amount_7d, type: cumulative, measure: amount, window: 7 days}
   - {name: lines_1d, type: cumulative, measure: lines, window: 1 day}
   - {name: top_30d, type: cumulative, measure: top_amount, window: 30 days}
   - {name: amount_2w, type: cumulative, measure: amount, window: 2 weeks}
   - {name: amount_1mo, type: cumulative, measure: amount, window: 1 month}
-  - {name: mean_7d, type: cumulative, measure: mean_amount, window: 7 days}
-  - {name: buyers_7d, type: cumulative, measure: buyers, window: 7 days}
   - {name: amount_0d, type: cumulative, measure: amount, window: 0 days}
   - {name: amount_7d_doubled, type: derived, expr: "{amount_7d} * 2"}
 """
@@ -232,8 +228,6 @@ metrics:
         ("amount_7d", ["sales.sold_at__month"], "needs the time dimension at day grain"),
         ("amount_7d", ["sales.sold_at"], "needs the time dimension at day grain"),
         ("amount_7d", ["sales.kind"], "exactly one time dimension"),
-        ("mean_7d", ["sales.sold_at__day"], "over a `avg` measure is not supported"),
-        ("buyers_7d", ["sales.sold_at__day"], "over a `count_distinct` measure"),
         ("amount_7d_doubled", ["sales.sold_at__day"], "cannot be part of another metric"),
     ],
 )
@@ -241,6 +235,74 @@ def test_rolling_window_refusals(metric, dimensions, message):
     graph = compile_project(project(ROLLING))
     with pytest.raises(QueryError, match=message):
         Planner(graph, "duckdb").plan(QueryRequest(metrics=[metric], dimensions=dimensions))
+
+
+# An average or a distinct count cannot be combined from daily values: the model is refused
+# when it is validated (`cosmos validate`, `cosmos check`), not only when the metric is queried.
+ROLLING_UNCOMBINABLE = (
+    ROLLING.replace(
+        "      - {name: top_amount, agg: max, expr: amount}\n",
+        "      - {name: top_amount, agg: max, expr: amount}\n"
+        "      - {name: mean_amount, agg: avg, expr: amount}\n"
+        "      - {name: buyers, agg: count_distinct, expr: buyer_id}\n",
+    )
+    + "  - {name: mean_7d, type: cumulative, measure: mean_amount, window: 7 days}\n"
+    + "  - {name: buyers_7d, type: cumulative, measure: buyers, window: 7 days}\n"
+)
+
+
+def test_rolling_window_over_avg_or_count_distinct_is_refused_by_validation():
+    with pytest.raises(ModelError, match="mean_7d") as caught:
+        compile_project(project(ROLLING_UNCOMBINABLE))
+    assert "buyers_7d" in str(caught.value)
+
+    graph = compile_project(project(ROLLING_UNCOMBINABLE), strict=False)
+    errors = {i.location: i.message for i in graph.issues if i.severity == "error"}
+    assert set(errors) == {"metrics.mean_7d", "metrics.buyers_7d"}
+    assert "over a `avg` measure is not supported" in errors["metrics.mean_7d"]
+    assert "over a `count_distinct` measure is not supported" in errors["metrics.buyers_7d"]
+    # The other rolling metrics of the model are still valid.
+    assert not any(i.location == "metrics.amount_7d" for i in graph.issues)
+
+
+def test_cosmos_validate_reports_rolling_windows_over_avg_or_count_distinct(tmp_path):
+    from typer.testing import CliRunner
+
+    from cosmos_semantic.cli import app
+
+    (tmp_path / "model.yml").write_text(ROLLING_UNCOMBINABLE, encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "--model", str(tmp_path)])
+    assert result.exit_code == 1, result.output
+    assert "[error] metrics.mean_7d: a rolling window over a `avg` measure" in result.output
+    assert "[error] metrics.buyers_7d: a rolling window over a `count_distinct`" in result.output
+
+
+@pytest.mark.parametrize(
+    ("metric", "message"),
+    [
+        ("mean_7d", "over a `avg` measure is not supported"),
+        ("buyers_7d", "over a `count_distinct` measure"),
+    ],
+)
+def test_rolling_window_over_avg_or_count_distinct_is_still_refused_when_queried(metric, message):
+    graph = compile_project(project(ROLLING_UNCOMBINABLE), strict=False)
+    with pytest.raises(QueryError, match=message):
+        Planner(graph, "duckdb").plan(
+            QueryRequest(metrics=[metric], dimensions=["sales.sold_at__day"])
+        )
+
+
+def test_rolling_windows_over_sum_count_min_and_max_pass_validation():
+    graph = compile_project(project(ROLLING), strict=False)
+    assert not [i for i in graph.issues if i.severity == "error"]
+    flagged = {i.location for i in graph.issues}
+    assert not flagged & {"metrics.amount_7d", "metrics.lines_1d", "metrics.top_30d"}
+    # Windows in other units stay a warning: the model is valid, those queries are refused.
+    assert {"metrics.amount_2w", "metrics.amount_1mo", "metrics.amount_0d"} <= flagged
+    # Validation and the planner accept the same aggregations.
+    from cosmos_semantic import planner, spec
+
+    assert set(planner._WINDOW_AGGS) == set(spec.WINDOW_AGGS)
 
 
 @pytest.mark.parametrize(

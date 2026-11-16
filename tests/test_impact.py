@@ -45,8 +45,9 @@ def test_region_dimension_reaches_the_row_filter(graph):
 
 def test_model_lists_joining_models_without_inflating_metrics(graph):
     result = affected(graph, "model:customers")
-    assert result["metrics"] == []
-    assert result["measures"] == ["customer_count"]
+    # Only the metric over its own measures; none of the metrics of the models that join it.
+    assert result["metrics"] == ["customers_rolling_30_days"]
+    assert result["measures"] == ["customer_count", "customer_records"]
     assert set(result["models"]) == {"customers", "orders", "order_items", "payments"}
 
 

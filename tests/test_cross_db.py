@@ -2,6 +2,7 @@
 
 Generates random requests (fixed seed) combining metrics, dimensions, grains, business rules
 and users, and requires DuckDB, Postgres and SQL Server to return exactly the same result.
+Rolling-window metrics, valid only at day grain, get draws of their own so every run has them.
 Also checks that a refused request is refused on every data source.
 """
 
@@ -17,6 +18,7 @@ import pytest
 from cosmos_semantic.compiler import TIME_GRAINS
 from cosmos_semantic.errors import CosmosError
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
+from cosmos_semantic.spec import CumulativeMetric
 
 REGIONS = ["Midwest", "Northeast", "South", "West", "Mountain"]
 FILTERS = [
@@ -121,13 +123,78 @@ def _requests(graph, count: int, seed: int):
     return produced
 
 
+# Every dialect a connector can have: a drawn request must plan on all of them.
+DIALECTS = ["duckdb", "postgres", "tsql", "databricks", "snowflake", "mysql", "oracle"]
+
+
+def _rolling_requests(graph, count: int, seed: int):
+    """Requests with a rolling-window metric and a time dimension at day grain (the only grain
+    a window in days accepts), with up to one other dimension, one other metric and one filter.
+    Its own generator, so the draws of `_requests` do not move."""
+    rng = random.Random(seed)
+    rolling = sorted(
+        name
+        for name, metric in graph.metrics.items()
+        if isinstance(metric, CumulativeMetric) and metric.window_days()
+    )
+    others = sorted(
+        name
+        for name in set(graph.metrics) | set(graph.measure_owner)
+        if not isinstance(graph.metrics.get(name), CumulativeMetric)
+    )
+    days, plain = [], []
+    for m, node in graph.models.items():
+        for d, spec in node.dimensions.items():
+            if not spec.sensitivity:
+                (days if spec.type == "time" else plain).append(f"{m}.{d}")
+    days = sorted(f"{d}__day" for d in days)
+    plain = sorted(plain)
+    produced, attempts = [], 0
+    while len(produced) < count and attempts < count * 50:
+        attempts += 1
+        request = QueryRequest(
+            metrics=[rng.choice(rolling), *rng.sample(others, rng.randint(0, 1))],
+            dimensions=[*rng.sample(plain, rng.randint(0, 1)), rng.choice(days)],
+            filters=rng.sample(FILTERS, rng.choice([0, 1])),
+        )
+        principal = Principal(
+            user={"region": rng.choice(REGIONS)}, channel=rng.choice(["api", "mcp"])
+        )
+        try:
+            for dialect in DIALECTS:
+                Planner(graph, dialect).plan(request, principal)
+        except CosmosError:
+            continue
+        produced.append((request, principal))
+    return produced
+
+
 REQUESTS_PER_RUN = 80
+ROLLING_PER_RUN = 12
+
+
+def test_rolling_draws_are_deterministic_and_cover_every_rolling_metric(graph):
+    first = _rolling_requests(graph, ROLLING_PER_RUN, seed=2026)
+    assert len(first) == ROLLING_PER_RUN
+    assert first == _rolling_requests(graph, ROLLING_PER_RUN, seed=2026)
+    drawn = {m for request, _ in first for m in request.metrics}
+    rolling = {
+        name
+        for name, metric in graph.metrics.items()
+        if isinstance(metric, CumulativeMetric) and metric.window_days()
+    }
+    assert rolling <= drawn
+    for request, _ in first:
+        assert sum(d.endswith("__day") for d in request.dimensions) == 1
 
 
 def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     failures = []
     requests = _requests(graph, REQUESTS_PER_RUN, seed=2026)
     assert len(requests) == REQUESTS_PER_RUN
+    rolling = _rolling_requests(graph, ROLLING_PER_RUN, seed=2026)
+    assert len(rolling) == ROLLING_PER_RUN
+    requests += rolling
     for i, (request, principal) in enumerate(requests):
         results = {}
         for name, connector in connectors.items():

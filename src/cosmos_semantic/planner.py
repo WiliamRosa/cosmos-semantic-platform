@@ -35,6 +35,7 @@ from cosmos_semantic.spec import (
     Measure,
     RatioMetric,
     SimpleMetric,
+    window_agg_refusal,
 )
 
 
@@ -321,11 +322,10 @@ class Planner:
                         "only windows in days, such as `7 days`, for now"
                     )
                 agg = g.models[g.measure_owner[metric.measure]].measures[metric.measure].agg
-                if agg not in _WINDOW_AGGS:
-                    raise QueryError(
-                        f"`{name}`: a rolling window over a `{agg}` measure is not supported; "
-                        "it cannot be combined from daily values (use sum, count, min or max)"
-                    )
+                # Model validation refuses it too; kept for graphs compiled without `strict`.
+                refusal = window_agg_refusal(agg)
+                if refusal:
+                    raise QueryError(f"`{name}`: {refusal}")
             if extra_filter or stack != {name}:
                 raise QueryError(f"`{name}`: a cumulative metric cannot be part of another metric")
             return self._input(_Input(metric.measure, None), groups)
