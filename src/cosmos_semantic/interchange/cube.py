@@ -702,7 +702,7 @@ class _CubeWriter:
         node, measure = self.graph.measure(metric.measure)
         if measure.agg not in _TO_DATE_AGGS:
             raise _NotExported(
-                f"it is cumulative over a `{measure.agg}` measure, and the Cube export carries "
+                f"it is cumulative over a measure that aggregates with `{measure.agg}`, and the Cube export carries "
                 "running totals of `sum` and `count` measures only"
             )
         item = self._measure(measure, name=metric.name)

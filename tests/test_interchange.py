@@ -1345,10 +1345,13 @@ def test_cube_export_states_each_reason(graph):
         "it is cumulative over a rolling window (`7 days`)"
     )
     assert reasons["metrics.avg_qty_mtd"].startswith(
-        "it is cumulative over a `avg` measure, and the Cube export carries running totals of "
+        "it is cumulative over a measure that aggregates with `avg`, and the Cube export carries "
+        "running totals of "
         "`sum` and `count` measures only"
     )
-    assert reasons["metrics.buyers_mtd"].startswith("it is cumulative over a `count_distinct`")
+    assert reasons["metrics.buyers_mtd"].startswith(
+        "it is cumulative over a measure that aggregates with `count_distinct`"
+    )
     assert reasons["metrics.revenue_running"].startswith("it is cumulative without `grain_to_date`")
     assert all(
         r.endswith("it is not exported to Cube")
