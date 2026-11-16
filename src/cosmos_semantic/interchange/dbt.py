@@ -616,7 +616,8 @@ class _DbtWriter:
         elif isinstance(metric, DerivedMetric):
             return self._derived(metric)
         else:
-            # MetricFlow's periods differ from the engine's partitions at coarser grains.
+            # At a grain coarser than the to-date period MetricFlow returns a value, while the
+            # engine refuses the query (DEC-21).
             raise _NotExported("it is cumulative, and the dbt export does not carry it yet")
         if metric.filter:
             item["filter"] = self._filter(metric.filter, self._leaves(metric.name))
