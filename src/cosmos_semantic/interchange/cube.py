@@ -4,17 +4,20 @@ Import: JavaScript models and YAML with Jinja or Python templates produce a warn
 imported, because they would require running user code. Access rules in ``cube.js`` are code
 too: the report lists what must be recreated as ``row_filters`` and ``sensitivity``.
 
-Export (first slice): one cube per model with ``sql_table``, joins from the entities, dimensions
-(the primary key as a hidden dimension when no dimension holds it), measures, and metrics as
-measures: a simple metric is a measure with ``filters``, ratio and derived metrics are ``number``
-measures. Division and AVG are written with a ``1e0 *`` factor, a floating-point literal in most
-databases (a high-precision numeric in Postgres and Oracle), so they are real and division is null
-on a zero denominator, close to the planner's ``CAST(x AS DOUBLE)`` without being the same SQL.
-``import_cube`` reads the export back with the same numbers in Cosmos. Metrics spanning
-cubes are exported with a warning (docs Rule 3). The export fails closed on row filters and
-sensitivity, and on metrics it cannot carry (cumulative ones, filters beyond the measure's own
-cube), unless the caller accepts the loss. Business rules, the glossary and the business context
-are not exported yet; each one present is a warning.
+Export (first and second slices): one cube per model with ``sql_table``, joins from the
+entities, dimensions (the primary key as a hidden dimension when no dimension holds it), measures,
+and metrics as measures: a simple metric is a measure with ``filters``, ratio and derived metrics
+are ``number`` measures, and a ``grain_to_date`` running total of a ``sum`` or ``count`` measure
+is a measure with ``rolling_window: {type: to_date}``. Division and AVG are written with a
+``1e0 *`` factor, a floating-point literal in most databases (a high-precision numeric in
+Postgres and Oracle), so they are real and division is null on a zero denominator, close to the
+planner's ``CAST(x AS DOUBLE)`` without being the same SQL. ``import_cube`` reads the export back
+with the same numbers in Cosmos. Metrics spanning cubes are exported with a warning (docs Rule 3).
+The export fails closed on row filters and sensitivity, and on metrics it cannot carry (rolling
+windows in days, running totals of other aggregations or without a period, metrics over a
+cumulative one, filters beyond the measure's own cube), unless the caller accepts the loss.
+Business rules, the glossary and the business context are not exported yet; each one present is
+a warning.
 """
 
 from __future__ import annotations
@@ -31,7 +34,13 @@ from sqlglot.tokens import TokenType
 from cosmos_semantic.errors import QueryError
 from cosmos_semantic.expressions import REF_RE, USER_RE
 from cosmos_semantic.interchange import ExportResult, ImportResult
-from cosmos_semantic.spec import DerivedMetric, Project, RatioMetric, SimpleMetric
+from cosmos_semantic.spec import (
+    CumulativeMetric,
+    DerivedMetric,
+    Project,
+    RatioMetric,
+    SimpleMetric,
+)
 
 _CUBE_REF = re.compile(r"\$?\{CUBE\}\.")
 _MEMBER_REF = re.compile(r"\$?\{([A-Za-z_][A-Za-z0-9_]*)(?:\.([A-Za-z_][A-Za-z0-9_]*))?\}")
@@ -246,6 +255,8 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> None:
             )
         if filters:
             warnings.append(f"{where}: filters on a cumulative measure were dropped")
+        if measure.get("description"):
+            metric["description"] = measure["description"]
         metrics.append(metric)
     elif filters:
         flt = " AND ".join(f"({_cube_filter(f, dims)})" for f in filters)
@@ -444,6 +455,11 @@ def real_division(tree: exp.Expression) -> exp.Expression:
     return tree
 
 
+# Measures whose running total a Cube ``to_date`` window computes as the planner does: the sum
+# of the rows from the start of the period equals the running sum of the per-bucket values.
+_TO_DATE_AGGS = ("sum", "count")
+
+
 class _NotExported(Exception):
     """A metric the Cube export cannot carry; the message is the reason."""
 
@@ -610,7 +626,15 @@ class _CubeWriter:
     def _use(self, ref: str) -> str:
         """A member a metric references, placed first when it is a metric."""
         name = ref.split(".")[-1]
-        if name not in self.placed and name in self.graph.metrics:
+        metric = self.graph.metrics.get(name)
+        if isinstance(metric, CumulativeMetric):
+            # The planner refuses a cumulative metric inside another metric, so its numbers
+            # are not defined in Cosmos; Cube must not get a definition of its own.
+            raise _NotExported(
+                f"it uses the cumulative metric `{name}`, and Cosmos does not compute a "
+                "cumulative metric inside another one"
+            )
+        if name not in self.placed and metric is not None:
             self._place(name)
         if name not in self.placed:
             raise _NotExported(f"it uses `{name}`, which is not exported")
@@ -659,9 +683,31 @@ class _CubeWriter:
             return cube, item, self.leaves[num] | self.leaves[den]
         if isinstance(metric, DerivedMetric):
             return self._derived(metric)
-        raise _NotExported(
-            "it is cumulative, and the Cube export does not carry cumulative metrics"
-        )
+        return self._cumulative(metric)
+
+    def _cumulative(self, metric: CumulativeMetric) -> tuple[str, dict[str, Any], set[str]]:
+        """A ``grain_to_date`` running total of a ``sum`` or ``count`` measure: a measure with a
+        ``to_date`` rolling window, which sums the rows from the start of the period to the end
+        of each time bucket, as the planner's running total does."""
+        if metric.window:
+            raise _NotExported(
+                f"it is cumulative over a rolling window (`{metric.window}`), and the Cube "
+                "export does not carry rolling windows yet"
+            )
+        if not metric.grain_to_date:
+            raise _NotExported(
+                "it is cumulative without `grain_to_date`, and the Cube export carries only "
+                "running totals from the start of a period"
+            )
+        node, measure = self.graph.measure(metric.measure)
+        if measure.agg not in _TO_DATE_AGGS:
+            raise _NotExported(
+                f"it is cumulative over a `{measure.agg}` measure, and the Cube export carries "
+                "running totals of `sum` and `count` measures only"
+            )
+        item = self._measure(measure, name=metric.name)
+        item["rolling_window"] = {"type": "to_date", "granularity": metric.grain_to_date}
+        return node.name, item, {node.name}
 
     def _derived(self, metric) -> tuple[str, dict[str, Any], set[str]]:
         refs: list[str] = []

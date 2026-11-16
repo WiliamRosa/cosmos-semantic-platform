@@ -965,6 +965,9 @@ def test_cli_export_ossie(tmp_path, graph):
 # -- Cube export (cubes, joins, dimensions, measures, metrics) --------------------------------
 
 CUMULATIVE = ("revenue_year_to_date", "revenue_month_to_date", "revenue_rolling_7_days")
+# Running totals Cube carries as `to_date` rolling windows, and the rolling window it does not.
+TO_DATE = ("revenue_year_to_date", "revenue_month_to_date")
+CUBE_LOST = ("revenue_rolling_7_days",)
 SPANS_CUBES = ("collection_gap", "items_per_order")
 LOSS_FLAGS = {"allow_policy_loss": True, "allow_metric_loss": True}
 
@@ -992,21 +995,20 @@ def _with_policies(back: Project, original: Project) -> Project:
     return Project.model_validate(data)
 
 
-def _cube_cases(project: Project, *, policies: bool) -> list:
-    """Reference queries the Cube export must answer: none with a business rule or a cumulative
-    metric (not exported), and, without the policies, none that reads the user or expects a
-    policy error."""
+def _cube_cases(project: Project, *, policies: bool, lost: tuple[str, ...] = CUMULATIVE) -> list:
+    """Reference queries an export must answer: none with a business rule or a metric it does
+    not carry (``lost``: every cumulative one by default), and, without the policies, none that
+    reads the user or expects a policy error."""
     cases = [
         c
         for c in _numbers_cases(project)
-        if not set(c.request.metrics) & set(CUMULATIVE)
-        and (policies or not (c.user or c.expect_error))
+        if not set(c.request.metrics) & set(lost) and (policies or not (c.user or c.expect_error))
     ]
     return cases
 
 
 def test_cube_export_fails_closed(graph, tmp_path):
-    """The example has row filters, sensitivity and cumulative metrics: each loss is refused
+    """The example has row filters, sensitivity and a rolling window: each loss is refused
     until the caller accepts it."""
     with pytest.raises(PolicyLossError) as exc:
         export_cube(graph.project, allow_metric_loss=True)
@@ -1019,15 +1021,16 @@ def test_cube_export_fails_closed(graph, tmp_path):
     )
     with pytest.raises(MetricLossError) as exc:
         export_cube(graph.project, allow_policy_loss=True)
-    assert str(exc.value).startswith(
-        "3 metrics (revenue_year_to_date, revenue_month_to_date, revenue_rolling_7_days) "
-        "would NOT be exported "
-        "(revenue_year_to_date: it is cumulative"
+    assert str(exc.value) == (
+        "1 metric (revenue_rolling_7_days) would NOT be exported (revenue_rolling_7_days: it is "
+        "cumulative over a rolling window (`7 days`), and the Cube export does not carry rolling "
+        "windows yet); the Cube model would not have them. Pass --allow-metric-loss to export "
+        "anyway"
     )
-    assert str(exc.value).endswith("Pass --allow-metric-loss to export anyway")
-    # Without policies or cumulative metrics there is nothing to refuse.
+    # Without policies or the rolling window there is nothing to refuse: the year-to-date and
+    # month-to-date metrics are exported.
     data = _without_policies(_without_business(graph.project))
-    data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUMULATIVE]
+    data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUBE_LOST]
     data["user_context"], data["timezone"], data["glossary"] = {}, None, []
     clean = export_cube(Project.model_validate(data))
     assert {w.split(":")[0] for w in clean.warnings} == {f"metrics.{m}" for m in SPANS_CUBES}
@@ -1063,6 +1066,20 @@ def test_cube_export_round_trip(graph, tmp_path):
     assert measures["collection_gap"]["sql"] == "{net_revenue} - {payments.paid_value}"
     assert measures["avg_quantity"]["sql"] == "1e0 * {CUBE}.quantity"
     assert measures["item_revenue"]["sql"] == "{CUBE}.quantity * {CUBE}.unit_price"
+    # A running total since the start of the period: a `to_date` rolling window.
+    assert measures["revenue_year_to_date"] == {
+        "name": "revenue_year_to_date",
+        "type": "sum",
+        "sql": "{CUBE}.amount",
+        "rolling_window": {"type": "to_date", "granularity": "year"},
+        "description": "Year-to-date revenue",
+        "meta": {"owner": "controllership"},
+    }
+    assert measures["revenue_month_to_date"]["rolling_window"] == {
+        "type": "to_date",
+        "granularity": "month",
+    }
+    assert "revenue_rolling_7_days" not in measures
 
     # Models, tables, dimensions and measures come back as they were (the primary key as an
     # entity named after the cube; AVG with a `1e0 *` factor, so it is real in Cube too).
@@ -1082,14 +1099,27 @@ def test_cube_export_round_trip(graph, tmp_path):
     names = {m.name for m in back.project.metrics} | {
         x.name for m in back.project.semantic_models for x in m.measures
     }
-    assert {m.name for m in graph.project.metrics} - names == set(CUMULATIVE)
-    # Every loss is a warning: policies, cumulative metrics and what a later slice exports;
+    assert {m.name for m in graph.project.metrics} - names == set(CUBE_LOST)
+    # The running totals come back as cumulative metrics over a `__base` measure.
+    metrics = {m.name: m for m in back.project.metrics}
+    for name in TO_DATE:
+        native = graph.metrics[name]
+        assert metrics[name].type == "cumulative"
+        assert metrics[name].grain_to_date == native.grain_to_date
+        assert metrics[name].window is None
+        assert metrics[name].measure == f"{name}__base"
+        assert metrics[name].description == native.description
+    orders_back = next(m for m in back.project.semantic_models if m.name == "orders")
+    base = next(x for x in orders_back.measures if x.name == "revenue_year_to_date__base")
+    assert (base.agg, base.expr) == ("sum", "amount")
+    # Every loss is a warning: policies, the rolling window and what a later slice exports;
     # metrics spanning cubes are exported, with Rule 3's warning.
     joined = "\n".join(exported.warnings)
     assert "semantic_models.customers.row_filters.by_region: not exported to Cube" in joined
     assert sum("its sensitivity is not exported" in w for w in exported.warnings) == 3
-    for name in CUMULATIVE:
-        assert f"metrics.{name}: it is cumulative" in joined
+    assert "metrics.revenue_rolling_7_days: it is cumulative over a rolling window" in joined
+    for name in TO_DATE:
+        assert f"metrics.{name}:" not in joined
     for name in SPANS_CUBES:
         assert f"metrics.{name}: it spans cubes" in joined
     for key in ("business_rules", "glossary", "teams", "systems", "processes"):
@@ -1097,7 +1127,7 @@ def test_cube_export_round_trip(graph, tmp_path):
     assert "user_context: region" in joined
     assert "timezone: not exported to Cube. Model timestamps are local time, so keep" in joined
     assert "relative dates such as today then follow UTC in Cube, not America/New_York" in joined
-    assert len(exported.warnings) == 16
+    assert len(exported.warnings) == 14
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -1107,16 +1137,18 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     connector = request.getfixturevalue(source)
     _, back = _cube_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
     other = compile_project(back.project)
-    cases = _cube_cases(graph.project, policies=False)
-    assert len(cases) == 25
+    cases = _cube_cases(graph.project, policies=False, lost=CUBE_LOST)
+    # A08 (year-to-date by month) and A09 (month-to-date by status and day) among them.
+    assert {"A08", "A09"} <= {c.id for c in cases}
+    assert len(cases) == 27
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
     # With the original policies put back, the queries that read the user pass too.
     governed = compile_project(_with_policies(back.project, graph.project))
-    cases = _cube_cases(graph.project, policies=True)
-    assert {"R17", "R18"} <= {c.id for c in cases}
-    assert len(cases) == 40
+    cases = _cube_cases(graph.project, policies=True, lost=CUBE_LOST)
+    assert {"R17", "R18", "A08", "A09"} <= {c.id for c in cases}
+    assert len(cases) == 42
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1192,6 +1224,64 @@ def test_cube_export_metric_shapes_same_numbers(graph, tmp_path, source, request
             same(rows(full, connector, query), rows(other, connector, query))
 
 
+def _cube_to_date_metrics(project: Project) -> Project:
+    """The example without policies, plus a running total for every period over `sum` and
+    `count` measures of two cubes."""
+    data = _without_policies(_without_business(project))
+    data["glossary"] = []
+    data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUBE_LOST]
+    for grain in ("day", "week", "month", "quarter", "year"):
+        for measure in ("revenue", "order_count", "paid_value", "payment_count"):
+            data["metrics"].append(
+                {
+                    "name": f"{grain}_to_date_{measure}",
+                    "type": "cumulative",
+                    "measure": measure,
+                    "grain_to_date": grain,
+                }
+            )
+    return Project.model_validate(data)
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_cube_export_to_date_same_numbers(graph, tmp_path, source, request):
+    """Every running total the export writes as a `to_date` rolling window returns the native
+    numbers after the round trip, at every time grain, with and without another dimension, and
+    with a filter on the time dimension."""
+    connector = request.getfixturevalue(source)
+    project = _cube_to_date_metrics(graph.project)
+    full = compile_project(project)
+    exported, back = _cube_round_trip(project, tmp_path)
+    assert back.warnings == []
+    measures = {
+        m["name"]: m for c in yaml.safe_load(exported.text)["cubes"] for m in c.get("measures", [])
+    }
+    assert measures["week_to_date_payment_count"] == {
+        "name": "week_to_date_payment_count",
+        "type": "count",
+        "rolling_window": {"type": "to_date", "granularity": "week"},
+    }
+    other = compile_project(back.project)
+    names = [m.name for m in project.metrics if m.type == "cumulative"]
+    assert len(names) == 22
+    since = "CURRENT_DATE - INTERVAL '200' DAY"
+    for name in names:
+        model = "payments" if name.endswith(("paid_value", "payment_count")) else "orders"
+        time = "paid_at" if model == "payments" else "ordered_at"
+        extra = "payments.method" if model == "payments" else "orders.status"
+        for grain in ("day", "week", "month", "quarter", "year"):
+            for dims, filters in (
+                ([f"{model}.{time}__{grain}"], []),
+                ([extra, f"{model}.{time}__{grain}"], []),
+                # A start inside a period: both sides total from the first row kept.
+                ([f"{model}.{time}__{grain}"], [f"{{{model}.{time}}} >= {since}"]),
+            ):
+                query = QueryRequest(metrics=[name], dimensions=dims, filters=filters)
+                native = rows(full, connector, query)
+                assert native
+                same(native, rows(other, connector, query))
+
+
 def test_cube_export_states_each_reason(graph):
     data = _without_policies(_without_business(graph.project))
     data["metrics"] += [
@@ -1217,13 +1307,22 @@ def test_cube_export_states_each_reason(graph):
             "filter": "{status} = 'completed'",
         },
         {"name": "ytd_gap", "type": "derived", "expr": "{revenue_year_to_date} - {revenue}"},
+        {
+            "name": "ytd_share",
+            "type": "ratio",
+            "numerator": "revenue_year_to_date",
+            "denominator": "revenue",
+        },
+        {"name": "avg_qty_mtd", "type": "cumulative", "measure": "avg_quantity"},
+        {"name": "buyers_mtd", "type": "cumulative", "measure": "buyers"},
+        {"name": "revenue_running", "type": "cumulative", "measure": "revenue"},
     ]
+    data["metrics"][-3]["grain_to_date"] = "month"
+    data["metrics"][-2]["grain_to_date"] = "month"
     project = Project.model_validate(data)
     with pytest.raises(MetricLossError) as exc:
         export_cube(project)
-    assert str(exc.value).startswith(
-        "9 metrics (revenue_year_to_date, revenue_month_to_date, revenue_rolling_7_days, "
-    )
+    assert str(exc.value).startswith("11 metrics (revenue_rolling_7_days, midwest_revenue, ")
     warnings = export_cube(project, allow_metric_loss=True).warnings
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in warnings}
     assert reasons["metrics.midwest_revenue"].startswith(
@@ -1235,9 +1334,22 @@ def test_cube_export_states_each_reason(graph):
     assert reasons["metrics.my_revenue"].startswith("its filter uses $user")
     assert reasons["metrics.raw_gap"].startswith("its expression uses bare columns (amount)")
     assert reasons["metrics.completed_rate"].startswith("it has a filter")
-    assert reasons["metrics.ytd_gap"].startswith(
-        "it uses `revenue_year_to_date`, which is not exported"
+    # The running totals themselves are exported; the metrics over them are not, because the
+    # planner does not compute a cumulative metric inside another one.
+    assert "metrics.revenue_year_to_date" not in reasons
+    for name in ("ytd_gap", "ytd_share"):
+        assert reasons[f"metrics.{name}"].startswith(
+            "it uses the cumulative metric `revenue_year_to_date`, and Cosmos does not compute"
+        )
+    assert reasons["metrics.revenue_rolling_7_days"].startswith(
+        "it is cumulative over a rolling window (`7 days`)"
     )
+    assert reasons["metrics.avg_qty_mtd"].startswith(
+        "it is cumulative over a `avg` measure, and the Cube export carries running totals of "
+        "`sum` and `count` measures only"
+    )
+    assert reasons["metrics.buyers_mtd"].startswith("it is cumulative over a `count_distinct`")
+    assert reasons["metrics.revenue_running"].startswith("it is cumulative without `grain_to_date`")
     assert all(
         r.endswith("it is not exported to Cube")
         for k, r in reasons.items()
@@ -1271,10 +1383,7 @@ def test_cli_export_cube(tmp_path):
     assert "1 row filter (customers.by_region) and the sensitivity" in refused.stderr
     refused = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "--allow-policy-loss"])
     assert refused.exit_code == 1
-    assert (
-        "3 metrics (revenue_year_to_date, revenue_month_to_date, revenue_rolling_7_days)"
-        in refused.stderr
-    )
+    assert "1 metric (revenue_rolling_7_days) would NOT be exported" in refused.stderr
     flags = ["--allow-policy-loss", "--allow-metric-loss"]
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), *flags])
     assert result.exit_code == 0, result.output
@@ -1284,7 +1393,7 @@ def test_cli_export_cube(tmp_path):
     out = tmp_path / "model" / "cubes.yml"
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "16 warnings" in result.stdout
+    assert "14 warnings" in result.stdout
     assert import_model("cube", out).warnings == []
 
 

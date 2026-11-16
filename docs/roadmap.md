@@ -68,7 +68,7 @@ Redefined by [ADR 0009](decisions/0009-business-context-as-phase-3-differentiato
 
 ## Phase 4: connected BI and managed product — paused
 
-- Ossie export with a round-trip test — done (`cosmos export ossie`: models, entities, dimensions, measures, metrics, row filters, sensitivity, the glossary, business rules with their versions, and business context). Cube export with a round-trip test — first slice done (`cosmos export cube`: cubes, joins, dimensions, measures, and simple, ratio and derived metrics); policies, cumulative metrics and business rules next. dbt export with a round-trip test — first slice done (`cosmos export dbt`: semantic models with entities, dimensions and measures, and simple, ratio and derived metrics); cumulative metrics, policies and business rules next.
+- Ossie export with a round-trip test — done (`cosmos export ossie`: models, entities, dimensions, measures, metrics, row filters, sensitivity, the glossary, business rules with their versions, and business context). Cube export with a round-trip test — first and second slices done (`cosmos export cube`: cubes, joins, dimensions, measures, simple, ratio and derived metrics, and `grain_to_date` running totals of `sum` and `count` measures as `to_date` rolling windows, DEC-16); policies, rolling windows in days and business rules next. dbt export with a round-trip test — first slice done (`cosmos export dbt`: semantic models with entities, dimensions and measures, and simple, ratio and derived metrics); cumulative metrics, policies and business rules next.
 - Result cache.
 - A Postgres-compatible SQL endpoint, for Power BI, Tableau and Excel.
 - Control plane: editor, playground, connections, users.

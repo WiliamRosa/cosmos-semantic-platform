@@ -126,7 +126,7 @@ Tests export the e-commerce example and re-import it. The authoring model is the
 
 ## Exporting Cube
 
-`cosmos export cube -m semantic -o model/cubes/model.yml` writes the model as Cube static YAML (without `-o`, standard output carries only the YAML). `cosmos import cube` reads it back with the same numbers. This first slice covers models, joins, dimensions, measures and the simple, ratio and derived metrics:
+`cosmos export cube -m semantic -o model/cubes/model.yml` writes the model as Cube static YAML (without `-o`, standard output carries only the YAML). `cosmos import cube` reads it back with the same numbers. It covers models, joins, dimensions, measures, the simple, ratio and derived metrics, and, since the second slice (DEC-16), running totals since the start of a period:
 
 | Authoring format | In Cube |
 | --- | --- |
@@ -137,6 +137,7 @@ Tests export the e-commerce example and re-import it. The authoring model is the
 | Measures | Measures of the same type; `avg` is written as `AVG(1e0 * x)`, so Cube averages real numbers, as the planner does (an integer AVG truncates in SQL Server) |
 | Simple metric | A measure of its measure's type, with the metric `filter` in `filters`; a dimension reference becomes its expression on the cube |
 | Ratio and derived metrics | `number` measures over the measures they use; division is written `1e0 * a / NULLIF(b, 0)`, real and null on a zero denominator |
+| Cumulative metric with `grain_to_date`, over a `sum` or `count` measure | A measure of its measure's type with `rolling_window: {type: to_date, granularity: <grain_to_date>}`; `cosmos import cube` reads it back as the same cumulative metric over a `<name>__base` measure |
 | Metric `label`, `description` and owner | `title`, `description` and `meta` |
 
 The `1e0 *` factor is a floating-point literal in DuckDB, SQL Server, MySQL, MariaDB, Databricks and Snowflake, and a high-precision numeric in Postgres and Oracle, so it avoids integer division and MySQL's four extra digits for decimal division. The planner writes `CAST(x AS DOUBLE)` instead: the results agree to floating-point precision, but the SQL is not the same.
@@ -145,7 +146,29 @@ Column names in expressions get a `{CUBE}.` prefix, so Cube does not confuse col
 
 **Metrics that span cubes are exported with a warning** (Rule 3). `collection_gap` and `items_per_order` in the example combine measures of two cubes; the engine aggregates each measure at its own grain, and Cube must do the same to return the same numbers, so check them in Cube.
 
-**What cannot be exported fails closed.** Cube's access policies are not mapped yet, so a model with row filters or `sensitivity` is refused, exit code 1, naming them: `1 row filter (customers.by_region) and the sensitivity of 3 dimensions (...) would NOT be exported: the Cube export does not carry access or personal-data policies yet; ... Pass --allow-policy-loss to export anyway`. Metrics Cube cannot carry here are refused the same way, until `--allow-metric-loss` is given: cumulative metrics; simple metrics whose filter uses another cube, a time grain, a business rule or `$user`; ratio metrics with a filter (a `number` measure cannot filter the measures it uses); derived metrics over bare columns; and metrics that use a metric left out. With the flags, each loss is a warning on standard error. Business rules, the glossary, teams, systems, processes, the user context, `custom_extensions` and the time zone are not exported yet, and each one present is a warning too. Cube's `meta`, `title` and `data_source` are written, but `cosmos import cube` does not read them back yet.
+**What cannot be exported fails closed.** Cube's access policies are not mapped yet, so a model with row filters or `sensitivity` is refused, exit code 1, naming them: `1 row filter (customers.by_region) and the sensitivity of 3 dimensions (...) would NOT be exported: the Cube export does not carry access or personal-data policies yet; ... Pass --allow-policy-loss to export anyway`. Metrics Cube cannot carry here are refused the same way, until `--allow-metric-loss` is given: rolling windows in days (`window: 7 days`); running totals over `avg`, `count_distinct`, `min` or `max` measures, and running totals without `grain_to_date`; ratio and derived metrics over a cumulative metric (the planner does not compute a cumulative metric inside another one, so there is no number for Cube to match); simple metrics whose filter uses another cube, a time grain, a business rule or `$user`; ratio metrics with a filter (a `number` measure cannot filter the measures it uses); derived metrics over bare columns; and metrics that use a metric left out. With the flags, each loss is a warning on standard error. Business rules, the glossary, teams, systems, processes, the user context, `custom_extensions` and the time zone are not exported yet, and each one present is a warning too. Cube's `meta`, `title` and `data_source` are written, but `cosmos import cube` does not read them back yet.
+
+**Running totals.** `revenue_month_to_date` in the example is written as
+
+```yaml
+- name: revenue_month_to_date
+  type: sum
+  sql: '{CUBE}.amount'
+  rolling_window:
+    type: to_date
+    granularity: month
+  description: Month-to-date revenue
+  meta:
+    owner: controllership
+```
+
+For each time bucket of the query, Cube's `to_date` window aggregates the rows from the start of the period that holds the bucket to the end of the bucket. For a `sum` or `count` measure this is the planner's running total: the per-bucket values summed from the start of each period, separately for each value of the other dimensions; when each bucket holds whole periods (month-to-date by month or by year), each bucket is its own total, on both sides. Weeks start on Monday in both, but do not nest in months, quarters or years (below). Running totals of other aggregations are not exported (a running average or distinct count is not a sum of per-bucket values), and neither are the rolling windows in days, which wait for a later slice. To get the same numbers in Cube:
+
+- Query the measure with exactly one time dimension and a granularity, the time dimension of the measure's cube, as the planner requires; without a time dimension Cube has no buckets to accumulate over.
+- Cube returns every bucket of the query's date range, including buckets without rows (they carry the total so far), and may require a `dateRange` for rolling windows; Cosmos returns only buckets with rows. Buckets returned by both have the same numbers.
+- Cube's window reads rows before the start of the `dateRange`, back to the start of the period, while Cosmos filters rows first: a time filter that starts inside a period (A09, the last 45 days) totals only the rows kept in Cosmos. Start the range at a period boundary, or compare the buckets after the first full period.
+- Rows with a null time: Cosmos returns them as a null bucket with its own total; Cube's time series leaves them out.
+- Weeks against months, quarters and years: Cube starts the window at the start of the period that holds the bucket's first day, and the planner puts each bucket in the period of that same day, but the planner sums whole buckets: month-to-date by week also counts, in Cube, the days of the month before its first Monday in that month's week buckets, while Cosmos counts them only in the previous month's last week; week-to-date by month also counts, in Cube, the days of the previous month back to the Monday. Query week-to-date at day or week grain, and month, quarter or year-to-date at day, month, quarter or year grain, for the same numbers.
 
 **The time zone.** In Cosmos, `timezone` only defines "today" (`CURRENT_DATE` and relative dates); model timestamps are already local time and are never converted. Cube's query `timezone` converts timestamps from UTC, so setting it to the model's zone would shift day, week and month buckets. Keep Cube's query time zone at UTC: buckets then match, but relative dates such as "today" follow UTC in Cube, not the model's zone. The export warns about this gap.
 
@@ -156,7 +179,7 @@ Column names in expressions get a `{CUBE}.` prefix, so Cube does not confuse col
 - The `{CUBE}.` prefix finds columns with SQLGlot's generic tokenizer: a quoted column name, or one that is also a keyword in the target database, may not be prefixed correctly; check those expressions.
 - Expressions are written as in the model, not translated to the target database's dialect.
 
-Tests export the e-commerce example with both flags and import it back with `cosmos import cube`, which reports nothing. They check the numbers through the Cosmos importer and planner, not Cube's own runtime: they show that the export carries the model without loss, not how Cube executes it. Models, tables, dimensions and measures come back the same; filtered metrics come back as a `<name>__base` measure plus a simple metric, ratio metrics as derived ones. The re-imported model answers the 25 reference queries that need no business rule, cumulative metric or user policy with the numbers of the hand-written SQL; with the original row filters, user context and sensitivity put back, it answers all 40 that need no business rule or cumulative metric, R17 and R18 among them. Every measure and metric of an extended example (`max` and `min` measures, filtered `count`, `count_distinct`, `avg` and `max`, a filter on a dimension with an expression, nested division) returns the native numbers. The number checks run on DuckDB and on every database configured in CI.
+Tests export the e-commerce example with both flags and import it back with `cosmos import cube`, which reports nothing. They check the numbers through the Cosmos importer and planner, not Cube's own runtime: they show that the export carries the model without loss, not how Cube executes it. Models, tables, dimensions and measures come back the same; filtered metrics come back as a `<name>__base` measure plus a simple metric, ratio metrics as derived ones. The re-imported model answers the 27 reference queries that need no business rule, rolling window in days or user policy with the numbers of the hand-written SQL, year-to-date by month (A08) and month-to-date by status and day (A09) among them; with the original row filters, user context and sensitivity put back, it answers all 42 that need no business rule or rolling window, R17 and R18 among them. Every measure and metric of an extended example (`max` and `min` measures, filtered `count`, `count_distinct`, `avg` and `max`, a filter on a dimension with an expression, nested division) returns the native numbers, and so do running totals of `sum` and `count` measures of two cubes for every period (day to year), queried at every grain, with another dimension, and with a time filter that starts inside a period. The number checks run on DuckDB and on every database configured in CI.
 
 ## Exporting dbt
 
