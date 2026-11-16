@@ -31,9 +31,11 @@ from cosmos_semantic.evidence import (
     result_hash,
     sql_hash,
 )
+from cosmos_semantic.health import Health
 from cosmos_semantic.planner import CompiledQuery, Principal, QueryRequest
 
 audit_log = logging.getLogger("cosmos.audit")
+log = logging.getLogger(__name__)
 
 # Most values `dimension_values` returns: the default and the hard maximum.
 MAX_DIMENSION_VALUES = 100
@@ -65,6 +67,7 @@ class SemanticService:
         self.engine = engine
         self.catalog = Catalog(engine.graph)
         self.evidence = EvidenceBuilder(engine.graph)
+        self.health = Health(engine.graph)  # rule tests and check runs (COSMOS_RUNS_LOG)
         path = audit_path or os.environ.get("COSMOS_AUDIT_LOG")
         self.audit_path = Path(path) if path else None
         if admins is None:
@@ -198,6 +201,35 @@ class SemanticService:
         if principal.local_anonymous:
             return True
         return principal.subject is not None and principal.subject in self.admins
+
+    # -- explain -----------------------------------------------------------------
+
+    def explain(self, name: str) -> dict[str, Any]:
+        """The catalog's explanation plus `health` (state and reasons, as the console shows
+        them) for the members that have one: metrics, measures, rules and processes, and the
+        member that defines a concept. Health holds no audit data; it is the same for everyone."""
+        detail = self.catalog.explain(name)
+        try:
+            states = self.health.states()
+        except (OSError, ValueError) as exc:  # unreadable runs log; JSON errors are ValueErrors
+            # The type only: the message of a parse error may quote the file.
+            log.warning("cannot read the check runs log: %s", type(exc).__name__)
+            g = self.engine.graph
+            unreadable = {"state": "unchecked", "reasons": [{"code": "runs_log_unreadable"}]}
+            keys = [f"rule:{n}" for n in g.rules] + [f"metric:{n}" for n in g.metrics]
+            keys += [f"measure:{n}" for n in g.measure_owner]
+            keys += [f"process:{p.name}" for p in g.project.processes]
+            states = {k: unreadable for k in keys}
+
+        def attach(item: dict[str, Any]) -> None:
+            health = states.get(f"{item.get('kind')}:{item.get('name')}")
+            if health is not None:
+                item["health"] = health
+            if isinstance(item.get("defined_by"), dict):
+                attach(item["defined_by"])
+
+        attach(detail)
+        return detail
 
     # -- impact ------------------------------------------------------------------
 

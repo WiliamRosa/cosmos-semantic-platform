@@ -9,6 +9,11 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- `explain` over MCP and `GET /v1/explain/{name}` carry the member's `health` (DEC-15), so an
+  agent about to quote a number can tell whether it is checked: `healthy`, `attention`,
+  `failing` or `unchecked`, with the reasons (rule tests, last reconciliation). Metrics,
+  measures, rules and processes have it, and so does the member a concept maps to. It is the
+  console's computation, now shared in `cosmos_semantic.health`; the console is unchanged.
 - Dimension values for agents (DEC-17): the MCP tool `dimension_values` and
   `GET /v1/dimensions/{name}/values` return the distinct values of a categorical or boolean
   dimension, each with the number of rows of the dimension's model that carry it (nulls included),

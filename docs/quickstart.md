@@ -98,7 +98,7 @@ Any MCP client works the same way: command `cosmos`, arguments `mcp -m <semantic
 | Tool | What it does |
 | --- | --- |
 | `search_concepts` | Finds glossary concepts by term or synonym, in English or Portuguese ("compradores ativos" finds `active_customer`) |
-| `explain` | Definition, owner, logic and history of a metric, rule, dimension or concept |
+| `explain` | Definition, owner, logic and history of a metric, rule, dimension or concept, and the member's health: whether its rule tests pass and its last reconciliation matched |
 | `list_members` | The metrics, dimensions and rules it can ask for |
 | `query` | Runs a metrics request with the user's policies and returns the evidence envelope |
 | `show_sql` | The SQL the engine would run, without running it |
