@@ -312,7 +312,10 @@ class EvidenceBuilder:
             if metric.window:
                 return f"{inner} over the {metric.window} ending on each day"
             period = metric.grain_to_date or "all time"
-            return f"running total of {inner} within each {period}"
+            owner = g.measure_owner.get(metric.measure)
+            agg = g.models[owner].measures[metric.measure].agg if owner else None
+            running = {"min": "running minimum", "max": "running maximum"}.get(agg, "running total")
+            return f"{running} of {inner} within each {period}"
         return name
 
 

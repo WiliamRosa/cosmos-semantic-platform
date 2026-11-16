@@ -41,7 +41,12 @@ format or the API; such changes are listed under **Changed**.
   as running minima and maxima, and reports the ones over an average or a distinct count as
   not imported. The example model gains the `max_order_value` measure and the
   `max_order_value_year_to_date` metric, with reference cases A31 (hand-written SQL) and A32
-  (month-to-date by quarter, refused).
+  (month-to-date by quarter, refused). The evidence formula of a running minimum or maximum
+  says so (`running maximum of MAX(orders.amount) within each year`).
+
+  **Compatibility:** a model with a cumulative metric over an `avg` or `count_distinct`
+  measure passed `cosmos validate` before and now fails it; such a metric returned wrong
+  numbers.
 
 - Ossie import without the root `COSMOS_SEMANTIC` extension keeps the business time zone for
   every model (DEC-19). The export now copies `timezone` into every dataset's extension, not
