@@ -63,6 +63,15 @@ class Engine:
             )
         return compiled
 
+    def compile_values(
+        self, dimension: str, principal: Principal | None = None, *, limit: int
+    ) -> CompiledQuery:
+        """The distinct values of a dimension, in the dialect of its model's data source."""
+        model = self.graph.models[self.graph.resolve_dimension(dimension).model]
+        config = self.config(model.spec.data_source)
+        planner = Planner(self.graph, config.dialect, config.schema_map)
+        return planner.plan_values(dimension, principal, limit=limit)
+
     def query(self, request: QueryRequest, principal: Principal | None = None) -> QueryResult:
         compiled = self.compile(request, principal)
         table = self.connector(compiled.data_source).execute(compiled.sql, max_rows=request.limit)

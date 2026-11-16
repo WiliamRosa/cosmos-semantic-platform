@@ -202,7 +202,7 @@ class EvidenceBuilder:
             "dimensions": dimensions,
             "rules": rules,
             "policies": {
-                "row_filters": _merge_row_filters(trace.row_filters),
+                "row_filters": merge_row_filters(trace.row_filters),
                 "sensitive_data_blocked_for_agents": principal.is_agent,
             },
             "lineage": {
@@ -316,7 +316,7 @@ class EvidenceBuilder:
         return name
 
 
-def _merge_row_filters(applied: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def merge_row_filters(applied: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """One entry per row filter, listing every CTE where it was applied."""
     merged: dict[tuple[str, str], dict[str, Any]] = {}
     for item in applied:

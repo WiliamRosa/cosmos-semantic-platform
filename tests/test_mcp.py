@@ -40,7 +40,7 @@ def call(server, tool: str, **arguments):
     return json.loads(result.content[0].text)
 
 
-def test_lists_the_seven_tools(server):
+def test_lists_the_eight_tools(server):
     async def run():
         async with Client(server) as client:
             return {t.name for t in (await client.list_tools()).tools}
@@ -53,6 +53,7 @@ def test_lists_the_seven_tools(server):
         "show_sql",
         "replay",
         "impact",
+        "dimension_values",
     }
 
 
@@ -137,3 +138,59 @@ def test_impact_of_an_unknown_member_is_an_error(server, monkeypatch):
     assert "does not exist in the model" in result["detail"]
     bare = call(server, "impact", name="active_customer")
     assert bare["error"] == "QueryError" and "kind:name" in bare["detail"]
+
+
+def test_dimension_values_match_query_grouped_by_the_dimension(server, monkeypatch):
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    result = call(server, "dimension_values", name="customers.segment")
+    grouped = call(server, "query", metrics=["customer_count"], dimensions=["customers.segment"])
+    expected = {r["customers__segment"]: r["customer_count"] for r in grouped["rows"]}
+    assert {v["value"]: v["count"] for v in result["values"]} == expected
+    assert None in expected  # nulls come back as a value with their count
+    keys = [(-v["count"], v["value"] is None, v["value"] or "") for v in result["values"]]
+    assert keys == sorted(keys)
+    assert result["dimension"] == "customers.segment" and result["truncated"] is False
+    assert result["evidence"]["count_of"] == "rows of `customers`"
+
+
+def test_dimension_values_apply_the_users_row_filters(server, monkeypatch):
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    result = call(server, "dimension_values", name="customers.region")
+    assert [v["value"] for v in result["values"]] == ["Midwest"]
+    applied = result["evidence"]["row_filters"]
+    assert applied[0]["name"] == "by_region" and applied[0]["user_fields"] == {"region": "Midwest"}
+
+
+def test_dimension_values_of_booleans_and_rules(server, monkeypatch):
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    result = call(server, "dimension_values", name="orders.has_discount")
+    grouped = call(server, "query", metrics=["order_count"], dimensions=["orders.has_discount"])
+    expected = {r["orders__has_discount"]: r["order_count"] for r in grouped["rows"]}
+    assert {v["value"]: v["count"] for v in result["values"]} == expected
+    rule = call(server, "dimension_values", name="rule.active_customer")
+    assert {v["value"] for v in rule["values"]} <= {True, False, None}
+    assert rule["evidence"]["rules"] == [
+        {"name": "active_customer", "effective_from": "2026-07-01"}
+    ]
+
+
+def test_dimension_values_refuse_personal_and_non_categorical(server, monkeypatch):
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    for name in ("customers.email", "customers.health_plan"):
+        result = call(server, "dimension_values", name=name)
+        assert result["error"] == "PolicyError" and "never listed" in result["detail"]
+    for name in ("customers.created_at", "customers.created_at__month", "payments.installments"):
+        result = call(server, "dimension_values", name=name)
+        assert result["error"] == "QueryError" and "categorical and boolean" in result["detail"]
+    unknown = call(server, "dimension_values", name="customers.planet")
+    assert unknown["error"] == "QueryError" and "does not exist" in unknown["detail"]
+
+
+def test_dimension_values_are_capped(server, monkeypatch):
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    full = call(server, "dimension_values", name="products.category")
+    two = call(server, "dimension_values", name="products.category", limit=2)
+    assert two["values"] == full["values"][:2] and two["truncated"] is True
+    assert len(full["values"]) > 2 and full["limit"] == 100
+    assert call(server, "dimension_values", name="products.category", limit=10_000)["limit"] == 100
+    assert call(server, "dimension_values", name="orders.status", limit=0)["error"] == "QueryError"
