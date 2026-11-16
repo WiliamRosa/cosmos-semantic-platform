@@ -16,7 +16,7 @@ from cosmos_semantic.auth import Authenticator, AuthError
 from cosmos_semantic.errors import CosmosError, QueryError
 from cosmos_semantic.evidence import engine_version
 from cosmos_semantic.planner import Principal, QueryRequest
-from cosmos_semantic.service import SemanticService
+from cosmos_semantic.service import MAX_DIMENSION_VALUES, VALUES_FETCH_CEILING, SemanticService
 
 INSTRUCTIONS = """\
 Cosmos semantic layer. Before querying:
@@ -26,7 +26,9 @@ Cosmos semantic layer. Before querying:
 2. Call `list_members` to see the available metrics, dimensions and rules.
 3. Call `query` with exact names. Dimensions are `model.dimension`; time accepts `__day`,
    `__week`, `__month`, `__quarter`, `__year`. Predicate business rules are used as the
-   filter `{rule.name}`; filters compare `{model.dimension}` references with values.
+   filter `{rule.name}`; filters compare `{model.dimension}` references with values. Before
+   filtering by a value, call `dimension_values` to get the exact values (such as `BR` or
+   `Brazil`): a guessed value returns zero rows that look real.
 Personal data (LGPD) never reaches agents: grouping or filtering by it is denied.
 Always answer with the number the tool returned. Every `query` result has an `evidence`
 envelope: cite the metric formula, the business rules applied (with owner and test status),
@@ -119,6 +121,19 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
             return service.query(request, principal(ctx), max_rows=MAX_ROWS_FOR_AGENTS)
 
         return guarded(run)()
+
+    @mcp.tool(
+        description=(
+            "Distinct values of a categorical or boolean dimension (`model.dimension`), with the "
+            "number of rows of its model carrying each one, most frequent first, after the "
+            "user's row filters. Use it to filter by an exact value. Personal data is refused. "
+            f"Returns at most {MAX_DIMENSION_VALUES} values; ties in count are ordered by value. "
+            f"Past {VALUES_FETCH_CEILING} distinct values the list is marked truncated, and ties "
+            "at that cut-off may differ between databases."
+        )
+    )
+    def dimension_values(name: str, ctx: Context, limit: int | None = None) -> dict[str, Any]:
+        return guarded(lambda: service.dimension_values(name, principal(ctx), limit=limit))()
 
     @mcp.tool(description="Show the SQL the engine generates for a request, without running it.")
     def show_sql(

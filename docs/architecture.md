@@ -228,6 +228,8 @@ Every inference goes into the report (`--report report.json`); the draft is a st
 | `query` | The result of a metrics request, with policies already applied |
 | `show_sql` | The SQL the engine generated for a request |
 | `replay` | Whether the model, the SQL or the data changed since one of the user's audited queries |
+| `impact` | What a change to a member affects, by owner, source systems and processes |
+| `dimension_values` | The distinct values of a categorical or boolean dimension with their row counts, after the user's row filters (also `GET /v1/dimensions/{name}/values`) |
 
 ## Authoring flow
 

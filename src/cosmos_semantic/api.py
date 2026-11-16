@@ -198,6 +198,13 @@ def create_app(
         return service.explain(name)
 
     @app.get(
+        "/v1/dimensions/{name}/values",
+        summary="Distinct values of a categorical or boolean dimension, with counts",
+    )
+    def dimension_values(name: str, user: User, limit: int | None = None) -> dict[str, Any]:
+        return service.dimension_values(name, user, limit=limit)
+
+    @app.get(
         "/v1/impact/{name}",
         summary="What a change to a member affects; who queried it is shown to admins only",
     )
