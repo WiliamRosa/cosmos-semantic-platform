@@ -34,7 +34,7 @@ format or the API; such changes are listed under **Changed**.
   and only a query of the metric was refused. No number changes and the SQL of existing requests
   is the same. The example model gains `smallest_order` (`min`), `customer_records` (`count`) and
   their rolling metrics `smallest_order_rolling_7_days` and `customers_rolling_30_days`, with
-  reference cases A31 (null segments and null days under a row filter) and A32 (a `min` window).
+  reference cases A33 (null segments and null days under a row filter) and A34 (a `min` window).
   The randomized cross-database test draws rolling metrics at day grain of its own, and the TPC-H
   model gains `revenue_rolling_7_days` with case T08, so the baseline times the range self-join.
 

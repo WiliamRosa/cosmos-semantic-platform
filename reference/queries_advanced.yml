@@ -567,7 +567,7 @@ cases:
   # A rolling window over null groups: a null segment is a group of its own inside the window
   # (rows are matched null-safely), and a null day (customers without orders have no
   # last_order_at) is a row whose value is null: no day is within N days of an unknown day.
-  - id: A31
+  - id: A33
     category: tempo
     phase: 3
     title: Rolling 30-day count with null segments and null days, under a row filter
@@ -603,7 +603,7 @@ cases:
 
   # min and max combine over the window: the smallest order of the 7 days ending on day D is
   # the smallest of the daily minimums. The daily minimum is alongside.
-  - id: A32
+  - id: A34
     category: tempo
     phase: 3
     title: Rolling 7-day minimum by status and day, with the daily minimum alongside
