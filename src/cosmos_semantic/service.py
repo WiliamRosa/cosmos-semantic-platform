@@ -19,13 +19,27 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
+
 from cosmos_semantic.catalog import Catalog
 from cosmos_semantic.engine import Engine
 from cosmos_semantic.errors import CosmosError, PolicyError, QueryError
-from cosmos_semantic.evidence import EvidenceBuilder, new_query_id, result_hash, sql_hash
+from cosmos_semantic.evidence import (
+    EvidenceBuilder,
+    merge_row_filters,
+    new_query_id,
+    result_hash,
+    sql_hash,
+)
 from cosmos_semantic.planner import CompiledQuery, Principal, QueryRequest
 
 audit_log = logging.getLogger("cosmos.audit")
+
+# Most values `dimension_values` returns: the default and the hard maximum.
+MAX_DIMENSION_VALUES = 100
+# Most distinct values fetched (most frequent first) before the top ones are chosen in Python.
+# Past it, `truncated` is set and ties at that far cut-off may differ between databases.
+VALUES_FETCH_CEILING = 10_000
 
 
 def jsonable(value: Any) -> Any:
@@ -116,6 +130,69 @@ class SemanticService:
             "evidence": evidence,
         }
 
+    def dimension_values(
+        self, dimension: str, principal: Principal, *, limit: int | None = None
+    ) -> dict[str, Any]:
+        """Distinct values of a categorical or boolean dimension with their counts: the rows
+        of the dimension's own model (after the caller's row filters) carrying each value.
+        At most ``MAX_DIMENSION_VALUES``; audited like a query (event `dimension_values`)."""
+        started = time.perf_counter()
+        request: dict[str, Any] = {"dimensions": [dimension], "limit": limit}
+        context: dict[str, Any] = {"request": request, "principal": principal}
+        try:
+            if limit is not None and limit < 1:
+                raise QueryError("limit must be at least 1")
+            limit = request["limit"] = min(limit or MAX_DIMENSION_VALUES, MAX_DIMENSION_VALUES)
+            # One row more than the ceiling tells whether even the fetched list was cut.
+            fetch = VALUES_FETCH_CEILING + 1
+            compiled = self.engine.compile_values(dimension, principal, limit=fetch)
+            context["compiled"] = compiled
+            with self._lock:
+                connector = self.engine.connector(compiled.data_source)
+                table = connector.execute(compiled.sql, max_rows=fetch)
+        except CosmosError as exc:
+            self._audit(context, error=exc, event="dimension_values")
+            raise
+        column = compiled.columns[0].name
+        pairs = [(row[column], int(row["value_count"])) for row in table.to_pylist()]
+        # The top values are chosen here, not by each database's collation, so ties at the
+        # cut-off keep the same values everywhere: count desc, nulls last, then the value.
+        beyond_ceiling = len(pairs) > VALUES_FETCH_CEILING
+        pairs = sorted(
+            pairs[:VALUES_FETCH_CEILING],
+            key=lambda p: (-p[1], p[0] is None, "" if p[0] is None else p[0]),
+        )
+        kept = pairs[:limit]
+        returned = pa.table({"value": [v for v, _ in kept], "count": [n for _, n in kept]})
+        versions = compiled.trace.rule_versions
+        evidence = {
+            "query_id": new_query_id(),
+            "as_of": compiled.as_of.isoformat() if compiled.as_of else None,
+            "data_source": {"name": self._source(compiled), "dialect": compiled.dialect},
+            "model_hash": self.evidence.model_hash,
+            "count_of": f"rows of `{self.engine.graph.resolve_dimension(dimension).model}`",
+            "row_filters": merge_row_filters(compiled.trace.row_filters),
+            "rules": [
+                {
+                    "name": r,
+                    "effective_from": versions[r].isoformat() if versions.get(r) else None,
+                }
+                for r in sorted(compiled.trace.rules)
+            ],
+            "sql": {"text": compiled.sql, "hash": sql_hash(compiled.sql)},
+            "result": {"row_count": len(kept), "hash": result_hash(returned)},
+        }
+        self._audit(
+            context, evidence=evidence, ms=time.perf_counter() - started, event="dimension_values"
+        )
+        return {
+            "dimension": compiled.columns[0].member,
+            "values": [{"value": jsonable(v), "count": n} for v, n in kept],
+            "truncated": len(pairs) > limit or beyond_ceiling,
+            "limit": limit,
+            "evidence": evidence,
+        }
+
     def is_admin(self, principal: Principal) -> bool:
         # `--allow-anonymous` is for local development; the person at the keyboard sees all.
         if principal.local_anonymous:
@@ -149,7 +226,8 @@ class SemanticService:
         with self.audit_path.open(encoding="utf-8") as fh:
             for line in fh:
                 record = json.loads(line)
-                if record.get("query_id") == query_id:
+                # Only query records replay; `dimension_values` records are not queries.
+                if record.get("query_id") == query_id and record.get("event") == "query":
                     return record
         raise QueryError(f"query `{query_id}` is not in the audit log")
 
@@ -220,14 +298,15 @@ class SemanticService:
         evidence: dict[str, Any] | None = None,
         ms: float | None = None,
         error: Exception | None = None,
+        event: str = "query",
     ) -> None:
         """Every query is recorded: who asked, what, the generated SQL, the data source and
         the hashes needed to replay it."""
-        request: QueryRequest = context["request"]
+        request: QueryRequest | dict[str, Any] = context["request"]
         principal: Principal = context["principal"]
         compiled: CompiledQuery | None = context.get("compiled")
         record = {
-            "event": "query",
+            "event": event,
             "query_id": evidence["query_id"] if evidence else None,
             "at": dt.datetime.now(dt.UTC).isoformat(),
             "principal": {
@@ -235,7 +314,9 @@ class SemanticService:
                 "channel": principal.channel,
                 "user_context": principal.user,
             },
-            "request": request.model_dump(mode="json", exclude_defaults=True),
+            "request": request
+            if isinstance(request, dict)
+            else request.model_dump(mode="json", exclude_defaults=True),
             "data_source": self._source(compiled),
             "model_hash": self.evidence.model_hash,
             "sql": compiled.sql if compiled else None,

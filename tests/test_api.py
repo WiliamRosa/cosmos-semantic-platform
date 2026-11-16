@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 
 import jwt
@@ -196,3 +197,53 @@ def test_admin_depends_on_the_anonymous_marker_not_the_name(graph, duckdb_connec
     admin = local.get("/v1/impact/rule:active_customer").json()
     assert admin["consumers_visible"] is True
     assert [c["subject"] for c in admin["consumers"]] == ["anonymous"]
+
+
+def test_dimension_values_endpoint_is_audited(graph, duckdb_connector, tmp_path):
+    engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
+    engine._connectors["local"] = duckdb_connector
+    settings = AuthSettings(
+        dev_keys={"dev-sul": DevKey(subject="dev@local", user={"region": "Midwest"})}
+    )
+    audit_path = tmp_path / "audit.jsonl"
+    service = SemanticService(engine, audit_path=audit_path)
+    client = TestClient(create_app(service, Authenticator(settings, graph.project.user_context)))
+    headers = {"X-API-Key": "dev-sul"}
+
+    response = client.get("/v1/dimensions/orders.status/values", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    grouped = client.post(
+        "/v1/query",
+        headers=headers,
+        json={"metrics": ["order_count"], "dimensions": ["orders.status"]},
+    ).json()
+    expected = {r["orders__status"]: r["order_count"] for r in grouped["rows"]}
+    assert {v["value"]: v["count"] for v in body["values"]} == expected
+    region = client.get("/v1/dimensions/customers.region/values", headers=headers).json()
+    assert [v["value"] for v in region["values"]] == ["Midwest"]
+    limited = client.get(
+        "/v1/dimensions/orders.status/values", params={"limit": 1}, headers=headers
+    ).json()
+    assert len(limited["values"]) == 1 and limited["truncated"] is True
+
+    personal = client.get("/v1/dimensions/customers.tax_id/values", headers=headers)
+    assert personal.status_code == 403
+    assert client.get("/v1/dimensions/orders.ordered_at/values", headers=headers).status_code == 400
+    assert client.get("/v1/dimensions/nope.nope/values", headers=headers).status_code == 400
+    zero = client.get("/v1/dimensions/orders.status/values", params={"limit": 0}, headers=headers)
+    assert zero.status_code == 400
+
+    records = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    values = [r for r in records if r["event"] == "dimension_values"]
+    first = values[0]
+    assert first["query_id"] == body["evidence"]["query_id"] and first["outcome"] == "ok"
+    assert first["principal"]["subject"] == "dev@local"
+    assert first["request"] == {"dimensions": ["orders.status"], "limit": 100}
+    assert "GROUP BY" in first["sql"] and first["row_count"] == len(body["values"])
+    assert [r["outcome"] for r in values[-4:]] == ["error"] * 4
+    assert "PolicyError" in values[-4]["error"]
+    assert values[-1]["request"]["limit"] == 0 and "at least 1" in values[-1]["error"]
+    # A dimension_values record is not a query: it does not replay.
+    replay = client.post(f"/v1/replay/{first['query_id']}", headers=headers)
+    assert replay.status_code == 400
