@@ -85,4 +85,6 @@ metrics:
     window: 30 days
     description: >-
       Customers dated in the 30 days ending on each day of the requested time dimension
-      (sign-ups by created_at, recent buyers by last_order_at)
+      (sign-ups by created_at, recent buyers by last_order_at). It sums daily counts, so by a
+      day from another model a customer dated on several days of the window counts once per
+      day; it is not a distinct count of customers

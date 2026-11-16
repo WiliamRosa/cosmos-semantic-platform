@@ -130,7 +130,8 @@ DIALECTS = ["duckdb", "postgres", "tsql", "databricks", "snowflake", "mysql", "o
 def _rolling_requests(graph, count: int, seed: int):
     """Requests with a rolling-window metric and a time dimension at day grain (the only grain
     a window in days accepts), with up to one other dimension, one other metric and one filter.
-    Its own generator, so the draws of `_requests` do not move."""
+    Its own generator, so these draws do not change the random sequence of `_requests` (the
+    model's members still decide what that sequence picks)."""
     rng = random.Random(seed)
     rolling = sorted(
         name
