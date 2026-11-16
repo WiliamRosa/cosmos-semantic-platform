@@ -7,6 +7,7 @@ import json
 import math
 import types
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
@@ -377,7 +378,13 @@ def test_ossie_export_policies_in_the_document(graph):
         if "custom_extensions" in f
     }
     assert marked == {"email": "personal", "tax_id": "personal", "health_plan": "sensitive"}
-    assert all("custom_extensions" not in d for n, d in datasets.items() if n != "customers")
+    # The other datasets carry only the business time zone, for the fallback import.
+    assert all(
+        d["custom_extensions"]
+        == [{"vendor_name": VENDOR, "data": json.dumps({"timezone": "America/New_York"})}]
+        for n, d in datasets.items()
+        if n != "customers"
+    )
     assert fields["region"]["ai_context"] == {
         "synonyms": ["Customer region", "Região do cliente", "região", "region"],
         "instructions": "Region where the customer lives",
@@ -681,6 +688,76 @@ def test_ossie_fallback_keeps_the_time_zone(graph, tmp_path, duckdb_connector, m
     copy = json.loads(ds["custom_extensions"][0]["data"])
     copy["timezone"] = "UTC"
     ds["custom_extensions"][0]["data"] = json.dumps(copy)
+    with pytest.raises(ValueError, match="datasets.sellers: the COSMOS_SEMANTIC copies declare"):
+        _import_doc(doc, tmp_path)
+
+
+def _at(local: dt.datetime) -> type[dt.datetime]:
+    """A clock frozen at a local time."""
+
+    class Clock(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return local.astimezone(tz) if tz else local.astimezone(dt.UTC).replace(tzinfo=None)
+
+    return Clock
+
+
+def test_ossie_fallback_keeps_the_time_zone_without_row_filters(
+    graph, tables, tmp_path, duckdb_connector, monkeypatch
+):
+    """A model without row filters: every dataset copy carries the business time zone, so at
+    22:30 in New York (the next day in UTC) "today" and the number that reads it are the same
+    after the fallback import as on the original."""
+    from cosmos_semantic import planner
+
+    data = graph.project.model_dump(mode="json")
+    for model in data["semantic_models"]:
+        model["row_filters"] = []
+    data["user_context"] = {}
+    project = Project.model_validate(data)
+    assert project.timezone == "America/New_York"
+    assert all(
+        _native_copy(project, m.name) == {"timezone": project.timezone}
+        for m in project.semantic_models
+    )
+    fallback = _import_doc(_native_doc(project), tmp_path)
+    assert fallback.project.timezone == project.timezone
+    # The last day with orders, at 22:30 in New York.
+    day = max(tables["orders"].column("ordered_at").to_pylist()).date()
+    zone = ZoneInfo("America/New_York")
+    clock = _at(dt.datetime.combine(day, dt.time(22, 30), tzinfo=zone))
+    monkeypatch.setattr(planner, "dt", types.SimpleNamespace(**{**vars(dt), "datetime": clock}))
+    request = QueryRequest(metrics=["order_count"], filters=["{orders.ordered_at} < CURRENT_DATE"])
+    plans = {
+        label: Planner(compile_project(p), "duckdb").plan(request)
+        for label, p in (
+            ("original", project),
+            ("fallback", fallback.project),
+            ("utc", project.model_copy(update={"timezone": None})),
+        )
+    }
+    assert plans["original"].as_of == day
+    assert plans["fallback"].as_of == day
+    assert plans["utc"].as_of == day + dt.timedelta(days=1)  # what a lost time zone gives
+    assert plans["fallback"].sql == plans["original"].sql
+
+    def result(label):
+        return duckdb_connector.execute(plans[label].sql).to_pylist()
+
+    assert result("fallback") == result("original")
+    assert result("utc") != result("original")  # the orders of that day move in
+
+
+def test_ossie_fallback_refuses_conflicting_time_zones_without_row_filters(graph, tmp_path):
+    """Two dataset copies that disagree on the time zone are refused, row filters or not."""
+    data = graph.project.model_dump(mode="json")
+    for model in data["semantic_models"]:
+        model["row_filters"] = []
+    data["user_context"] = {}
+    doc = _native_doc(Project.model_validate(data))
+    ds = next(d for d in doc["datasets"] if d["name"] == "sellers")
+    ds["custom_extensions"][0]["data"] = json.dumps({"timezone": "UTC"})
     with pytest.raises(ValueError, match="datasets.sellers: the COSMOS_SEMANTIC copies declare"):
         _import_doc(doc, tmp_path)
 
