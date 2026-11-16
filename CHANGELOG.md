@@ -21,6 +21,14 @@ format or the API; such changes are listed under **Changed**.
   Each call is written to the audit log as a `dimension_values` event, which `replay` and the
   usage report ignore.
 
+### Fixed
+
+- Ossie import without the root `COSMOS_SEMANTIC` extension keeps the business time zone for
+  every model (DEC-19). The export now copies `timezone` into every dataset's extension, not
+  only those with row filters, and the fallback import reads it, refusing copies that disagree.
+  Before, a model without row filters came back in UTC, so "today", month-to-date and the rule
+  version in effect moved to the next day in the evening (New York, São Paulo).
+
 ## [0.4.0] - 2026-11-13
 
 Import and export with other tools grow: Ossie and Cube export, `cosmos query --csv`, and more
