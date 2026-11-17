@@ -9,6 +9,17 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- `cosmos export cube` carries row filters and sensitivity (DEC-20): each cube gets one
+  `access_policy` for every role (`role: "*"`) with the model's row filters as `row_level`
+  filters, `$user.<field>` as `{ securityContext.<claim> }`, and personal or sensitive
+  dimensions as `member_level` excludes; `cosmos import cube` reads them back as the same row
+  filters and sensitivity. Only filters with an exact Cube equivalent are written (`=`, `IN`, and
+  `<`, `<=`, `>`, `>=` on numbers, joined by AND and OR); anything else, such as a filter that
+  reads a business rule, `<>` (Cube's `notEquals` keeps null rows) or a function, is refused
+  until `--allow-policy-loss`, which turns each one into a warning. The example no longer needs
+  `--allow-policy-loss`. Cube must reject a security context without the attribute (Cosmos
+  denies the query); the export warns about it
+  ([interoperability](docs/interoperability.md#exporting-cube)).
 - `cosmos export cube` carries running totals (DEC-16): a cumulative metric with
   `grain_to_date` over a `sum` or `count` measure becomes a Cube measure with
   `rolling_window: {type: to_date, granularity: ...}`, and `cosmos import cube` reads it back as

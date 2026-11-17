@@ -1007,7 +1007,10 @@ def export_cube_cmd(
         bool,
         typer.Option(
             "--allow-policy-loss",
-            help="Export even though row filters and sensitivity are not exported.",
+            help=(
+                "Export even though row filters Cube's access_policy cannot express (such as "
+                "ones that read a business rule) are dropped."
+            ),
         ),
     ] = False,
     allow_metric_loss: Annotated[
@@ -1024,9 +1027,11 @@ def export_cube_cmd(
     ] = False,
 ) -> None:
     """Exports models, joins, dimensions, measures and metrics as Cube static YAML, which
-    `cosmos import cube` reads back with the same numbers. What is not exported is listed as
-    warnings on standard error. A model with row filters or sensitivity is refused unless
-    --allow-policy-loss is given, and one with metrics Cube cannot carry unless
+    `cosmos import cube` reads back with the same numbers. Row filters become a Cube
+    access_policy for every role, with $user fields read from the security context, and personal
+    or sensitive dimensions become member_level excludes. What is not exported is listed as
+    warnings on standard error. A model with row filters Cube cannot express exactly is refused
+    unless --allow-policy-loss is given, and one with metrics Cube cannot carry unless
     --allow-metric-loss is given."""
     from cosmos_semantic.interchange.cube import export_cube
 
