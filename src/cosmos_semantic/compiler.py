@@ -24,6 +24,23 @@ from cosmos_semantic.spec import (
 
 TIME_GRAINS = ("hour", "day", "week", "month", "quarter", "year")
 
+# Aggregations a running (non-window) cumulative metric can combine from per-period values
+# (DEC-21): sums and counts add up, minima and maxima take the extreme. An average or a
+# distinct count of the whole period cannot be rebuilt from per-period values.
+ACCUMULABLE_AGGS = ("sum", "count", "min", "max")
+
+
+def cumulative_agg_problem(metric: CumulativeMetric, agg: str) -> str | None:
+    """Why a running cumulative metric over a measure with ``agg`` cannot be computed, or
+    None when it can. Rolling windows have their own check in the planner."""
+    if metric.window or agg in ACCUMULABLE_AGGS:
+        return None
+    period = f"a {metric.grain_to_date}-to-date" if metric.grain_to_date else "a running total"
+    return (
+        f"{period} over a `{agg}` measure is not supported; it cannot be accumulated from "
+        "per-period values (use a sum, count, min or max measure)"
+    )
+
 
 @dataclass(frozen=True)
 class Issue:
@@ -290,6 +307,11 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
                 loc,
                 "only windows in days, such as `7 days`, are supported; queries will be refused",
             )
+        if isinstance(metric, CumulativeMetric) and metric.measure in g.measure_owner:
+            owner = g.models[g.measure_owner[metric.measure]]
+            problem = cumulative_agg_problem(metric, owner.measures[metric.measure].agg)
+            if problem:
+                err(loc, problem)
     _check_metric_cycles(g, err)
 
     # Join ambiguity between any two reachable models

@@ -149,9 +149,30 @@ Time dimensions accept a grain suffix in requests: `orders.ordered_at__day`, `__
 | `simple` | `measure`, optional `filter` | The measure, with an optional filter |
 | `ratio` | `numerator`, `denominator` | Real division, safe against zero; each side aggregated at its own grain |
 | `derived` | `expr` with `{measure}` or `{metric}` references | Expression over already aggregated values; division is real and safe against zero |
-| `cumulative` | `measure`, and `grain_to_date` or `window` | Running total within each period (`grain_to_date`), or over a rolling window (`window`); requires exactly one time dimension in the request |
+| `cumulative` | `measure`, and `grain_to_date` or `window` | Running total (or running minimum or maximum) within each period (`grain_to_date`), or over a rolling window (`window`); requires exactly one time dimension in the request |
 
 Because the planner aggregates each measure at its own grain before combining them, ratios and derived metrics can use measures from different models without row multiplication.
+
+#### Period to date
+
+`grain_to_date` accumulates the measure from the start of each `day`, `week`, `month`, `quarter` or `year` up to each row of the request:
+
+```yaml
+metrics:
+  - name: revenue_year_to_date
+    type: cumulative
+    measure: revenue
+    grain_to_date: year
+  - name: max_order_value_year_to_date
+    type: cumulative
+    measure: max_order_value   # agg: max
+    grain_to_date: year
+```
+
+- **Measures.** `sum` and `count` add up from the start of the period; `min` and `max` take the minimum or maximum so far (`MIN`/`MAX OVER`), so "largest order so far this year" is the largest order, never a sum of daily maxima. `avg` and `count_distinct` are refused: an average or a distinct count of the period cannot be rebuilt from per-day values (a distinct customer would count once per day). `cosmos validate` and `cosmos check` report such a metric as an error, and the planner refuses to query it. Without `grain_to_date` or `window`, a running total since the beginning of the data follows the same rules.
+- **Grains.** Query it with the time dimension at the period's grain or a finer one: a month-to-date by day, week or month, a year-to-date by month or quarter. A grain coarser than the period is refused with an error: a month-to-date by quarter or by year would only be the quarter's or the year's total. A week grouped under a month-to-date, year-to-date or quarter-to-date is accepted for now and belongs to the period in which it starts, so the week that crosses into a new period is counted in the old one; whether to refuse it, as a coarser grain is, is an open decision.
+- **Days in the output.** A row appears for each period (and combination of the other requested dimensions) that has facts after the request's filters; there is no time spine yet.
+- **Other dimensions.** Each combination of the other requested dimensions accumulates on its own.
 
 #### Rolling windows
 
