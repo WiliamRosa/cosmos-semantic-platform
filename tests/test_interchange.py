@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 from cosmos_semantic.cli import _glossary_resolver, app
 from cosmos_semantic.compiler import compile_project
-from cosmos_semantic.errors import MetricLossError, PolicyLossError, QueryError
+from cosmos_semantic.errors import MetricLossError, PolicyError, PolicyLossError, QueryError
 from cosmos_semantic.expressions import REF_RE
 from cosmos_semantic.interchange import dump_project, import_model
 from cosmos_semantic.interchange.cube import export_cube
@@ -1023,19 +1023,17 @@ def _cube_cases(project: Project, *, policies: bool, lost: tuple[str, ...] = CUM
 
 
 def test_cube_export_fails_closed(graph, tmp_path):
-    """The example has row filters, sensitivity and a rolling window: each loss is refused
-    until the caller accepts it."""
+    """The example's row filter and sensitivity are exported; a row filter that reads a
+    business rule and a rolling window are refused until the caller accepts the loss."""
     with pytest.raises(PolicyLossError) as exc:
-        export_cube(graph.project, allow_metric_loss=True)
+        export_cube(_with_rule_filter(graph.project), allow_metric_loss=True)
     assert str(exc.value) == (
-        "1 row filter (customers.by_region) and the sensitivity of 3 dimensions "
-        "(customers.email, customers.tax_id, customers.health_plan) would NOT be exported: the "
-        "Cube export does not carry access or personal-data policies yet; the Cube model would "
-        "not have this row-level security or personal-data marking. Pass --allow-policy-loss to "
-        "export anyway"
+        "1 row filter (customers.active_only) would NOT be exported (customers.active_only: it "
+        "reads the business rule `rule.active_customer`); the Cube model would show those rows "
+        "to every user. Pass --allow-policy-loss to export anyway"
     )
     with pytest.raises(MetricLossError) as exc:
-        export_cube(graph.project, allow_policy_loss=True)
+        export_cube(graph.project)
     assert str(exc.value).startswith(
         "4 metrics (customers_rolling_30_days, max_order_value_year_to_date, "
         "revenue_rolling_7_days, smallest_order_rolling_7_days) would NOT be exported "
@@ -1061,6 +1059,31 @@ def test_cube_export_round_trip(graph, tmp_path):
     doc = yaml.safe_load(exported.text)
     cubes = {c["name"]: c for c in doc["cubes"]}
     assert set(cubes) == {m.name for m in graph.project.semantic_models}
+    # The row filter and sensitivity: one access policy for every role.
+    assert cubes["customers"]["access_policy"] == [
+        {
+            "role": "*",
+            "row_level": {
+                "filters": [
+                    {
+                        "member": "region",
+                        "operator": "equals",
+                        "values": ["{ securityContext.region }"],
+                    }
+                ]
+            },
+            "member_level": {"includes": "*", "excludes": ["email", "tax_id", "health_plan"]},
+        }
+    ]
+    assert cubes["customers"]["meta"] == {"owner": "digital-commerce", "row_filters": ["by_region"]}
+    assert all("access_policy" not in c for n, c in cubes.items() if n != "customers")
+    # They come back as the same row filter and sensitivity; the user field keeps its claim.
+    policies = _policies(back.project)
+    assert policies["row_filters"] == _policies(graph.project)["row_filters"]
+    assert policies["sensitivity"] == _policies(graph.project)["sensitivity"]
+    assert policies["user_context"] == {
+        "region": {"claim": "region", "required": True, "description": None}
+    }
     orders = cubes["orders"]
     assert orders["sql_table"] == "public.orders"
     assert orders["joins"] == [
@@ -1133,8 +1156,7 @@ def test_cube_export_round_trip(graph, tmp_path):
     # Every loss is a warning: policies, the rolling window and what a later slice exports;
     # metrics spanning cubes are exported, with Rule 3's warning.
     joined = "\n".join(exported.warnings)
-    assert "semantic_models.customers.row_filters.by_region: not exported to Cube" in joined
-    assert sum("its sensitivity is not exported" in w for w in exported.warnings) == 3
+    assert "row_filters" not in joined and "sensitivity" not in joined
     assert "metrics.revenue_rolling_7_days: it is cumulative over a rolling window" in joined
     for name in TO_DATE:
         assert f"metrics.{name}:" not in joined
@@ -1142,10 +1164,13 @@ def test_cube_export_round_trip(graph, tmp_path):
         assert f"metrics.{name}: it spans cubes" in joined
     for key in ("business_rules", "glossary", "teams", "systems", "processes"):
         assert f"{key}: not exported to Cube yet" in joined
-    assert "user_context: region" in joined
+    assert (
+        "user_context: the row filters read $user.region as securityContext.region. Cosmos "
+        "denies a query when the user lacks one; Cube must reject such a security context too"
+    ) in joined
     assert "timezone: not exported to Cube. Model timestamps are local time, so keep" in joined
     assert "relative dates such as today then follow UTC in Cube, not America/New_York" in joined
-    assert len(exported.warnings) == 17
+    assert len(exported.warnings) == 13
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -1153,8 +1178,9 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     """Exported to Cube and imported back, the model answers the reference queries with the
     hand-written SQL's numbers, on every database available."""
     connector = request.getfixturevalue(source)
-    _, back = _cube_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
-    other = compile_project(back.project)
+    _, back = _cube_round_trip(graph.project, tmp_path, allow_metric_loss=True)
+    ungoverned = _without_policies(back.project.model_dump(mode="json"))
+    other = compile_project(Project.model_validate(ungoverned))
     cases = _cube_cases(graph.project, policies=False, lost=CUBE_LOST)
     # A08 (year-to-date by month) and A09 (month-to-date by status and day) among them.
     assert {"A08", "A09"} <= {c.id for c in cases}
@@ -1162,8 +1188,9 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
-    # With the original policies put back, the queries that read the user pass too.
-    governed = compile_project(_with_policies(back.project, graph.project))
+    # With the policies the export carried (access_policy), the queries that read the user
+    # return the same rows per principal, and the refused ones are refused.
+    governed = compile_project(back.project)
     cases = _cube_cases(graph.project, policies=True, lost=CUBE_LOST)
     # A32 (month-to-date by quarter) is refused by the re-imported model too.
     assert {"R17", "R18", "A08", "A09", "A32"} <= {c.id for c in cases}
@@ -1171,6 +1198,303 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
+
+
+# Row filters with an exact Cube access_policy equivalent: AND and OR groups, IN, $user on
+# either side, and ordering on a number dimension against a number or $user.
+CUBE_POLICY_FILTERS = {
+    "customers": [
+        {"name": "by_region", "filter": "$user.region = {region}"},
+        {
+            "name": "segments",
+            "filter": "{segment} IN ('Consumer', 'SMB', 'Enterprise') AND "
+            "({state} = 'NY' OR {customers.region} = $user.region OR {segment} = 'O''Brien')",
+        },
+    ],
+    "payments": [
+        {"name": "installments", "filter": "{installments} <= $user.max_installments"},
+        {"name": "methods", "filter": "{method} IN ('card', 'wallet') OR 2 < {installments}"},
+    ],
+}
+CUBE_PRINCIPALS = [
+    {"region": "Midwest", "max_installments": 3},
+    {"region": "South", "max_installments": 1},
+    {"region": "West", "max_installments": 12},
+    {"region": "Atlântida", "max_installments": 0},
+]
+CUBE_POLICY_QUERIES = [
+    QueryRequest(metrics=["customer_count"], dimensions=["customers.segment", "customers.state"]),
+    QueryRequest(metrics=["revenue", "order_count"], dimensions=["customers.region"]),
+    QueryRequest(metrics=["paid_value", "payment_count"], dimensions=["payments.method"]),
+    QueryRequest(metrics=["paid_value"], dimensions=["payments.installments"]),
+    QueryRequest(metrics=["revenue"], dimensions=["orders.status"]),
+]
+
+
+def _with_cube_policies(project: Project, filters: dict) -> Project:
+    data = project.model_dump(mode="json")
+    for model in data["semantic_models"]:
+        model["row_filters"] = filters.get(model["name"], [])
+    data["user_context"]["max_installments"] = {"claim": "max_installments"}
+    return Project.model_validate(data)
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_cube_access_policy_same_rows_per_principal(graph, tmp_path, source, request):
+    """Each translatable row filter shape survives the round trip: the re-imported model
+    returns the same rows as the original for every principal, and denies the same queries
+    when the user lacks a field a row filter reads."""
+    connector = request.getfixturevalue(source)
+    project = _with_cube_policies(graph.project, CUBE_POLICY_FILTERS)
+    exported, back = _cube_round_trip(project, tmp_path, allow_metric_loss=True)
+    assert back.warnings == []
+    cubes = {c["name"]: c for c in yaml.safe_load(exported.text)["cubes"]}
+    assert cubes["customers"]["access_policy"][0]["row_level"]["filters"][1] == {
+        "and": [
+            {
+                "member": "segment",
+                "operator": "equals",
+                "values": ["Consumer", "SMB", "Enterprise"],
+            },
+            {
+                "or": [
+                    {"member": "state", "operator": "equals", "values": ["NY"]},
+                    {
+                        "member": "region",
+                        "operator": "equals",
+                        "values": ["{ securityContext.region }"],
+                    },
+                    {"member": "segment", "operator": "equals", "values": ["O'Brien"]},
+                ]
+            },
+        ]
+    }
+    assert cubes["payments"]["access_policy"] == [
+        {
+            "role": "*",
+            "row_level": {
+                "filters": [
+                    {
+                        "member": "installments",
+                        "operator": "lte",
+                        "values": ["{ securityContext.max_installments }"],
+                    },
+                    {
+                        "or": [
+                            {
+                                "member": "method",
+                                "operator": "equals",
+                                "values": ["card", "wallet"],
+                            },
+                            {"member": "installments", "operator": "gt", "values": ["2"]},
+                        ]
+                    },
+                ]
+            },
+        }
+    ]
+    policies = _policies(back.project)
+    assert policies["row_filters"]["payments"] == [
+        {"name": "installments", "filter": "{installments} <= $user.max_installments"},
+        {"name": "methods", "filter": "{method} IN ('card', 'wallet') OR {installments} > 2"},
+    ]
+    assert set(policies["user_context"]) == {"region", "max_installments"}
+    native, other = compile_project(project), compile_project(back.project)
+    seen = set()
+    for query in CUBE_POLICY_QUERIES:
+        for user in CUBE_PRINCIPALS:
+            principal = Principal(user=user)
+            want = rows(native, connector, query, principal)
+            same(want, rows(other, connector, query, principal))
+            seen.add(len(want))
+        # A user without a field a row filter reads is denied by both, on the governed cubes.
+        governed = {r.split(".")[0] for r in query.dimensions} & set(CUBE_POLICY_FILTERS)
+        for model in (native, other) if governed else ():
+            with pytest.raises(PolicyError):
+                rows(model, connector, query, Principal(user={}))
+    # The principals see different rows, so the comparison means something.
+    assert len(seen) > 2
+
+
+# Row filters Cube's access_policy cannot express exactly, and why.
+CUBE_REFUSED_FILTERS = {
+    "{rule.active_customer}": "it reads the business rule `rule.active_customer`",
+    "{segment} <> 'x'": "its condition `{segment} <> 'x'` has no exact Cube filter",
+    "NOT {segment} IN ('x')": "its condition `NOT {segment} IN ('x')` has no exact Cube filter",
+    "{region} IS NULL": "its condition `{region} IS NULL` has no exact Cube filter",
+    "LOWER({region}) = $user.region": "`LOWER({region})` is not a dimension of the cube",
+    "{segment} > 'a'": "it orders the categorical dimension `segment`",
+    "{created_at} >= '2026-01-01'": "it filters the time dimension `created_at`",
+    "{created_at__month} = '2026-01-01'": "it uses a time grain (`created_at__month`)",
+    "{email} = $user.region": "it filters `email`, which member_level hides",
+    "{state} = {region}": "it compares `region` with `{state}`",
+    "{segment} = 1": "it compares `segment` with `1`",
+    "{segment} = '{ securityContext.x }'": "it compares `segment` with",
+    "{segment} = $user.org_region": "`$user.org_region` reads the claim `org.region`",
+}
+
+
+@pytest.mark.parametrize("text", list(CUBE_REFUSED_FILTERS))
+def test_cube_access_policy_refuses_inexact_filters(graph, tmp_path, text):
+    """A row filter without an exact Cube equivalent is refused; with --allow-policy-loss it
+    is a warning and only the exact ones are exported."""
+    data = graph.project.model_dump(mode="json")
+    data["user_context"]["org_region"] = {"claim": "org.region"}
+    customers = next(m for m in data["semantic_models"] if m["name"] == "customers")
+    customers["row_filters"].append({"name": "inexact", "filter": text})
+    project = Project.model_validate(data)
+    reason = CUBE_REFUSED_FILTERS[text]
+    with pytest.raises(PolicyLossError) as exc:
+        export_cube(project, allow_metric_loss=True)
+    message = str(exc.value)
+    assert message.startswith("1 row filter (customers.inexact) would NOT be exported")
+    assert reason in message and "--allow-policy-loss" in message
+    exported, back = _cube_round_trip(
+        project, tmp_path, allow_metric_loss=True, allow_policy_loss=True
+    )
+    warning = next(w for w in exported.warnings if "row_filters.inexact" in w)
+    assert warning.startswith("semantic_models.customers.row_filters.inexact: ")
+    assert reason in warning
+    assert warning.endswith("the Cube model does not have this row-level security")
+    # The exact row filter is still exported and comes back.
+    assert _policies(back.project)["row_filters"]["customers"] == [
+        {"name": "by_region", "filter": "{region} = $user.region"}
+    ]
+
+
+_POLICY_CUBE = {
+    "name": "t",
+    "sql_table": "public.t",
+    "dimensions": [
+        {"name": "id", "sql": "{CUBE}.id", "type": "string", "primary_key": True},
+        {"name": "region", "sql": "{CUBE}.region", "type": "string"},
+        {"name": "secret", "sql": "{CUBE}.secret", "type": "string"},
+        {"name": "level", "sql": "{CUBE}.level", "type": "number"},
+    ],
+    "measures": [{"name": "n", "type": "count"}],
+}
+_REGION = {"member": "region", "operator": "equals", "values": ["{ securityContext.region }"]}
+
+
+def _policy_file(tmp_path: Path, label: str, *cubes: dict) -> Path:
+    path = tmp_path / f"{label.replace(' ', '_')}.yml"
+    path.write_text(yaml.safe_dump({"cubes": list(cubes)}), encoding="utf-8")
+    return path
+
+
+def _row_level(*filters: dict) -> list:
+    return [{"role": "*", "row_level": {"filters": list(filters)}}]
+
+
+# access_policy shapes Cosmos cannot express, and the reason the import gives.
+CUBE_UNREADABLE_POLICIES = {
+    "manager role": (
+        [{"role": "manager", "row_level": {"filters": [_REGION]}}],
+        'it is not one policy for every role (`role: "*"`)',
+    ),
+    "two policies": ([{"role": "*"}, {"role": "*"}], "it is not one policy for every role"),
+    "allow_all": (
+        [{"role": "*", "row_level": {"allow_all": True}}],
+        "it is not one policy for every role",
+    ),
+    "notEquals": (
+        _row_level({**_REGION, "operator": "notEquals"}),
+        "its row_level filters cannot be read: the operator `notEquals`",
+    ),
+    "unknown member": (
+        _row_level({**_REGION, "member": "x"}),
+        "`x` is not a string or number dimension of the cube",
+    ),
+    "other cube": (
+        _row_level({**_REGION, "member": "orders.region"}),
+        "`orders.region`, not a member of this cube",
+    ),
+    "template": (_row_level({**_REGION, "values": ["{ x.y }"]}), "the template `{ x.y }`"),
+    "exponent": (
+        _row_level({"member": "level", "operator": "gt", "values": ["1e1"]}),
+        "`1e1` is not a number",
+    ),
+    "exclude": (
+        [{"role": "*", "member_level": {"excludes": ["secret"]}}],
+        "it hides `secret` from every user",
+    ),
+}
+
+
+@pytest.mark.parametrize("label", list(CUBE_UNREADABLE_POLICIES))
+def test_cube_import_refuses_policies_it_cannot_express(tmp_path, label):
+    """Importing part of an access_policy would grant more access than Cube did: refused,
+    naming the cube and the reason, unless the caller accepts the loss."""
+    policy, reason = CUBE_UNREADABLE_POLICIES[label]
+    path = _policy_file(tmp_path, label, {**_POLICY_CUBE, "access_policy": policy})
+    with pytest.raises(PolicyLossError) as exc:
+        import_model("cube", path)
+    message = str(exc.value)
+    assert message.startswith("the access_policy of 1 cube (t) would NOT be imported in full")
+    assert "(cubes.t: " in message and reason in message
+    assert message.endswith(
+        "the Cosmos model would grant more access than Cube did. Pass --allow-policy-loss to "
+        "import anyway"
+    )
+    result = import_model("cube", path, allow_policy_loss=True)
+    warning = next(w for w in result.warnings if "access_policy" in w)
+    assert warning.startswith("cubes.t: access_policy not imported in full (")
+    assert reason in warning
+    assert "the Cosmos model grants more access than Cube did" in warning
+    assert not result.project.semantic_models[0].row_filters
+
+
+def test_cube_import_policy_members_and_claims(tmp_path):
+    """A filter member may be plain or carry the cube's own name, CUBE, {CUBE} or ${CUBE};
+    two security context attributes that would become one `$user` field are an error."""
+    for prefix in ("", "t.", "CUBE.", "{CUBE}.", "${CUBE}."):
+        policy = _row_level({**_REGION, "member": f"{prefix}region"})
+        path = _policy_file(tmp_path, "members", {**_POLICY_CUBE, "access_policy": policy})
+        result = import_model("cube", path)
+        assert result.warnings == [], prefix
+        filters = result.project.semantic_models[0].row_filters
+        assert [f.filter for f in filters] == ["{region} = $user.region"], prefix
+    upper = {**_REGION, "member": "secret", "values": ["{ securityContext.Region }"]}
+    path = _policy_file(
+        tmp_path, "case", {**_POLICY_CUBE, "access_policy": _row_level(_REGION, upper)}
+    )
+    with pytest.raises(ValueError, match=r"would both become `\$user.region`"):
+        import_model("cube", path, allow_policy_loss=True)
+    # Across cubes too.
+    first = {**_POLICY_CUBE, "access_policy": _row_level(_REGION)}
+    second = {**_POLICY_CUBE, "name": "u", "sql_table": "public.u"}
+    second["access_policy"] = _row_level(upper)
+    path = _policy_file(tmp_path, "cubes", first, second)
+    with pytest.raises(ValueError, match=r"cubes.u: securityContext.Region and securityContext"):
+        import_model("cube", path, allow_policy_loss=True)
+
+
+def test_cube_export_refuses_exponent_numbers(graph):
+    """Only plain numbers are exported, the set `cosmos import cube` reads back."""
+    data = graph.project.model_dump(mode="json")
+    payments = next(m for m in data["semantic_models"] if m["name"] == "payments")
+    payments["row_filters"] = [{"name": "many", "filter": "{installments} > 1e1"}]
+    with pytest.raises(PolicyLossError, match="it compares `installments` with `1e1`"):
+        export_cube(Project.model_validate(data), allow_metric_loss=True)
+    payments["row_filters"] = [{"name": "many", "filter": "{installments} > 10"}]
+    exported = export_cube(Project.model_validate(data), allow_metric_loss=True)
+    assert "- '10'" in exported.text
+
+
+def test_cli_import_cube_policy_loss(tmp_path):
+    runner = CliRunner()
+    policy = [{"role": "manager", "row_level": {"filters": [_REGION]}}]
+    path = _policy_file(tmp_path, "cli", {**_POLICY_CUBE, "access_policy": policy})
+    out = tmp_path / "out.yml"
+    refused = runner.invoke(app, ["import", "cube", str(path), "-o", str(out)])
+    assert refused.exit_code == 1
+    assert "would grant more access than Cube did" in refused.output
+    assert not out.exists()
+    flagged = runner.invoke(
+        app, ["import", "cube", str(path), "-o", str(out), "--allow-policy-loss"]
+    )
+    assert flagged.exit_code == 0, flagged.output
+    assert "warning: cubes.t: access_policy not imported in full" in flagged.output
 
 
 def _cube_test_metrics(project: Project) -> Project:
@@ -1411,18 +1735,17 @@ def test_cube_export_keeps_expressions_as_written():
 
 def test_cli_export_cube(tmp_path):
     runner = CliRunner()
+    # The example's policies are exported: only the metrics Cube cannot carry are refused.
     refused = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE)])
     assert refused.exit_code == 1
     assert refused.stdout == ""
-    assert "1 row filter (customers.by_region) and the sensitivity" in refused.stderr
-    refused = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "--allow-policy-loss"])
-    assert refused.exit_code == 1
+    assert "row filter" not in refused.stderr
     assert (
         "4 metrics (customers_rolling_30_days, max_order_value_year_to_date, "
         "revenue_rolling_7_days, smallest_order_rolling_7_days) would NOT be exported"
         in refused.stderr
     )
-    flags = ["--allow-policy-loss", "--allow-metric-loss"]
+    flags = ["--allow-metric-loss"]
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), *flags])
     assert result.exit_code == 0, result.output
     assert yaml.safe_load(result.stdout)["cubes"]
@@ -1431,7 +1754,7 @@ def test_cli_export_cube(tmp_path):
     out = tmp_path / "model" / "cubes.yml"
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "17 warnings" in result.stdout
+    assert "13 warnings" in result.stdout
     assert import_model("cube", out).warnings == []
 
 
