@@ -742,7 +742,9 @@ cases:
              CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
                AS revenue_mom_growth
       FROM monthly cur
-      LEFT JOIN monthly prev ON prev.status = cur.status AND prev.k = cur.k - 1
+      LEFT JOIN monthly prev
+        ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
+        AND prev.k = cur.k - 1
     sql_by_dialect:
       tsql: |
         WITH f AS (
@@ -761,10 +763,13 @@ cases:
                CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
                  AS revenue_mom_growth
         FROM monthly cur
-        LEFT JOIN monthly prev ON prev.status = cur.status AND prev.k = cur.k - 1
+        LEFT JOIN monthly prev
+          ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
+          AND prev.k = cur.k - 1
 
   # An offset in days, alone in the request: the rows are the days with orders, and a day whose
-  # day a week before has no orders gets NULL, not 0.
+  # day a week before has no orders gets NULL, not 0. Days are paired by a day number (days
+  # since 2000-01-01), never by date arithmetic, so the check is independent of the engine's.
   - id: A37
     category: tempo
     phase: 3
@@ -774,21 +779,53 @@ cases:
       dimensions: [orders.ordered_at__day]
     sql: |
       WITH daily AS (
-        SELECT DATE_TRUNC('day', ordered_at) AS dd, COUNT(*) AS n
-        FROM public.orders GROUP BY DATE_TRUNC('day', ordered_at)
+        SELECT DATE_TRUNC('day', ordered_at) AS dd, CAST(ordered_at AS DATE) - DATE '2000-01-01' AS k, COUNT(*) AS n
+        FROM public.orders GROUP BY DATE_TRUNC('day', ordered_at), CAST(ordered_at AS DATE) - DATE '2000-01-01'
       )
       SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
       FROM daily cur
-      LEFT JOIN daily prev ON prev.dd = cur.dd - INTERVAL '7' DAY
+      LEFT JOIN daily prev ON prev.k = cur.k - 7
     sql_by_dialect:
       tsql: |
         WITH daily AS (
-          SELECT DATETRUNC(day, ordered_at) AS dd, COUNT(*) AS n
-          FROM public.orders GROUP BY DATETRUNC(day, ordered_at)
+          SELECT DATETRUNC(day, ordered_at) AS dd, DATEDIFF(day, '2000-01-01', ordered_at) AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY DATETRUNC(day, ordered_at), DATEDIFF(day, '2000-01-01', ordered_at)
         )
         SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
         FROM daily cur
-        LEFT JOIN daily prev ON prev.dd = DATEADD(day, -7, cur.dd)
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
+      mysql: |
+        WITH daily AS (
+          SELECT CAST(DATE(ordered_at) AS DATETIME) AS dd, DATEDIFF(ordered_at, '2000-01-01') AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY CAST(DATE(ordered_at) AS DATETIME), DATEDIFF(ordered_at, '2000-01-01')
+        )
+        SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+        FROM daily cur
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
+      oracle: |
+        WITH daily AS (
+          SELECT CAST(TRUNC(ordered_at) AS TIMESTAMP) AS dd, CAST(TRUNC(ordered_at) AS DATE) - DATE '2000-01-01' AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY CAST(TRUNC(ordered_at) AS TIMESTAMP), CAST(TRUNC(ordered_at) AS DATE) - DATE '2000-01-01'
+        )
+        SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+        FROM daily cur
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
+      databricks: |
+        WITH daily AS (
+          SELECT DATE_TRUNC('day', ordered_at) AS dd, DATEDIFF(CAST(ordered_at AS DATE), DATE'2000-01-01') AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY DATE_TRUNC('day', ordered_at), DATEDIFF(CAST(ordered_at AS DATE), DATE'2000-01-01')
+        )
+        SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+        FROM daily cur
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
+      snowflake: |
+        WITH daily AS (
+          SELECT DATE_TRUNC('day', ordered_at) AS dd, DATEDIFF(day, '2000-01-01', ordered_at) AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY DATE_TRUNC('day', ordered_at), DATEDIFF(day, '2000-01-01', ordered_at)
+        )
+        SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+        FROM daily cur
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
 
   - id: A38
     category: tempo

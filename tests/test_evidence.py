@@ -162,3 +162,17 @@ def test_cumulative_formula_names_the_running_aggregate(graph):
     assert builder.formula("revenue_year_to_date") == (
         "running total of SUM(orders.amount) within each year"
     )
+
+
+def test_offset_formula_names_the_earlier_period(graph):
+    """A derived metric's input read at an earlier period says so (DEC-18), also through a
+    metric that uses it; the unshifted references do not."""
+    from cosmos_semantic.evidence import EvidenceBuilder
+
+    builder = EvidenceBuilder(graph)
+    assert builder.formula("revenue_prev_month") == "(SUM(orders.amount)) 1 month earlier"
+    assert builder.formula("order_count_7_days_earlier") == "(COUNT(orders.*)) 7 days earlier"
+    assert builder.formula("revenue_mom_growth") == (
+        "((SUM(orders.amount)) - ((SUM(orders.amount)) 1 month earlier)) / "
+        "((SUM(orders.amount)) 1 month earlier)"
+    )
