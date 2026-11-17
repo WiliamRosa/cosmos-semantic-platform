@@ -1007,7 +1007,10 @@ def export_cube_cmd(
         bool,
         typer.Option(
             "--allow-policy-loss",
-            help="Export even though row filters and sensitivity are not exported.",
+            help=(
+                "Export even though row filters Cube's access_policy cannot express (such as "
+                "ones that read a business rule) are dropped."
+            ),
         ),
     ] = False,
     allow_metric_loss: Annotated[
@@ -1024,9 +1027,11 @@ def export_cube_cmd(
     ] = False,
 ) -> None:
     """Exports models, joins, dimensions, measures and metrics as Cube static YAML, which
-    `cosmos import cube` reads back with the same numbers. What is not exported is listed as
-    warnings on standard error. A model with row filters or sensitivity is refused unless
-    --allow-policy-loss is given, and one with metrics Cube cannot carry unless
+    `cosmos import cube` reads back with the same numbers. Row filters become a Cube
+    access_policy for every role, with $user fields read from the security context, and personal
+    or sensitive dimensions become member_level excludes. What is not exported is listed as
+    warnings on standard error. A model with row filters Cube cannot express exactly is refused
+    unless --allow-policy-loss is given, and one with metrics Cube cannot carry unless
     --allow-metric-loss is given."""
     from cosmos_semantic.interchange.cube import export_cube
 
@@ -1203,11 +1208,26 @@ def import_cmd(
     schema_name: Annotated[
         str | None, typer.Option("--schema", help="Table schema (dbt, Cube, Power BI fallback).")
     ] = None,
+    allow_policy_loss: Annotated[
+        bool,
+        typer.Option(
+            "--allow-policy-loss",
+            help=(
+                "Cube: import even though access_policy entries Cosmos cannot express are "
+                "dropped, which grants more access than Cube did."
+            ),
+        ),
+    ] = False,
 ) -> None:
-    """Imports a model from dbt (latest and legacy), Apache Ossie, Cube (static YAML) or Power BI (.bim or TMDL)."""
+    """Imports a model from dbt (latest and legacy), Apache Ossie, Cube (static YAML) or Power BI (.bim or TMDL).
+    A Cube access_policy Cosmos cannot express is refused unless --allow-policy-loss is given."""
     from cosmos_semantic.interchange import dump_project, import_model
 
-    options = {"schema": schema_name} if kind in ("dbt", "cube", "powerbi") and schema_name else {}
+    options: dict = (
+        {"schema": schema_name} if kind in ("dbt", "cube", "powerbi") and schema_name else {}
+    )
+    if kind == "cube" and allow_policy_loss:
+        options["allow_policy_loss"] = True
     try:
         result = import_model(kind, source, **options)
         graph = compile_project(result.project, strict=False)

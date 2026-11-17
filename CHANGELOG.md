@@ -17,10 +17,31 @@ format or the API; such changes are listed under **Changed**.
   dimensions give different numbers) and the differences: grouping or filtering by other columns
   of the date table gives different numbers, since the DAX filter on the date column removes
   those filters while Cosmos keeps one window per value; Power BI also shows days without facts
-  and coarser periods; and a date slicer does not cut its window. Other units, forward windows, other anchors (`LASTDATE`, `TODAY()`), extra filters,
-  an unrelated date table, `avg` and `count_distinct` measures, and `DATESBETWEEN` stay
-  warnings. Tests check the numbers against hand-written SQL on every database, by day and by
-  day and buyer, with days without facts inside the windows and a fact without a date ([interoperability](docs/interoperability.md#importing-power-bi)).
+  and coarser periods; and a date slicer does not cut its window. Other units, forward windows,
+  other anchors (`LASTDATE`, `TODAY()`), extra filters, an unrelated date table, `avg` and
+  `count_distinct` measures, and `DATESBETWEEN` stay warnings. Tests check the numbers against hand-written SQL on every database, by day and by
+  day and buyer, with days without facts inside the windows and a fact without a date
+  ([interoperability](docs/interoperability.md#importing-power-bi)).
+- `cosmos export cube` carries row filters and sensitivity (DEC-20): each cube gets one
+  `access_policy` for every role (`role: "*"`) with the model's row filters as `row_level`
+  filters, `$user.<field>` as `{ securityContext.<claim> }`, and personal or sensitive
+  dimensions as `member_level` excludes; `cosmos import cube` reads them back as the same row
+  filters and sensitivity. Only filters with an exact Cube equivalent are written (`=`, `IN`, and
+  `<`, `<=`, `>`, `>=` on numbers, joined by AND and OR); anything else, such as a filter that
+  reads a business rule, `<>` (Cube's `notEquals` keeps null rows) or a function, is refused
+  until `--allow-policy-loss`, which turns each one into a warning. The example no longer needs
+  `--allow-policy-loss`. `cosmos import cube` fails closed too: a cube whose `access_policy`
+  Cosmos cannot express (a role-specific or second policy, `notEquals`, a member of another
+  cube, an exclude without `meta.sensitivity`, ...) is refused, since the import would grant
+  more access than Cube did, until `cosmos import cube --allow-policy-loss`, which warns for
+  each loss; two attributes that would become the same `$user` field are an error. Your Cube
+  `checkAuth` must reject a security context that lacks an attribute the policies read, or holds
+  a list (Cosmos denies those queries); the export warns about it. `member_level` hides personal
+  and sensitive dimensions from every Cube user, while Cosmos only refuses them to agents. Not
+  verified against Cube's runtime: whether `role: "*"` matches users with no roles, whether a
+  policy is enforced through views and joins, and how Cube treats a missing or list
+  `securityContext` attribute
+  ([interoperability](docs/interoperability.md#exporting-cube)).
 - `cosmos export cube` carries running totals (DEC-16): a cumulative metric with
   `grain_to_date` over a `sum` or `count` measure becomes a Cube measure with
   `rolling_window: {type: to_date, granularity: ...}`, and `cosmos import cube` reads it back as

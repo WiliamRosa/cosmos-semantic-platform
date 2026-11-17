@@ -65,7 +65,10 @@ Cube is the most adopted open source semantic layer, so importing from it is the
 | `segments` | Business rule | Comes in with owner and effective date pending; validation warns until they are set |
 | `rolling_window` and multi-stage measures | Cumulative metric (rolling windows in days only) | Warning and `custom_extensions` |
 | `pre_aggregations` and `views` | No MVP equivalent | Kept in `custom_extensions` |
+| `access_policy` with one policy for `role: "*"`, `row_level` filters (`equals`, `gt`, `gte`, `lt`, `lte`, `and`/`or`) and `member_level` excludes | `row_filters` (`{ securityContext.x }` becomes `$user.x`, declared in `user_context`) and `sensitivity` (from the dimension's `meta.sensitivity`) | Direct for the shape `cosmos export cube` writes; any other policy fails closed (below) |
 | Access control in `cube.js` | `row_filters` and `sensitivity` | Manual: it is JavaScript code; the report lists the rules to recreate |
+
+**Access policies fail closed on import.** Importing part of an `access_policy`, or none of it, would grant more access in Cosmos than Cube did, so `cosmos import cube` refuses, exit code 1, any cube whose policy Cosmos cannot express, naming the cube and the reason: a policy for a specific role, more than one policy, `allow_all`, an operator other than `equals`, `gt`, `gte`, `lt` and `lte` (`notEquals` and `notIn` keep null rows), `gt`/`gte`/`lt`/`lte` on a non-number member, a member of another cube (a member may be plain or prefixed with the cube's own name, `CUBE`, `{CUBE}` or `${CUBE}`), a template other than `{ securityContext.<attribute> }`, a number that is not plain (`1e1`), or a `member_level` exclude of a dimension without `meta.sensitivity` (Cosmos cannot hide a dimension from everyone). The message is `the access_policy of 1 cube (t) would NOT be imported in full (cubes.t: ...); the Cosmos model would grant more access than Cube did. Pass --allow-policy-loss to import anyway`. With `--allow-policy-loss`, each loss is a warning that says the Cosmos model grants more access than Cube did: a policy whose shape or row filters cannot be read is dropped for that cube, while a `member_level` exclude Cosmos cannot express is dropped on its own and the cube's row filters are still imported. Two security context attributes that would become the same `$user` field (`region` and `Region`, in one cube or across cubes) are an error even with the flag.
 
 Importing a Cube model and exporting it back must produce the same static YAML, except for what the report recorded as warnings; this becomes an automated test, as with Ossie.
 
@@ -127,7 +130,7 @@ Tests export the e-commerce example and re-import it. The authoring model is the
 
 ## Exporting Cube
 
-`cosmos export cube -m semantic -o model/cubes/model.yml` writes the model as Cube static YAML (without `-o`, standard output carries only the YAML). `cosmos import cube` reads it back with the same numbers. It covers models, joins, dimensions, measures, the simple, ratio and derived metrics, and, since the second slice (DEC-16), running totals since the start of a period:
+`cosmos export cube -m semantic -o model/cubes/model.yml` writes the model as Cube static YAML (without `-o`, standard output carries only the YAML). `cosmos import cube` reads it back with the same numbers. It covers models, joins, dimensions, measures, the simple, ratio and derived metrics, since the second slice (DEC-16) running totals since the start of a period, and since the third (DEC-20) row filters and sensitivity as a Cube `access_policy`:
 
 | Authoring format | In Cube |
 | --- | --- |
@@ -140,6 +143,9 @@ Tests export the e-commerce example and re-import it. The authoring model is the
 | Ratio and derived metrics | `number` measures over the measures they use; division is written `1e0 * a / NULLIF(b, 0)`, real and null on a zero denominator |
 | Cumulative metric with `grain_to_date`, over a `sum` or `count` measure | A measure of its measure's type with `rolling_window: {type: to_date, granularity: <grain_to_date>}`; `cosmos import cube` reads it back as the same cumulative metric over a `<name>__base` measure |
 | Metric `label`, `description` and owner | `title`, `description` and `meta` |
+| Row filters on the model's own `categorical` or `number` dimensions | One `access_policy` entry for `role: "*"` with all the filters in `row_level.filters`; the row filter names in the cube's `meta.row_filters` |
+| `$user.<field>` | `"{ securityContext.<claim> }"`, the field's `claim` in `user_context` |
+| `sensitivity: personal` or `sensitive` | The dimension in `member_level.excludes` (with `includes: "*"`), and the level in the dimension's `meta.sensitivity` |
 
 The `1e0 *` factor is a floating-point literal in DuckDB, SQL Server, MySQL, MariaDB, Databricks and Snowflake, and a high-precision numeric in Postgres and Oracle, so it avoids integer division and MySQL's four extra digits for decimal division. The planner writes `CAST(x AS DOUBLE)` instead: the results agree to floating-point precision, but the SQL is not the same.
 
@@ -147,7 +153,48 @@ Column names in expressions get a `{CUBE}.` prefix, so Cube does not confuse col
 
 **Metrics that span cubes are exported with a warning** (Rule 3). `collection_gap` and `items_per_order` in the example combine measures of two cubes; the engine aggregates each measure at its own grain, and Cube must do the same to return the same numbers, so check them in Cube.
 
-**What cannot be exported fails closed.** Cube's access policies are not mapped yet, so a model with row filters or `sensitivity` is refused, exit code 1, naming them: `1 row filter (customers.by_region) and the sensitivity of 3 dimensions (...) would NOT be exported: the Cube export does not carry access or personal-data policies yet; ... Pass --allow-policy-loss to export anyway`. Metrics Cube cannot carry here are refused the same way, until `--allow-metric-loss` is given: rolling windows in days (`window: 7 days`); running totals over `avg`, `count_distinct`, `min` or `max` measures, and running totals without `grain_to_date`; ratio and derived metrics over a cumulative metric (the planner does not compute a cumulative metric inside another one, so there is no number for Cube to match); simple metrics whose filter uses another cube, a time grain, a business rule or `$user`; ratio metrics with a filter (a `number` measure cannot filter the measures it uses); derived metrics over bare columns; and metrics that use a metric left out. With the flags, each loss is a warning on standard error. Business rules, the glossary, teams, systems, processes, the user context, `custom_extensions` and the time zone are not exported yet, and each one present is a warning too. Cube's `meta`, `title` and `data_source` are written, but `cosmos import cube` does not read them back yet.
+**Row filters and sensitivity.** The example's `customers` model (`{region} = $user.region`, three personal or sensitive dimensions) is written as
+
+```yaml
+- name: customers
+  meta:
+    owner: digital-commerce
+    row_filters:
+    - by_region
+  # dimensions: email, tax_id and health_plan carry meta: {sensitivity: personal|sensitive}
+  access_policy:
+  - role: '*'
+    row_level:
+      filters:
+      - member: region
+        operator: equals
+        values:
+        - '{ securityContext.region }'
+    member_level:
+      includes: '*'
+      excludes:
+      - email
+      - tax_id
+      - health_plan
+```
+
+Cube grants the rows of every policy that matches the user's role, so the export writes a single policy for every role (`role: "*"`): a second policy would OR its filters with the first, and a role without a matching policy would be outside it. All row filters of a model go in its one `row_level.filters` list, which Cube ANDs, as the planner does. A row filter is written only when Cube's filter has the same meaning:
+
+- `{dim} = x` and `{dim} IN (x, y)` become `equals`; `<`, `<=`, `>`, `>=` become `lt`, `lte`, `gt`, `gte` on `number` dimensions only; `AND` and `OR` become `and` and `or` groups. Each side may be written either way round (`$user.region = {region}`).
+- `x` is a string for a `categorical` dimension, a number for a `number` dimension, or `$user.<field>`. These operators drop the rows where the dimension is null, in SQL and in Cube.
+- Everything else is refused, with its reason: a business rule (`{rule.active_customer}`), `<>` and `NOT IN` (Cube's `notEquals` and `notIn` keep the null rows that SQL drops, so they would show more rows), `IS NULL`, `NOT`, functions (`LOWER({region})`), time and boolean dimensions, time grains, other models' dimensions, comparing two dimensions, a value of the wrong type, a string with braces (Cube would read it as a template), a dimension marked with `sensitivity` (hidden by `member_level`), and a `$user` field whose claim is not a plain name (`org.region`).
+
+**A user without the attribute.** In Cosmos, a query that needs a row filter's `$user` field is denied when the user lacks it (`PolicyError`), and a missing `required` claim is already a 403. Your Cube deployment must do the same: its `checkAuth` must reject a security context without each attribute the policies read, and must reject list values (Cosmos refuses a list in `$user`). The export warns about each field it reads, `user_context: the row filters read $user.region as securityContext.region ...`.
+
+**Not verified against Cube's runtime.** The tests check the export through `cosmos import cube` and the Cosmos planner, not through Cube. These points follow Cube's documented syntax but have not been run in Cube, so check them in your deployment before relying on the policy:
+
+- whether `role: "*"` also matches users who have no roles at all;
+- whether a cube's policy is enforced when the cube is reached through a view or a join from another cube (define a policy on any view over these cubes, and test both paths);
+- what Cube does with `{ securityContext.<attribute> }` when the attribute is missing or is a list (hence the `checkAuth` requirement above).
+
+**Personal data is hidden from everyone in Cube.** `member_level` excludes hide the `personal` and `sensitive` dimensions from every Cube user, people included. Cosmos only refuses them to AI agents (and never lists their values); people query them through the API and CLI. The Cube model is stricter, on purpose, since Cube has no notion of an agent channel.
+
+**What cannot be exported fails closed.** A row filter Cube cannot express is refused, exit code 1, naming it and why: `1 row filter (customers.active_only) would NOT be exported (customers.active_only: it reads the business rule `rule.active_customer`); the Cube model would show those rows to every user. Pass --allow-policy-loss to export anyway`. With the flag, each one dropped is a warning, and the model's other row filters are still exported. Metrics Cube cannot carry here are refused the same way, until `--allow-metric-loss` is given: rolling windows in days (`window: 7 days`); running totals over `avg`, `count_distinct`, `min` or `max` measures, and running totals without `grain_to_date`; ratio and derived metrics over a cumulative metric (the planner does not compute a cumulative metric inside another one, so there is no number for Cube to match); simple metrics whose filter uses another cube, a time grain, a business rule or `$user`; ratio metrics with a filter (a `number` measure cannot filter the measures it uses); derived metrics over bare columns; and metrics that use a metric left out. With the flags, each loss is a warning on standard error. Business rules, the glossary, teams, systems, processes, `custom_extensions` and the time zone are not exported yet, and each one present is a warning too; the user context is not exported as declarations (its fields come back from `securityContext`, with the claim as their name and `required: true`). Cube's `meta` (other than `row_filters` and `sensitivity`), `title` and `data_source` are written, but `cosmos import cube` does not read them back yet.
 
 **Running totals.** `revenue_month_to_date` in the example is written as
 
@@ -180,7 +227,7 @@ For each time bucket of the query, Cube's `to_date` window aggregates the rows f
 - The `{CUBE}.` prefix finds columns with SQLGlot's generic tokenizer: a quoted column name, or one that is also a keyword in the target database, may not be prefixed correctly; check those expressions.
 - Expressions are written as in the model, not translated to the target database's dialect.
 
-Tests export the e-commerce example with both flags and import it back with `cosmos import cube`, which reports nothing. They check the numbers through the Cosmos importer and planner, not Cube's own runtime: they show that the export carries the model without loss, not how Cube executes it. Models, tables, dimensions and measures come back the same; filtered metrics come back as a `<name>__base` measure plus a simple metric, ratio metrics as derived ones. The re-imported model answers the 27 reference queries that need no business rule, running maximum, rolling window in days or user policy with the numbers of the hand-written SQL, year-to-date by month (A08) and month-to-date by status and day (A09) among them; with the original row filters, user context and sensitivity put back, it answers all 43 that need no business rule, running maximum or rolling window, R17, R18 and the refused month-to-date by quarter (A32) among them. Every measure and metric of an extended example (`max` and `min` measures, filtered `count`, `count_distinct`, `avg` and `max`, a filter on a dimension with an expression, nested division) returns the native numbers. Running totals of `sum` and `count` measures of two cubes for every period (day to year) also come back with the native numbers when the re-imported model is queried through Cosmos at every grain the planner accepts (both models refuse a grain coarser than the period), with another dimension, and with a time filter that starts inside a period; this shows the definition survives the round trip, not that Cube's runtime agrees at those grains (see the conditions under "Running totals" above). The number checks run on DuckDB and on every database configured in CI.
+Tests export the e-commerce example with `--allow-metric-loss` and import it back with `cosmos import cube`, which reports nothing. They check the numbers through the Cosmos importer and planner, not Cube's own runtime: they show that the export carries the model without loss, not how Cube executes it. Models, tables, dimensions and measures come back the same; filtered metrics come back as a `<name>__base` measure plus a simple metric, ratio metrics as derived ones. The re-imported model answers the 27 reference queries that need no business rule, running maximum, rolling window in days or user policy with the numbers of the hand-written SQL, year-to-date by month (A08) and month-to-date by status and day (A09) among them; with the row filter, user context and sensitivity it read back from the `access_policy`, it answers all 43 that need no business rule, running maximum or rolling window, R17, R18 and the refused month-to-date by quarter (A32) among them. A model with every exported filter shape (`IN`, `AND` inside `OR`, `$user` on either side, `<=` against `$user` and `>` on a number dimension) returns the same rows as the original for four principals, and both deny a user without the field; each shape refused on export, and each policy refused on import, is tested with its error and, with `--allow-policy-loss`, its warning. Every measure and metric of an extended example (`max` and `min` measures, filtered `count`, `count_distinct`, `avg` and `max`, a filter on a dimension with an expression, nested division) returns the native numbers. Running totals of `sum` and `count` measures of two cubes for every period (day to year) also come back with the native numbers when the re-imported model is queried through Cosmos at every grain the planner accepts (both models refuse a grain coarser than the period), with another dimension, and with a time filter that starts inside a period; this shows the definition survives the round trip, not that Cube's runtime agrees at those grains (see the conditions under "Running totals" above). The number checks run on DuckDB and on every database configured in CI.
 
 ## Exporting dbt
 
