@@ -43,6 +43,9 @@ semantic_models:
       - name: customer_count
         agg: count_distinct
         expr: customer_id
+      - name: customer_records
+        agg: count
+        description: Customer rows, one per customer; unlike customer_count, it adds up over days
     row_filters:
       - name: by_region
         filter: "{region} = $user.region"
@@ -73,3 +76,15 @@ semantic_models:
     measures:
       - name: product_count
         agg: count
+
+metrics:
+  - name: customers_rolling_30_days
+    type: cumulative
+    owner: digital-commerce
+    measure: customer_records
+    window: 30 days
+    description: >-
+      Customers dated in the 30 days ending on each day of the requested time dimension
+      (sign-ups by created_at, recent buyers by last_order_at). It sums daily counts, so by a
+      day from another model a customer dated on several days of the window counts once per
+      day; it is not a distinct count of customers

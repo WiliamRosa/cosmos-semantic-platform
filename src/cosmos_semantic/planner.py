@@ -18,12 +18,10 @@ from sqlglot.dialects.dialect import Dialect
 
 from cosmos_semantic import dialects
 from cosmos_semantic.compiler import (
-    ACCUMULABLE_AGGS,
     TIME_GRAINS,
     DimensionRef,
     JoinEdge,
     SemanticGraph,
-    cumulative_agg_problem,
 )
 from cosmos_semantic.errors import PolicyError, QueryError
 from cosmos_semantic.expressions import (
@@ -37,11 +35,14 @@ from cosmos_semantic.expressions import (
 )
 from cosmos_semantic.ontology import RULE_DIALECT, bind_rule, rule_logic
 from cosmos_semantic.spec import (
+    WINDOW_AGGS,
     CumulativeMetric,
     DerivedMetric,
     Measure,
     RatioMetric,
     SimpleMetric,
+    cumulative_agg_problem,
+    window_agg_refusal,
 )
 
 
@@ -328,12 +329,11 @@ class Planner:
                         "only windows in days, such as `7 days`, for now"
                     )
             agg = g.models[g.measure_owner[metric.measure]].measures[metric.measure].agg
-            if metric.window and agg not in _COMBINE_AGGS:
-                raise QueryError(
-                    f"`{name}`: a rolling window over a `{agg}` measure is not supported; "
-                    "it cannot be combined from daily values (use sum, count, min or max)"
-                )
-            problem = cumulative_agg_problem(metric, agg)
+            # Model validation refuses both too; kept for graphs compiled without `strict`.
+            if metric.window:
+                problem = window_agg_refusal(agg)
+            else:
+                problem = cumulative_agg_problem(metric, agg)
             if problem:
                 raise QueryError(f"`{name}`: {problem}")
             if extra_filter or stack != {name}:
@@ -768,7 +768,7 @@ class Planner:
 # How per-period aggregates combine over a rolling window or a running (to-date) cumulative
 # metric; other aggregations are refused (DEC-21).
 _COMBINE_AGGS = {"sum": exp.Sum, "count": exp.Sum, "min": exp.Min, "max": exp.Max}
-assert tuple(_COMBINE_AGGS) == ACCUMULABLE_AGGS
+assert tuple(_COMBINE_AGGS) == WINDOW_AGGS
 
 _LEVEL = {"personal": "personal", "sensitive": "sensitive personal"}
 

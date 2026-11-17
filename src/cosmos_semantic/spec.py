@@ -96,6 +96,23 @@ class DerivedMetric(_MetricBase):
     expr: str = Field(description="Expression over measures or metrics, referenced as `{name}`.")
 
 
+# Aggregations whose per-period values combine over a rolling window or a running (to-date)
+# cumulative metric (DEC-21, DEC-22): sums and counts add up, minima and maxima take the
+# extreme. An average or a distinct count cannot be rebuilt from per-period values.
+WINDOW_AGGS = ("sum", "count", "min", "max")
+
+
+def window_agg_refusal(agg: str) -> str | None:
+    """Why a rolling window cannot run over a measure with this aggregation; None if it can.
+    Model validation and the planner give the same reason."""
+    if agg in WINDOW_AGGS:
+        return None
+    return (
+        f"a rolling window over a `{agg}` measure is not supported; "
+        "it cannot be combined from daily values (use sum, count, min or max)"
+    )
+
+
 class CumulativeMetric(_MetricBase):
     type: Literal["cumulative"]
     measure: Name
@@ -118,6 +135,19 @@ class CumulativeMetric(_MetricBase):
         """N for a `window` of `N days` (or `1 day`); None for any other window."""
         match = re.fullmatch(r"\s*(\d+)\s+days?\s*", self.window or "", re.IGNORECASE)
         return int(match.group(1)) if match and int(match.group(1)) > 0 else None
+
+
+def cumulative_agg_problem(metric: CumulativeMetric, agg: str) -> str | None:
+    """Why a running cumulative metric over a measure with ``agg`` cannot be computed, or
+    None when it can. Rolling windows are checked by ``window_agg_refusal``. Model validation
+    and the planner give the same reason."""
+    if metric.window or agg in WINDOW_AGGS:
+        return None
+    period = f"a {metric.grain_to_date}-to-date" if metric.grain_to_date else "a running total"
+    return (
+        f"{period} over a `{agg}` measure is not supported; it cannot be accumulated from "
+        "per-period values (use a sum, count, min or max measure)"
+    )
 
 
 Metric = Annotated[

@@ -29,10 +29,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cosmos_semantic.compiler import ACCUMULABLE_AGGS
 from cosmos_semantic.interchange import ImportResult
 from cosmos_semantic.interchange.cube import _table_from_sql
-from cosmos_semantic.spec import Project
+from cosmos_semantic.spec import WINDOW_AGGS, Project
 
 _DATA_TYPES = {
     "string": "categorical",
@@ -845,7 +844,7 @@ class _Translator:
             if not self.is_measure(inner):
                 raise _Unsupported(f"{tree[1]} over a metric; only measures accumulate")
             agg = self.measure_agg(inner)
-            if agg not in ACCUMULABLE_AGGS:
+            if agg not in WINDOW_AGGS:
                 # DAX evaluates the measure over all the dates to date at once; Cosmos
                 # accumulates per-period values, which only sums, counts, minima and maxima
                 # allow (DEC-21). Importing it would make the model fail validation.

@@ -39,6 +39,10 @@ semantic_models:
         agg: count_distinct
         expr: customer_id
         description: Distinct customers who bought
+      - name: smallest_order
+        agg: min
+        expr: amount
+        description: Value of the smallest order
       - name: max_order_value
         agg: max
         expr: amount
@@ -168,3 +172,9 @@ metrics:
     measure: revenue
     window: 7 days
     description: Revenue of the 7 days ending on each day
+  - name: smallest_order_rolling_7_days
+    type: cumulative
+    owner: sales-leadership
+    measure: smallest_order
+    window: 7 days
+    description: Value of the smallest order of the 7 days ending on each day

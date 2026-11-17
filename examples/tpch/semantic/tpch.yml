@@ -188,3 +188,9 @@ metrics:
     owner: tpch
     expr: "100.0 * {promo_revenue} / {revenue}"
     description: Percentage of revenue from promotional parts (TPC-H Q14)
+  - name: revenue_rolling_7_days
+    type: cumulative
+    owner: tpch
+    measure: revenue
+    window: 7 days
+    description: Revenue of the 7 days ending on each day (a range self-join of the daily aggregate)
