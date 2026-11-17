@@ -933,11 +933,15 @@ class _Translator:
         if info["spec"] not in dims:
             dims.append(info["spec"])
         day = f"{dates.model['name']}.{info['dimension']}__day"
+        related = " (or the fact's own date column related to it)" if owner is not dates else ""
         self.warnings.append(
-            f"measure `{pbi_name}`: imported as a {days}-day window, answered only with `{day}` "
-            "(day grain), where it matches DAX on every day that has facts. Power BI also "
-            "shows days without facts and coarser periods, and a date slicer does not cut its "
-            "window, while Cosmos filters the facts first"
+            f"measure `{pbi_name}`: imported as a {days}-day window; query it only with "
+            f"`{day}`{related}, where it matches DAX on every day that has facts; other date "
+            "dimensions give different numbers. Grouping or filtering by other columns of "
+            f"`{dates.name}` also gives different numbers: the DAX filter on "
+            f"`{column[1]}[{column[2]}]` removes those filters, while Cosmos keeps one window "
+            "per value. Power BI also shows days without facts and coarser periods, and a date "
+            "slicer does not cut its window, while Cosmos filters the facts first"
         )
         self.metric(
             pbi_name,

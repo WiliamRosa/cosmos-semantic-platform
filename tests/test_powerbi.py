@@ -729,10 +729,14 @@ def test_datesinperiod_in_days_imports_as_a_rolling_window(tmp_path):
     # Each one carries the day-grain caveat, naming the time dimension to query it with.
     assert len(warnings) == 3
     joined = "\n".join(warnings)
-    assert "`Amount 7D`: imported as a 7-day window, answered only with `calendar.day__day`" in (
-        joined
-    )
-    assert "answered only with `sales.sold_on__day`" in joined
+    assert (
+        "`Amount 7D`: imported as a 7-day window; query it only with `calendar.day__day` "
+        "(or the fact's own date column related to it)"
+    ) in joined
+    assert "other date dimensions give different numbers" in joined
+    assert "other columns of `Calendar` also gives different numbers" in joined
+    # Over the fact's own date there is no other date column to point to.
+    assert "query it only with `sales.sold_on__day`, where" in joined
     request = QueryRequest(metrics=["amount_7d"], dimensions=["calendar.day__day"])
     assert "AMOUNT_7D_WINDOW" in Planner(graph, "duckdb").plan(request).sql.upper()
 
@@ -789,17 +793,31 @@ def test_datesinperiod_over_an_unrelated_date_table_is_a_warning(tmp_path):
     assert "`Sales` does not reach through an imported relationship" in "\n".join(warnings)
 
 
-# (day number, date, amount): day 3 has no facts but is a day of the windows of days 4 and 5,
-# and days 6 and 7 have none either, so a window of 3 days on day 8 holds day 8 alone.
+# (day number, date, amount, buyer): day 3 has no facts but is a day of the windows of days 4
+# and 5, and days 6 and 7 have none either, so a window of 3 days on day 8 holds day 8 alone.
+# The last fact has no date: Cosmos gives it a null day with a null window (DAX's blank row is
+# not checked here).
 WINDOW_ROWS = [
-    (1, dt.date(2024, 1, 1), 10.0),
-    (1, dt.date(2024, 1, 1), 5.0),
-    (2, dt.date(2024, 1, 2), 7.0),
-    (4, dt.date(2024, 1, 4), 1.0),
-    (5, dt.date(2024, 1, 5), None),
-    (5, dt.date(2024, 1, 5), 20.0),
-    (8, dt.date(2024, 1, 8), 3.0),
+    (1, dt.date(2024, 1, 1), 10.0, "a"),
+    (1, dt.date(2024, 1, 1), 5.0, "b"),
+    (2, dt.date(2024, 1, 2), 7.0, "a"),
+    (4, dt.date(2024, 1, 4), 1.0, "b"),
+    (5, dt.date(2024, 1, 5), None, "a"),
+    (5, dt.date(2024, 1, 5), 20.0, "b"),
+    (8, dt.date(2024, 1, 8), 3.0, "a"),
+    (None, None, 4.0, "a"),
 ]
+# `amount_3d` by day and buyer, worked out by hand: each buyer has its own window, in DAX as
+# in Cosmos (the CALCULATE filter on Calendar[Day] keeps the filter on Sales[buyer]).
+WINDOW_BY_BUYER = {
+    (1, "a"): 10.0,
+    (1, "b"): 5.0,
+    (2, "a"): 17.0,
+    (4, "b"): 1.0,
+    (5, "a"): None,
+    (5, "b"): 21.0,
+    (8, "a"): 3.0,
+}
 # metric: (DAX over the `Calendar` date table, the hand-written aggregate, N - 1, the DAX
 # numbers by day worked out by hand). DAX takes the N dates ending at MAX(Calendar[Day]),
 # which at day grain is the row's day; the hand-written SQL takes the facts of the day
@@ -835,13 +853,13 @@ WINDOW_MEASURES = {
 @pytest.mark.parametrize("source", SOURCES)
 def test_datesinperiod_matches_hand_written_sql_with_empty_days(source, request, tmp_path):
     connector = request.getfixturevalue(source)
-    day_no, sold_on, amount = (list(c) for c in zip(*WINDOW_ROWS, strict=True))
+    day_no, sold_on, amount, buyer = (list(c) for c in zip(*WINDOW_ROWS, strict=True))
     calendar = [dt.date(2024, 1, 1) + dt.timedelta(days=i) for i in range(10)]
     demo_data.load(
         connector,
         {
             "powerbi_window_sales": pa.table(
-                [sold_on, day_no, amount, ["x"] * len(day_no)],
+                [sold_on, day_no, amount, buyer],
                 schema=pa.schema(
                     [
                         ("sold_on", pa.date32()),
@@ -863,27 +881,49 @@ def test_datesinperiod_matches_hand_written_sql_with_empty_days(source, request,
         other, warnings = imported("powerbi", _window_bim(tmp_path, measures))
         assert not [w for w in warnings if "not imported" in w]
         planner = Planner(other, connector.dialect, connector.config.schema_map)
-        sql = planner.plan(
-            QueryRequest(metrics=list(WINDOW_MEASURES), dimensions=["calendar.day__day"])
-        ).sql
-        got = {}
-        for raw in connector.execute(sql).to_pylist():
-            row = {k.lower(): v for k, v in raw.items()}
-            day = dt.date.fromisoformat(str(row["calendar__day__day"])[:10])
-            got[(day - calendar[0]).days + 1] = {m: _number(row[m]) for m in WINDOW_MEASURES}
+
+        def cosmos(dimensions: list[str]) -> dict:
+            sql = planner.plan(QueryRequest(metrics=list(WINDOW_MEASURES), dimensions=dimensions))
+            out = {}
+            for raw in connector.execute(sql.sql).to_pylist():
+                row = {k.lower(): v for k, v in raw.items()}
+                day = row["calendar__day__day"]
+                if day is not None:
+                    day = (dt.date.fromisoformat(str(day)[:10]) - calendar[0]).days + 1
+                key = (day, row["sales__buyer"]) if len(dimensions) == 2 else day
+                out[key] = {m: _number(row[m]) for m in WINDOW_MEASURES}
+            return out
+
+        def hand(sql: str) -> dict:
+            out = {}
+            for row in connector.execute(sql).to_pylist():
+                *key, value = row.values()
+                key[0] = int(key[0])
+                out[tuple(key) if len(key) == 2 else key[0]] = _number(value)
+            return out
+
+        by_day = cosmos(["calendar.day__day"])
+        by_buyer = cosmos(["calendar.day__day", "sales.buyer"])
+        # The fact without a date: a null day with a null window, in a row of its own.
+        assert by_day.pop(None) == dict.fromkeys(WINDOW_MEASURES)
+        assert by_buyer.pop((None, "a")) == dict.fromkeys(WINDOW_MEASURES)
         for metric, (_, combine, back, values) in WINDOW_MEASURES.items():
-            hand = (
+            window = f"p.day_no BETWEEN c.day_no - {back} AND c.day_no"
+            expected = hand(
                 f"SELECT c.day_no, {combine} AS v FROM (SELECT DISTINCT day_no FROM {sales}) c "
-                f"JOIN {sales} p ON p.day_no BETWEEN c.day_no - {back} AND c.day_no "
-                "GROUP BY c.day_no"
+                f"JOIN {sales} p ON {window} GROUP BY c.day_no"
             )
-            expected = {
-                int(r[0]): _number(r[1])
-                for r in (list(row.values()) for row in connector.execute(hand).to_pylist())
-            }
             assert expected == values, metric
             # Days without facts (3, 6 and 7) have no row, in Cosmos as in the hand-written SQL.
-            assert {day: v[metric] for day, v in got.items()} == values, metric
+            assert {day: v[metric] for day, v in by_day.items()} == values, metric
+            expected = hand(
+                f"SELECT c.day_no, c.buyer, {combine} AS v "
+                f"FROM (SELECT DISTINCT day_no, buyer FROM {sales}) c "
+                f"JOIN {sales} p ON p.buyer = c.buyer AND {window} GROUP BY c.day_no, c.buyer"
+            )
+            if metric == "amount_3d":
+                assert expected == WINDOW_BY_BUYER
+            assert {key: v[metric] for key, v in by_buyer.items()} == expected, metric
     finally:
         connector.run_script(f"DROP TABLE {sales}")
         connector.run_script(f"DROP TABLE {schema}.powerbi_window_calendar")
