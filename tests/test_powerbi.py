@@ -587,3 +587,71 @@ def test_averagex_minx_maxx_match_hand_written_sql_with_nulls(source, request, t
             assert {k: v[metric] for k, v in got.items()} == values, metric
     finally:
         connector.run_script(f"DROP TABLE {table}")
+
+
+# -- TOTALYTD / TOTALQTD / TOTALMTD over each aggregation (DEC-21) --------------------------
+
+
+def _to_date_bim(directory: Path, measures: dict[str, str]) -> Path:
+    columns = (("sold_at", "dateTime"), ("amount", "double"), ("buyer", "string"))
+    model = {
+        "model": {
+            "tables": [
+                {
+                    "name": "Sales",
+                    "columns": [{"name": c, "dataType": t, "sourceColumn": c} for c, t in columns],
+                    "partitions": [
+                        {"name": "Sales", "source": {"type": "query", "query": "SELECT * FROM t"}}
+                    ],
+                    "measures": [{"name": k, "expression": v} for k, v in measures.items()],
+                }
+            ]
+        }
+    }
+    path = directory / "m.bim"
+    path.write_text(json.dumps(model), encoding="utf-8")
+    return path
+
+
+def test_to_date_over_min_and_max_imports_as_a_running_min_and_max(tmp_path):
+    path = _to_date_bim(
+        tmp_path,
+        {
+            "Top": "MAX(Sales[amount])",
+            "Top YTD": "TOTALYTD([Top], Sales[sold_at])",
+            "Low QTD": "TOTALQTD(MIN(Sales[amount]), Sales[sold_at])",
+            "Amount MTD": "TOTALMTD(SUM(Sales[amount]), Sales[sold_at])",
+            "Rows YTD": "TOTALYTD(COUNTROWS(Sales), Sales[sold_at])",
+        },
+    )
+    graph, warnings = imported("powerbi", path)
+    assert warnings == []
+    metrics = {m.name: m for m in graph.project.metrics}
+    assert (metrics["top_ytd"].measure, metrics["top_ytd"].grain_to_date) == ("top", "year")
+    assert metrics["low_qtd"].grain_to_date == "quarter"
+    assert metrics["amount_mtd"].grain_to_date == "month"
+    request = QueryRequest(
+        metrics=["top_ytd", "low_qtd", "amount_mtd", "rows_ytd"], dimensions=["sales.sold_at__day"]
+    )
+    sql = Planner(graph, "duckdb").plan(request).sql.upper()
+    assert "MAX(SALES_AGG.TOP) OVER" in sql
+    assert "MIN(SALES_AGG.LOW_QTD_BASE) OVER" in sql
+    assert "SUM(SALES_AGG.AMOUNT_MTD_BASE) OVER" in sql
+
+
+@pytest.mark.parametrize(
+    ("dax", "agg"),
+    [
+        ("TOTALYTD(AVERAGE(Sales[amount]), Sales[sold_at])", "avg"),
+        ("TOTALQTD(DISTINCTCOUNTNOBLANK(Sales[buyer]), Sales[sold_at])", "count_distinct"),
+        ("TOTALMTD([Mean], Sales[sold_at])", "avg"),
+    ],
+)
+def test_to_date_over_avg_or_distinct_count_is_a_warning(tmp_path, dax, agg):
+    path = _to_date_bim(tmp_path, {"Mean": "AVERAGE(Sales[amount])", "To Date": dax})
+    graph, warnings = imported("powerbi", path)
+    # Not imported, so the imported model still passes validation.
+    assert "to_date" not in {m.name for m in graph.project.metrics}
+    joined = "\n".join(warnings)
+    assert "measure `To Date` not imported" in joined
+    assert f"an `{agg}` measure, cannot be accumulated from per-period values" in joined

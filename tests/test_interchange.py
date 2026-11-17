@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 from cosmos_semantic.cli import _glossary_resolver, app
 from cosmos_semantic.compiler import compile_project
-from cosmos_semantic.errors import MetricLossError, PolicyLossError
+from cosmos_semantic.errors import MetricLossError, PolicyLossError, QueryError
 from cosmos_semantic.expressions import REF_RE
 from cosmos_semantic.interchange import dump_project, import_model
 from cosmos_semantic.interchange.cube import export_cube
@@ -207,6 +207,7 @@ EXTENSION_ONLY = {
     "items_per_order": "it spans datasets",
     "revenue_year_to_date": "it is cumulative",
     "revenue_month_to_date": "it is cumulative",
+    "max_order_value_year_to_date": "it is cumulative",
     "revenue_rolling_7_days": "it is cumulative",
 }
 # A row filter that reads a business rule.
@@ -849,7 +850,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 50
+    assert len(REFERENCE) == 52
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -869,7 +870,7 @@ def test_ossie_export_native_part_same_numbers(graph, tmp_path, source, request)
     native, warnings = imported("ossie", path)
     assert warnings == []
     names = [m["name"] for d in doc["datasets"] for m in d.get("metrics", [])]
-    assert len(names) == 21
+    assert len(names) == 22
     for name in names:
         for dims in ([], ["orders.status"]):
             query = QueryRequest(metrics=[name], dimensions=dims)
@@ -940,7 +941,7 @@ def test_cli_export_ossie(tmp_path, graph):
         app, ["export", "ossie", "-m", str(EXAMPLE), "-o", str(out), "-f", "json"]
     )
     assert result.exit_code == 0, result.output
-    assert "5 warnings" in result.stdout
+    assert "6 warnings" in result.stdout
     assert json.loads(out.read_text(encoding="utf-8"))["name"] == "ecommerce"
     back = import_model("ossie", out).project
     assert _policies(back) == _policies(graph.project)
@@ -964,10 +965,15 @@ def test_cli_export_ossie(tmp_path, graph):
 
 # -- Cube export (cubes, joins, dimensions, measures, metrics) --------------------------------
 
-CUMULATIVE = ("revenue_year_to_date", "revenue_month_to_date", "revenue_rolling_7_days")
-# Running totals Cube carries as `to_date` rolling windows, and the rolling window it does not.
+CUMULATIVE = (
+    "revenue_year_to_date",
+    "revenue_month_to_date",
+    "max_order_value_year_to_date",
+    "revenue_rolling_7_days",
+)
+# Running totals Cube carries as `to_date` rolling windows, and the cumulative metrics it does not.
 TO_DATE = ("revenue_year_to_date", "revenue_month_to_date")
-CUBE_LOST = ("revenue_rolling_7_days",)
+CUBE_LOST = ("max_order_value_year_to_date", "revenue_rolling_7_days")
 SPANS_CUBES = ("collection_gap", "items_per_order")
 LOSS_FLAGS = {"allow_policy_loss": True, "allow_metric_loss": True}
 
@@ -1021,11 +1027,11 @@ def test_cube_export_fails_closed(graph, tmp_path):
     )
     with pytest.raises(MetricLossError) as exc:
         export_cube(graph.project, allow_policy_loss=True)
-    assert str(exc.value) == (
-        "1 metric (revenue_rolling_7_days) would NOT be exported (revenue_rolling_7_days: it is "
-        "cumulative over a rolling window (`7 days`), and the Cube export does not carry rolling "
-        "windows yet); the Cube model would not have them. Pass --allow-metric-loss to export "
-        "anyway"
+    assert str(exc.value).startswith(
+        "2 metrics (max_order_value_year_to_date, revenue_rolling_7_days) would NOT be exported "
+        "(max_order_value_year_to_date: it is cumulative over a measure that aggregates with "
+        "`max`, and the Cube export carries running totals of `sum` and `count` measures only; "
+        "revenue_rolling_7_days: it is cumulative over a rolling window (`7 days`)"
     )
     # Without policies or the rolling window there is nothing to refuse: the year-to-date and
     # month-to-date metrics are exported.
@@ -1127,7 +1133,7 @@ def test_cube_export_round_trip(graph, tmp_path):
     assert "user_context: region" in joined
     assert "timezone: not exported to Cube. Model timestamps are local time, so keep" in joined
     assert "relative dates such as today then follow UTC in Cube, not America/New_York" in joined
-    assert len(exported.warnings) == 14
+    assert len(exported.warnings) == 15
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -1147,8 +1153,9 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     # With the original policies put back, the queries that read the user pass too.
     governed = compile_project(_with_policies(back.project, graph.project))
     cases = _cube_cases(graph.project, policies=True, lost=CUBE_LOST)
-    assert {"R17", "R18", "A08", "A09"} <= {c.id for c in cases}
-    assert len(cases) == 42
+    # A32 (month-to-date by quarter) is refused by the re-imported model too.
+    assert {"R17", "R18", "A08", "A09", "A32"} <= {c.id for c in cases}
+    assert len(cases) == 43
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1209,7 +1216,7 @@ def test_cube_export_metric_shapes_same_numbers(graph, tmp_path, source, request
     )
     other = compile_project(back.project)
     names = [*full.measure_owner, *(m.name for m in project.metrics)]
-    assert len(names) == 30
+    assert len(names) == 31
     assert measures["largest_order"] == {
         "name": "largest_order",
         "type": "max",
@@ -1264,7 +1271,10 @@ def test_cube_export_to_date_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     names = [m.name for m in project.metrics if m.type == "cumulative"]
     assert len(names) == 22
-    since = "CURRENT_DATE - INTERVAL '200' DAY"
+    # A literal date, not CURRENT_DATE: the Cube export drops the business time zone, so in the
+    # evening in New York the re-imported model (UTC) is already on the next day.
+    since = f"DATE '{(dt.date.today() - dt.timedelta(days=200)).isoformat()}'"
+    refused = compared = 0
     for name in names:
         model = "payments" if name.endswith(("paid_value", "payment_count")) else "orders"
         time = "paid_at" if model == "payments" else "ordered_at"
@@ -1277,9 +1287,19 @@ def test_cube_export_to_date_same_numbers(graph, tmp_path, source, request):
                 ([f"{model}.{time}__{grain}"], [f"{{{model}.{time}}} >= {since}"]),
             ):
                 query = QueryRequest(metrics=[name], dimensions=dims, filters=filters)
-                native = rows(full, connector, query)
+                try:
+                    native = rows(full, connector, query)
+                except QueryError as refusal:
+                    # A grain coarser than the period is refused (DEC-21), on both sides.
+                    assert "cannot be grouped by" in str(refusal)
+                    refused += 1
+                    with pytest.raises(QueryError, match="cannot be grouped by"):
+                        rows(other, connector, query)
+                    continue
                 assert native
                 same(native, rows(other, connector, query))
+                compared += 1
+    assert refused and compared
 
 
 def test_cube_export_states_each_reason(graph):
@@ -1313,16 +1333,17 @@ def test_cube_export_states_each_reason(graph):
             "numerator": "revenue_year_to_date",
             "denominator": "revenue",
         },
-        {"name": "avg_qty_mtd", "type": "cumulative", "measure": "avg_quantity"},
-        {"name": "buyers_mtd", "type": "cumulative", "measure": "buyers"},
+        # A running maximum is valid, but Cube carries only `sum` and `count` running totals.
+        {"name": "max_order_mtd", "type": "cumulative", "measure": "max_order_value"},
         {"name": "revenue_running", "type": "cumulative", "measure": "revenue"},
     ]
-    data["metrics"][-3]["grain_to_date"] = "month"
     data["metrics"][-2]["grain_to_date"] = "month"
     project = Project.model_validate(data)
     with pytest.raises(MetricLossError) as exc:
         export_cube(project)
-    assert str(exc.value).startswith("11 metrics (revenue_rolling_7_days, midwest_revenue, ")
+    assert str(exc.value).startswith(
+        "11 metrics (max_order_value_year_to_date, revenue_rolling_7_days, midwest_revenue, "
+    )
     warnings = export_cube(project, allow_metric_loss=True).warnings
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in warnings}
     assert reasons["metrics.midwest_revenue"].startswith(
@@ -1344,14 +1365,11 @@ def test_cube_export_states_each_reason(graph):
     assert reasons["metrics.revenue_rolling_7_days"].startswith(
         "it is cumulative over a rolling window (`7 days`)"
     )
-    assert reasons["metrics.avg_qty_mtd"].startswith(
-        "it is cumulative over a measure that aggregates with `avg`, and the Cube export carries "
-        "running totals of "
-        "`sum` and `count` measures only"
-    )
-    assert reasons["metrics.buyers_mtd"].startswith(
-        "it is cumulative over a measure that aggregates with `count_distinct`"
-    )
+    for name in ("max_order_mtd", "max_order_value_year_to_date"):
+        assert reasons[f"metrics.{name}"].startswith(
+            "it is cumulative over a measure that aggregates with `max`, and the Cube export "
+            "carries running totals of `sum` and `count` measures only"
+        )
     assert reasons["metrics.revenue_running"].startswith("it is cumulative without `grain_to_date`")
     assert all(
         r.endswith("it is not exported to Cube")
@@ -1386,7 +1404,10 @@ def test_cli_export_cube(tmp_path):
     assert "1 row filter (customers.by_region) and the sensitivity" in refused.stderr
     refused = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "--allow-policy-loss"])
     assert refused.exit_code == 1
-    assert "1 metric (revenue_rolling_7_days) would NOT be exported" in refused.stderr
+    assert (
+        "2 metrics (max_order_value_year_to_date, revenue_rolling_7_days) would NOT be exported"
+        in refused.stderr
+    )
     flags = ["--allow-policy-loss", "--allow-metric-loss"]
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), *flags])
     assert result.exit_code == 0, result.output
@@ -1396,7 +1417,7 @@ def test_cli_export_cube(tmp_path):
     out = tmp_path / "model" / "cubes.yml"
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "14 warnings" in result.stdout
+    assert "15 warnings" in result.stdout
     assert import_model("cube", out).warnings == []
 
 
@@ -1448,9 +1469,12 @@ def test_dbt_export_fails_closed(graph):
     with pytest.raises(MetricLossError) as exc:
         export_dbt(graph.project, allow_policy_loss=True)
     assert str(exc.value) == (
-        "3 metrics (revenue_year_to_date, revenue_month_to_date, revenue_rolling_7_days) would NOT be exported "
+        "4 metrics (revenue_year_to_date, revenue_month_to_date, max_order_value_year_to_date, "
+        "revenue_rolling_7_days) would NOT be exported "
         "(revenue_year_to_date: it is cumulative, and the dbt export does not carry it yet; "
         "revenue_month_to_date: it is cumulative, and the dbt export does not carry it yet; "
+        "max_order_value_year_to_date: it is cumulative, and the dbt export does not carry it "
+        "yet; "
         "revenue_rolling_7_days: it is cumulative, and the dbt export does not carry it yet); "
         "the dbt model would not have them. Pass --allow-metric-loss to export anyway"
     )
@@ -1529,7 +1553,7 @@ def test_dbt_export_round_trip(graph, tmp_path):
         assert f"{key}: not exported to dbt yet" in joined
     assert "user_context: region" in joined
     assert "not America/New_York" in joined
-    assert len(exported.warnings) == 17
+    assert len(exported.warnings) == 18
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -1575,7 +1599,7 @@ def test_dbt_export_metric_shapes_same_numbers(graph, tmp_path, source, request)
     )
     other = compile_project(back.project)
     names = [*full.measure_owner, *(m.name for m in project.metrics)]
-    assert len(names) == 32
+    assert len(names) == 33
     for name in names:
         for dims in ([], ["orders.status"]):
             query = QueryRequest(metrics=[name], dimensions=dims)
@@ -1668,7 +1692,7 @@ def test_dbt_export_states_each_reason(graph):
     project = Project.model_validate(data)
     with pytest.raises(MetricLossError) as exc:
         export_dbt(project)
-    assert str(exc.value).startswith("15 metrics (revenue_year_to_date, revenue_month_to_date, ")
+    assert str(exc.value).startswith("16 metrics (revenue_year_to_date, revenue_month_to_date, ")
     result = export_dbt(project, allow_metric_loss=True)
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in result.warnings}
     for name in (*CUMULATIVE, "revenue_7d"):
@@ -1701,7 +1725,7 @@ def test_dbt_export_states_each_reason(graph):
             "returns as NULL where the engine returns 0; it is not exported to dbt"
         )
     lost = {k.split(".", 1)[1] for k, r in reasons.items() if r.endswith("not exported to dbt")}
-    assert len(lost) == 15
+    assert len(lost) == 16
     exported = {m["name"] for m in yaml.safe_load(result.text)["metrics"]}
     assert not exported & lost
     assert {"completed_orders", "completed_buyers", "open_revenue", "cnt_diff"} <= exported
@@ -1732,8 +1756,8 @@ def test_cli_export_dbt(tmp_path):
     refused = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "--allow-policy-loss"])
     assert refused.exit_code == 1
     assert (
-        "3 metrics (revenue_year_to_date, revenue_month_to_date, revenue_rolling_7_days)"
-        in refused.stderr
+        "4 metrics (revenue_year_to_date, revenue_month_to_date, "
+        "max_order_value_year_to_date, revenue_rolling_7_days)" in refused.stderr
     )
     flags = ["--allow-policy-loss", "--allow-metric-loss"]
     result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), *flags])
@@ -1744,5 +1768,5 @@ def test_cli_export_dbt(tmp_path):
     out = tmp_path / "models" / "semantic_models.yml"
     result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "17 warnings" in result.stdout
+    assert "18 warnings" in result.stdout
     assert import_model("dbt", out, schema="public").warnings == []
