@@ -747,6 +747,11 @@ class _OssieWriter:
             tree = _real_division(exp.Div(this=num[0], expression=den[0]))
             return tree, num[1] | den[1]
         if isinstance(metric, DerivedMetric):
+            if metric.inputs:
+                raise _NotNative(
+                    "it reads an input at an earlier period (`offset`), and Ossie has no "
+                    "time offsets"
+                )
             refs: list[str] = []
 
             def mask(match):

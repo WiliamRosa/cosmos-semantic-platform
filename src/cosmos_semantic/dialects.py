@@ -9,6 +9,8 @@ source cannot run before the tree is printed in that source's dialect:
 - **Oracle:** no ``IS [NOT] DISTINCT FROM`` (``DECODE`` treats two NULLs as equal), no
   ``DATE_ADD`` (interval functions instead) and no ``GROUP BY`` by position unless a session
   parameter is set (the positions are expanded instead).
+- **Date arithmetic:** ``add_days`` and ``shift`` build one ``DATE_ADD`` node that SQLGlot prints
+  per dialect; Oracle gets ``+ NUMTODSINTERVAL``/``NUMTOYMINTERVAL`` here.
 """
 
 from __future__ import annotations
@@ -67,6 +69,15 @@ def add_days(value: exp.Expression, days: int) -> exp.Expression:
     """``value`` plus ``days`` days. SQLGlot prints it in each dialect (``DATEADD``,
     ``DATE_ADD``, ``+ INTERVAL``); ``adapt`` rewrites it for Oracle."""
     return exp.DateAdd(this=value, expression=exp.Literal.number(days), unit=exp.Var(this="DAY"))
+
+
+def shift(value: exp.Expression, amount: int, unit: str) -> exp.Expression:
+    """``value`` plus ``amount`` days or months (DEC-18), printed as ``add_days`` is. The
+    planner only shifts period starts (the first day of a month, quarter or year for months),
+    so no database has to clamp a day that does not exist in the target month."""
+    return exp.DateAdd(
+        this=value, expression=exp.Literal.number(amount), unit=exp.Var(this=unit.upper())
+    )
 
 
 def adapt(tree: exp.Expression, dialect: str) -> exp.Expression:

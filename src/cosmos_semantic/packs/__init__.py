@@ -375,6 +375,30 @@ def _prune(data: dict[str, Any], removed: list[dict[str, str]]) -> dict[str, Any
     raise CosmosError("the pack could not be adapted: too many dependent removals")
 
 
+def _offset_units(graph, name: str) -> set[str]:
+    """Units of the offsets ``name`` reads its inputs with, directly or through other metrics."""
+    from cosmos_semantic.compiler import metrics_under
+    from cosmos_semantic.spec import DerivedMetric, parse_offset
+
+    units = set()
+    for under in metrics_under(graph, name):
+        metric = graph.metrics[under]
+        if isinstance(metric, DerivedMetric):
+            units |= {p[1] for i in metric.inputs if (p := parse_offset(i.offset))}
+    return units
+
+
+def _first_measure(graph, name: str) -> str | None:
+    """A measure ``name`` aggregates, directly or through other metrics."""
+    from cosmos_semantic.compiler import metric_refs, metrics_under
+
+    for under in metrics_under(graph, name):
+        for ref in metric_refs(graph.metrics[under]):
+            if ref in graph.measure_owner:
+                return ref
+    return None
+
+
 def _smoke(project: Project, connector: Connector) -> list[dict[str, Any]]:
     """Runs every metric once on the data source, with placeholder user context."""
     from cosmos_semantic.compiler import compile_project
@@ -386,14 +410,20 @@ def _smoke(project: Project, connector: Connector) -> list[dict[str, Any]]:
     out = []
     for metric in project.metrics:
         dimensions = []
+        measure, grain = None, "month"
         if metric.type == "cumulative":  # needs one time dimension of the measure's model
-            owner = graph.measure_owner.get(metric.measure)
+            measure = metric.measure
+            grain = "day" if metric.window else "month"  # windows in days need day grain
+        elif units := _offset_units(graph, metric.name):  # offsets need one too (DEC-18)
+            measure = _first_measure(graph, metric.name)
+            grain = "day" if "day" in units else "month"
+        if measure is not None:
+            owner = graph.measure_owner.get(measure)
             times = (
                 [d for d, spec in graph.models[owner].dimensions.items() if spec.type == "time"]
                 if owner
                 else []
             )
-            grain = "day" if metric.window else "month"  # windows in days need day grain
             dimensions = [f"{owner}.{times[0]}__{grain}"] if times else []
         try:
             request = QueryRequest(metrics=[metric.name], dimensions=dimensions, limit=1)

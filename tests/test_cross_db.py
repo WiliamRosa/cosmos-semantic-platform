@@ -2,7 +2,8 @@
 
 Generates random requests (fixed seed) combining metrics, dimensions, grains, business rules
 and users, and requires DuckDB, Postgres and SQL Server to return exactly the same result.
-Rolling-window metrics, valid only at day grain, get draws of their own so every run has them.
+Rolling-window metrics, valid only at day grain, get draws of their own so every run has them;
+so do metrics that read an input at an earlier period, valid only at the grains it fits.
 Also checks that a refused request is refused on every data source.
 """
 
@@ -15,10 +16,10 @@ import random
 
 import pytest
 
-from cosmos_semantic.compiler import TIME_GRAINS
+from cosmos_semantic.compiler import TIME_GRAINS, metrics_under
 from cosmos_semantic.errors import CosmosError
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
-from cosmos_semantic.spec import CumulativeMetric
+from cosmos_semantic.spec import CumulativeMetric, DerivedMetric, offset_grain_problem
 
 REGIONS = ["Midwest", "Northeast", "South", "West", "Mountain"]
 FILTERS = [
@@ -170,8 +171,70 @@ def _rolling_requests(graph, count: int, seed: int):
     return produced
 
 
+def _offset_grains(graph, name: str) -> list[str]:
+    """The grains every offset under ``name`` fits (empty when it reads no offset)."""
+    offsets = [
+        i.offset
+        for under in metrics_under(graph, name)
+        if isinstance(graph.metrics[under], DerivedMetric)
+        for i in graph.metrics[under].inputs
+    ]
+    if not offsets:
+        return []
+    return [g for g in TIME_GRAINS if not any(offset_grain_problem(o, g) for o in offsets)]
+
+
+def _offset_requests(graph, count: int, seed: int):
+    """Requests with a metric that reads an input at an earlier period (DEC-18) and one time
+    dimension at a grain its offset fits, with up to one other dimension, one other metric and
+    one filter. Its own generator, as for rolling windows."""
+    rng = random.Random(seed)
+    shifted = sorted(n for n in graph.metrics if _offset_grains(graph, n))
+    others = sorted(
+        name
+        for name in set(graph.metrics) | set(graph.measure_owner)
+        if not isinstance(graph.metrics.get(name), CumulativeMetric)
+        and not _offset_grains(graph, name)
+    )
+    times, plain = [], []
+    for m, node in graph.models.items():
+        for d, spec in node.dimensions.items():
+            if not spec.sensitivity:
+                (times if spec.type == "time" else plain).append(f"{m}.{d}")
+    times, plain = sorted(times), sorted(plain)
+    produced, attempts = [], 0
+    while len(produced) < count and attempts < count * 50:
+        attempts += 1
+        metric = rng.choice(shifted)
+        time = f"{rng.choice(times)}__{rng.choice(_offset_grains(graph, metric))}"
+        request = QueryRequest(
+            metrics=[metric, *rng.sample(others, rng.randint(0, 1))],
+            dimensions=[*rng.sample(plain, rng.randint(0, 1)), time],
+            filters=rng.sample(FILTERS, rng.choice([0, 1])),
+        )
+        principal = Principal(
+            user={"region": rng.choice(REGIONS)}, channel=rng.choice(["api", "mcp"])
+        )
+        try:
+            for dialect in DIALECTS:
+                Planner(graph, dialect).plan(request, principal)
+        except CosmosError:
+            continue
+        produced.append((request, principal))
+    return produced
+
+
 REQUESTS_PER_RUN = 80
 ROLLING_PER_RUN = 12
+OFFSET_PER_RUN = 12
+
+
+def test_offset_draws_are_deterministic_and_cover_every_offset_metric(graph):
+    first = _offset_requests(graph, OFFSET_PER_RUN, seed=2026)
+    assert len(first) == OFFSET_PER_RUN
+    assert first == _offset_requests(graph, OFFSET_PER_RUN, seed=2026)
+    drawn = {m for request, _ in first for m in request.metrics}
+    assert {n for n in graph.metrics if _offset_grains(graph, n)} <= drawn
 
 
 def test_rolling_draws_are_deterministic_and_cover_every_rolling_metric(graph):
@@ -196,6 +259,9 @@ def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     rolling = _rolling_requests(graph, ROLLING_PER_RUN, seed=2026)
     assert len(rolling) == ROLLING_PER_RUN
     requests += rolling
+    shifted = _offset_requests(graph, OFFSET_PER_RUN, seed=2026)
+    assert len(shifted) == OFFSET_PER_RUN
+    requests += shifted
     for i, (request, principal) in enumerate(requests):
         results = {}
         for name, connector in connectors.items():

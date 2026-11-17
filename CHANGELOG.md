@@ -9,6 +9,24 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Period-over-period metrics, first slice (DEC-18): a derived metric can read an input at an
+  earlier period with `inputs: [{metric: revenue, offset: 1 month}]`, so `revenue_prev_month`
+  and `revenue_mom_growth` (`({revenue} - {revenue_prev_month}) / {revenue_prev_month}`) are
+  now in the example model and the retail pack, with `order_count_7_days_earlier`. The value
+  for a period is the input's value for the period that starts the offset earlier, at the
+  query's time grain; the rows are the periods with facts, and a period whose earlier period
+  has none gets NULL (a count too). Offsets in days run by day (or by week in multiples of 7),
+  offsets in months by month (or by quarter or year in multiples of 3 or 12); other units and
+  grains, requests without exactly one time dimension, offsets of cumulative metrics and
+  offsets over metrics that have offsets are refused, at validation or at query time. The
+  planner adds one aggregate per offset and joins it on its period moved forward, so only
+  period starts are shifted and no database clamps a month end. Reference cases A35 to A38
+  (hand-written SQL that pairs months by number, across a year change and a month without
+  orders), exact numbers on a table built for the edge cases, and draws of their own in the
+  randomized cross-database test. The SQL of every existing request is unchanged. The Cube and
+  dbt exports refuse these metrics for now, and Ossie keeps them only in the Cosmos extension
+  ([semantic model](docs/semantic-model.md#period-over-period)).
+
 - `cosmos export cube` carries running totals (DEC-16): a cumulative metric with
   `grain_to_date` over a `sum` or `count` measure becomes a Cube measure with
   `rolling_window: {type: to_date, granularity: ...}`, and `cosmos import cube` reads it back as

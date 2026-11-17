@@ -91,9 +91,77 @@ class RatioMetric(_MetricBase):
     filter: str | None = None
 
 
+# Query grains each offset unit fits (DEC-18), with how many units make one period of the
+# grain: an offset must be a whole number of periods, so a shifted period start is the start
+# of another period. Only days and months, for now.
+OFFSET_GRAINS = {"day": {"day": 1, "week": 7}, "month": {"month": 1, "quarter": 3, "year": 12}}
+
+
+def parse_offset(text: str) -> tuple[int, str] | None:
+    """``(N, unit)`` for an offset of ``N days`` or ``N months`` (singular too); None for
+    anything else."""
+    match = re.fullmatch(r"\s*(\d+)\s+(day|month)s?\s*", text or "", re.IGNORECASE)
+    if not match or int(match.group(1)) <= 0:
+        return None
+    return int(match.group(1)), match.group(2).lower()
+
+
+def offset_problem(text: str) -> str | None:
+    """Why an offset cannot be read; None when it can. Validation and the planner agree."""
+    if parse_offset(text) is None:
+        return (
+            f"offset `{text}` is not supported; use a whole number of days or months, "
+            "such as `7 days` or `1 month`"
+        )
+    return None
+
+
+def offset_grain_problem(text: str, grain: str | None) -> str | None:
+    """Why an offset cannot be applied at the query's time ``grain``; None when it can."""
+    parsed = parse_offset(text)
+    if parsed is None:
+        return offset_problem(text)
+    amount, unit = parsed
+    size = OFFSET_GRAINS[unit].get(grain or "")
+    if size is not None and amount % size == 0:
+        return None
+    fits = ", ".join(
+        f"by {g}" if n == 1 else f"by {g} (in multiples of {n} {unit}s)"
+        for g, n in OFFSET_GRAINS[unit].items()
+    )
+    found = f"by {grain}" if grain else "to a time dimension without a grain"
+    return f"an offset of `{text}` cannot be applied {found}; query it {fits}"
+
+
+class OffsetInput(_Base):
+    """A derived metric's input read at an earlier period (DEC-18)."""
+
+    metric: Name = Field(
+        description="Measure or metric referenced in `expr` as `{name}`, read shifted in time."
+    )
+    offset: str = Field(
+        description=(
+            "How far back, such as `1 month` or `7 days`: the value for a period is the "
+            "input's value for the period that starts that much earlier, at the query's time "
+            "grain. Only days and months, for now."
+        )
+    )
+
+
 class DerivedMetric(_MetricBase):
     type: Literal["derived"]
     expr: str = Field(description="Expression over measures or metrics, referenced as `{name}`.")
+    inputs: list[OffsetInput] = Field(
+        [],
+        description=(
+            "References of `expr` read at an earlier period, each with its `offset`; the "
+            "others are read at the same period. Queries need exactly one time dimension."
+        ),
+    )
+
+    def offsets(self) -> dict[str, str]:
+        """Referenced name -> offset, for the references read at an earlier period."""
+        return {i.metric: i.offset for i in self.inputs}
 
 
 # Aggregations whose per-period values combine over a rolling window or a running (to-date)
