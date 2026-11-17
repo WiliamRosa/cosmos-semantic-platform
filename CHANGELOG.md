@@ -9,6 +9,19 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- `cosmos import powerbi` reads rolling windows from `DATESINPERIOD` (DEC-23):
+  `CALCULATE([m], DATESINPERIOD('Date'[Date], MAX('Date'[Date]), -N, DAY))` over a `sum`,
+  `count`, `min` or `max` measure becomes a cumulative metric with `window: N days`. At day
+  grain, the only grain the engine answers a window at, DAX's window ends at the row's day as the
+  engine's does. A warning per measure names the day dimension to query it with (other date
+  dimensions give different numbers) and the differences: grouping or filtering by other columns
+  of the date table gives different numbers, since the DAX filter on the date column removes
+  those filters while Cosmos keeps one window per value; Power BI also shows days without facts
+  and coarser periods; and a date slicer does not cut its window. Other units, forward windows,
+  other anchors (`LASTDATE`, `TODAY()`), extra filters, an unrelated date table, `avg` and
+  `count_distinct` measures, and `DATESBETWEEN` stay warnings. Tests check the numbers against hand-written SQL on every database, by day and by
+  day and buyer, with days without facts inside the windows and a fact without a date
+  ([interoperability](docs/interoperability.md#importing-power-bi)).
 - `cosmos export cube` carries row filters and sensitivity (DEC-20): each cube gets one
   `access_policy` for every role (`role: "*"`) with the model's row filters as `row_level`
   filters, `$user.<field>` as `{ securityContext.<claim> }`, and personal or sensitive
