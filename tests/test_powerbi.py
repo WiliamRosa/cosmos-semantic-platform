@@ -3,6 +3,7 @@ returns the same numbers as the native one on every available database."""
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import math
 from pathlib import Path
@@ -655,3 +656,234 @@ def test_to_date_over_avg_or_distinct_count_is_a_warning(tmp_path, dax, agg):
     joined = "\n".join(warnings)
     assert "measure `To Date` not imported" in joined
     assert f"an `{agg}` measure, cannot be accumulated from per-period values" in joined
+
+
+# -- DATESINPERIOD as a rolling window in days (DEC-23) -------------------------------------
+
+
+def _window_bim(directory: Path, measures: dict[str, str], related: bool = True) -> Path:
+    """`Sales` (a date, an integer day number, an amount, a buyer) and a `Calendar` date table
+    (`Day`, read from `cal_day`) related to it, or left unrelated."""
+
+    def table(name: str, physical: str, columns, extra: dict[str, str]):
+        return {
+            "name": name,
+            "columns": [{"name": c, "dataType": t, "sourceColumn": s} for c, t, s in columns],
+            "partitions": [
+                {"name": name, "source": {"type": "query", "query": f"SELECT * FROM {physical}"}}
+            ],
+            "measures": [{"name": k, "expression": v} for k, v in extra.items()],
+        }
+
+    sales = [
+        (c, t, c)
+        for c, t in [
+            ("sold_on", "dateTime"),
+            ("day_no", "int64"),
+            ("amount", "double"),
+            ("buyer", "string"),
+        ]
+    ]
+    base = {"Amount": "SUM(Sales[amount])", "Mean": "AVERAGE(Sales[amount])"}
+    relationships = [
+        {"fromTable": "Sales", "fromColumn": "sold_on", "toTable": "Calendar", "toColumn": "Day"}
+    ]
+    model = {
+        "model": {
+            "tables": [
+                table("Sales", "public.powerbi_window_sales", sales, {**base, **measures}),
+                table(
+                    "Calendar",
+                    "public.powerbi_window_calendar",
+                    [("Day", "dateTime", "cal_day")],
+                    {},
+                ),
+            ],
+            "relationships": relationships if related else [],
+        }
+    }
+    path = directory / "m.bim"
+    path.write_text(json.dumps(model), encoding="utf-8")
+    return path
+
+
+def _window(column: str = "'Calendar'[Day]", count: str = "-7", unit: str = "DAY") -> str:
+    return f"DATESINPERIOD({column}, MAX({column}), {count}, {unit})"
+
+
+def test_datesinperiod_in_days_imports_as_a_rolling_window(tmp_path):
+    path = _window_bim(
+        tmp_path,
+        {
+            "Amount 7D": f"CALCULATE([Amount], {_window()})",
+            "Top 30D": f"CALCULATE(MAX(Sales[amount]), {_window('Sales[sold_on]', '-30', 'day')})",
+            "Rows 1D": f"CALCULATE(COUNTROWS(Sales), {_window('Calendar[Day]', '-1')})",
+        },
+    )
+    graph, warnings = imported("powerbi", path)
+    metrics = {m.name: m for m in graph.project.metrics}
+    assert (metrics["amount_7d"].measure, metrics["amount_7d"].window) == ("amount", "7 days")
+    assert metrics["top_30d"].window == "30 days"
+    assert metrics["rows_1d"].window == "1 day"
+    assert all(m.grain_to_date is None for m in metrics.values())
+    # Each one carries the day-grain caveat, naming the time dimension to query it with.
+    assert len(warnings) == 3
+    joined = "\n".join(warnings)
+    assert "`Amount 7D`: imported as a 7-day window, answered only with `calendar.day__day`" in (
+        joined
+    )
+    assert "answered only with `sales.sold_on__day`" in joined
+    request = QueryRequest(metrics=["amount_7d"], dimensions=["calendar.day__day"])
+    assert "AMOUNT_7D_WINDOW" in Planner(graph, "duckdb").plan(request).sql.upper()
+
+
+@pytest.mark.parametrize(
+    ("dax", "reason"),
+    [
+        (f"CALCULATE([Amount], {_window(unit='MONTH')})", "in a unit other than DAY"),
+        (f"CALCULATE([Amount], {_window(unit='YEAR')})", "in a unit other than DAY"),
+        (f"CALCULATE([Amount], {_window(count='7')})", "not a negative whole number"),
+        (f"CALCULATE([Amount], {_window(count='-1.5')})", "not a negative whole number"),
+        (f"CALCULATE([Amount], {_window(count='-0')})", "over zero days"),
+        (
+            "CALCULATE([Amount], DATESINPERIOD(Calendar[Day], LASTDATE(Calendar[Day]), -7, DAY))",
+            "anchored elsewhere than MAX(Calendar[Day])",
+        ),
+        (
+            "CALCULATE([Amount], DATESINPERIOD(Calendar[Day], TODAY(), -7, DAY))",
+            "anchored elsewhere than MAX(Calendar[Day])",
+        ),
+        (
+            "CALCULATE([Amount], DATESINPERIOD(Calendar[Day], MAX(Sales[sold_on]), -7, DAY))",
+            "anchored elsewhere than MAX(Calendar[Day])",
+        ),
+        (
+            f'CALCULATE([Amount], {_window()}, Sales[buyer] = "a")',
+            "CALCULATE with DATESINPERIOD and other filters",
+        ),
+        (f"CALCULATE([Amount], {_window('Sales[buyer]')})", "`Sales[buyer]`, not a date column"),
+        (f"CALCULATE([Mean], {_window()})", "a rolling window over a `avg` measure"),
+        (
+            f"CALCULATE(DISTINCTCOUNTNOBLANK(Sales[buyer]), {_window()})",
+            "a rolling window over a `count_distinct` measure",
+        ),
+        (
+            "CALCULATE([Amount], DATESBETWEEN(Calendar[Day], DATE(2024, 1, 1), MAX(Calendar[Day])))",
+            "DAX DATE, DATESBETWEEN has no equivalent",
+        ),
+    ],
+)
+def test_other_datesinperiod_forms_stay_warnings(tmp_path, dax, reason):
+    graph, warnings = imported("powerbi", _window_bim(tmp_path, {"Rolling": dax}))
+    # Not imported, so the imported model still passes validation.
+    assert "rolling" not in {m.name for m in graph.project.metrics}
+    joined = "\n".join(warnings)
+    assert "measure `Rolling` not imported" in joined
+    assert reason in joined
+
+
+def test_datesinperiod_over_an_unrelated_date_table_is_a_warning(tmp_path):
+    path = _window_bim(tmp_path, {"Rolling": f"CALCULATE([Amount], {_window()})"}, related=False)
+    graph, warnings = imported("powerbi", path)
+    assert "rolling" not in {m.name for m in graph.project.metrics}
+    assert "`Sales` does not reach through an imported relationship" in "\n".join(warnings)
+
+
+# (day number, date, amount): day 3 has no facts but is a day of the windows of days 4 and 5,
+# and days 6 and 7 have none either, so a window of 3 days on day 8 holds day 8 alone.
+WINDOW_ROWS = [
+    (1, dt.date(2024, 1, 1), 10.0),
+    (1, dt.date(2024, 1, 1), 5.0),
+    (2, dt.date(2024, 1, 2), 7.0),
+    (4, dt.date(2024, 1, 4), 1.0),
+    (5, dt.date(2024, 1, 5), None),
+    (5, dt.date(2024, 1, 5), 20.0),
+    (8, dt.date(2024, 1, 8), 3.0),
+]
+# metric: (DAX over the `Calendar` date table, the hand-written aggregate, N - 1, the DAX
+# numbers by day worked out by hand). DAX takes the N dates ending at MAX(Calendar[Day]),
+# which at day grain is the row's day; the hand-written SQL takes the facts of the day
+# numbers c.day_no - (N - 1) to c.day_no.
+WINDOW_MEASURES = {
+    "amount_3d": (
+        f"CALCULATE([Amount], {_window(count='-3')})",
+        "SUM(p.amount)",
+        2,
+        {1: 15.0, 2: 22.0, 4: 8.0, 5: 21.0, 8: 3.0},
+    ),
+    "amount_7d": (
+        f"CALCULATE(SUM(Sales[amount]), {_window()})",
+        "SUM(p.amount)",
+        6,
+        {1: 15.0, 2: 22.0, 4: 23.0, 5: 43.0, 8: 31.0},
+    ),
+    "top_3d": (
+        f"CALCULATE(MAX(Sales[amount]), {_window(count='-3')})",
+        "MAX(p.amount)",
+        2,
+        {1: 10.0, 2: 10.0, 4: 7.0, 5: 20.0, 8: 3.0},
+    ),
+    "rows_1d": (
+        f"CALCULATE(COUNTROWS(Sales), {_window(count='-1')})",
+        "COUNT(*)",
+        0,
+        {1: 2.0, 2: 1.0, 4: 1.0, 5: 2.0, 8: 1.0},
+    ),
+}
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_datesinperiod_matches_hand_written_sql_with_empty_days(source, request, tmp_path):
+    connector = request.getfixturevalue(source)
+    day_no, sold_on, amount = (list(c) for c in zip(*WINDOW_ROWS, strict=True))
+    calendar = [dt.date(2024, 1, 1) + dt.timedelta(days=i) for i in range(10)]
+    demo_data.load(
+        connector,
+        {
+            "powerbi_window_sales": pa.table(
+                [sold_on, day_no, amount, ["x"] * len(day_no)],
+                schema=pa.schema(
+                    [
+                        ("sold_on", pa.date32()),
+                        ("day_no", pa.int64()),
+                        ("amount", pa.float64()),
+                        ("buyer", pa.string()),
+                    ]
+                ),
+            ),
+            "powerbi_window_calendar": pa.table(
+                [calendar], schema=pa.schema([("cal_day", pa.date32())])
+            ),
+        },
+    )
+    schema = connector.config.schema_map.get("public", "public")
+    sales = f"{schema}.powerbi_window_sales"
+    try:
+        measures = {name: dax for name, (dax, *_) in WINDOW_MEASURES.items()}
+        other, warnings = imported("powerbi", _window_bim(tmp_path, measures))
+        assert not [w for w in warnings if "not imported" in w]
+        planner = Planner(other, connector.dialect, connector.config.schema_map)
+        sql = planner.plan(
+            QueryRequest(metrics=list(WINDOW_MEASURES), dimensions=["calendar.day__day"])
+        ).sql
+        got = {}
+        for raw in connector.execute(sql).to_pylist():
+            row = {k.lower(): v for k, v in raw.items()}
+            day = dt.date.fromisoformat(str(row["calendar__day__day"])[:10])
+            got[(day - calendar[0]).days + 1] = {m: _number(row[m]) for m in WINDOW_MEASURES}
+        for metric, (_, combine, back, values) in WINDOW_MEASURES.items():
+            hand = (
+                f"SELECT c.day_no, {combine} AS v FROM (SELECT DISTINCT day_no FROM {sales}) c "
+                f"JOIN {sales} p ON p.day_no BETWEEN c.day_no - {back} AND c.day_no "
+                "GROUP BY c.day_no"
+            )
+            expected = {
+                int(r[0]): _number(r[1])
+                for r in (list(row.values()) for row in connector.execute(hand).to_pylist())
+            }
+            assert expected == values, metric
+            # Days without facts (3, 6 and 7) have no row, in Cosmos as in the hand-written SQL.
+            assert {day: v[metric] for day, v in got.items()} == values, metric
+    finally:
+        connector.run_script(f"DROP TABLE {sales}")
+        connector.run_script(f"DROP TABLE {schema}.powerbi_window_calendar")

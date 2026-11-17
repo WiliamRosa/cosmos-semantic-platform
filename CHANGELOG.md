@@ -9,6 +9,16 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- `cosmos import powerbi` reads rolling windows from `DATESINPERIOD` (DEC-23):
+  `CALCULATE([m], DATESINPERIOD('Date'[Date], MAX('Date'[Date]), -N, DAY))` over a `sum`,
+  `count`, `min` or `max` measure becomes a cumulative metric with `window: N days`. At day
+  grain, the only grain the engine answers a window at, DAX's window ends at the row's day as the
+  engine's does; a warning per measure names the day dimension to query and the differences
+  (Power BI also shows days without facts and coarser periods, and a date slicer does not cut its
+  window). Other units, forward windows, other anchors (`LASTDATE`, `TODAY()`), extra filters,
+  an unrelated date table, `avg` and `count_distinct` measures, and `DATESBETWEEN` stay
+  warnings. Tests check the numbers against hand-written SQL on every database, with days
+  without facts inside the windows ([interoperability](docs/interoperability.md#importing-power-bi)).
 - `cosmos export cube` carries running totals (DEC-16): a cumulative metric with
   `grain_to_date` over a `sum` or `count` measure becomes a Cube measure with
   `rolling_window: {type: to_date, granularity: ...}`, and `cosmos import cube` reads it back as

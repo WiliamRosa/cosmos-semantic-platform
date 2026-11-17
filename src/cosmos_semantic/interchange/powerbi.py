@@ -11,11 +11,13 @@ become entities. DAX measures are translated when they map onto the Cosmos metri
 | ``DIVIDE(a, b)`` | ratio metric |
 | ``CALCULATE(m, T[c] = "x", ...)`` with simple column filters | metric with ``filter`` |
 | ``TOTALYTD``, ``TOTALQTD``, ``TOTALMTD`` over a sum, count, min or max measure | cumulative metric |
+| ``CALCULATE(m, DATESINPERIOD(D[c], MAX(D[c]), -N, DAY))`` over such a measure | ``window: N days`` |
 | arithmetic over measures (``[A] - [B]``) | derived metric |
 
 Everything else (other iterators such as ``COUNTX``; ``SUMX``, ``AVERAGEX``, ``MINX`` or
 ``MAXX`` over another table, with a division, a function or ``RELATED``; ``TOTALYTD``,
-``TOTALQTD`` or ``TOTALMTD`` over an average or a distinct count; ``FILTER``, ``ALL``,
+``TOTALQTD`` or ``TOTALMTD`` over an average or a distinct count; ``DATESINPERIOD`` in
+other units or from another anchor, ``DATESBETWEEN``; ``FILTER``, ``ALL``,
 variables, calculated columns and tables, calculation groups, row-level security roles) is
 reported as a warning; nothing is dropped silently. No DAX is ever executed.
 """
@@ -31,7 +33,7 @@ from typing import Any
 
 from cosmos_semantic.interchange import ImportResult
 from cosmos_semantic.interchange.cube import _table_from_sql
-from cosmos_semantic.spec import WINDOW_AGGS, Project
+from cosmos_semantic.spec import WINDOW_AGGS, Project, window_agg_refusal
 
 _DATA_TYPES = {
     "string": "categorical",
@@ -807,6 +809,13 @@ class _Translator:
                 },
             )
             return
+        if (
+            kind == "call"
+            and tree[1] == "CALCULATE"
+            and any(a[0] == "call" and a[1] == "DATESINPERIOD" for a in tree[2][1:])
+        ):
+            self.rolling_window(pbi_name, tree[2], name, meta)
+            return
         if kind == "call" and tree[1] == "CALCULATE":
             args = tree[2]
             if not args:
@@ -869,6 +878,78 @@ class _Translator:
             expr = expr[1:-1]
         self.metric(pbi_name, {"name": name, "type": "derived", "expr": expr, **meta})
 
+    def rolling_window(self, pbi_name: str, args: list, name: str, meta: dict[str, Any]) -> None:
+        """``CALCULATE(m, DATESINPERIOD(D[c], MAX(D[c]), -N, DAY))`` as a cumulative metric
+        with ``window: N days``. DAX takes the N dates ending at the last date in context; the
+        engine answers windows at day grain only, where that date is the row's day, so the
+        window is D - (N - 1) to D in both. Every other form stays a warning."""
+        if len(args) != 2:
+            raise _Unsupported("CALCULATE with DATESINPERIOD and other filters")
+        call = args[1]
+        if len(call[2]) != 4:
+            raise _Unsupported("DATESINPERIOD takes a date column, a start, a count and a unit")
+        column, anchor, count, unit = call[2]
+        if column[0] != "col":
+            raise _Unsupported("DATESINPERIOD over a table expression instead of a date column")
+        if anchor != ("call", "MAX", [column]):
+            raise _Unsupported(
+                f"DATESINPERIOD anchored elsewhere than MAX({column[1]}[{column[2]}]), the last "
+                "date in context; only that anchor is the row's day"
+            )
+        if unit[0] != "table" or unit[1].upper() != "DAY":
+            raise _Unsupported(
+                "DATESINPERIOD in a unit other than DAY; only windows in days are translated"
+            )
+        if not (count[0] == "neg" and count[1][0] == "num" and count[1][1].isdigit()):
+            raise _Unsupported(
+                "DATESINPERIOD with a count that is not a negative whole number; only windows "
+                "that end at the last date are translated"
+            )
+        days = int(count[1][1])
+        if days == 0:
+            raise _Unsupported("DATESINPERIOD over zero days")
+        dates, info = self.column(column[1], column[2])
+        if info["spec"]["type"] != "time":
+            raise _Unsupported(f"DATESINPERIOD over `{column[1]}[{column[2]}]`, not a date column")
+        inner = self.operand(args[0], f"{name}_base")
+        if not self.is_measure(inner):
+            raise _Unsupported("DATESINPERIOD over a metric; only measures roll")
+        problem = window_agg_refusal(self.measure_agg(inner))
+        if problem:
+            raise _Unsupported(f"DATESINPERIOD over `{inner}`: {problem}")
+        owner = next(
+            t
+            for t in self.tables.values()
+            if any(m["name"] == inner for m in t.model.get("measures", []))
+        )
+        keys = {e["name"] for e in dates.model.get("entities", []) if e["type"] != "foreign"}
+        foreign = {e["name"] for e in owner.model.get("entities", []) if e["type"] == "foreign"}
+        if owner is not dates and not keys & foreign:
+            raise _Unsupported(
+                f"DATESINPERIOD over `{column[1]}`, which `{owner.name}` does not reach through "
+                "an imported relationship"
+            )
+        dims = dates.model.setdefault("dimensions", [])
+        if info["spec"] not in dims:
+            dims.append(info["spec"])
+        day = f"{dates.model['name']}.{info['dimension']}__day"
+        self.warnings.append(
+            f"measure `{pbi_name}`: imported as a {days}-day window, answered only with `{day}` "
+            "(day grain), where it matches DAX on every day that has facts. Power BI also "
+            "shows days without facts and coarser periods, and a date slicer does not cut its "
+            "window, while Cosmos filters the facts first"
+        )
+        self.metric(
+            pbi_name,
+            {
+                "name": name,
+                "type": "cumulative",
+                "measure": inner,
+                "window": f"{days} day" if days == 1 else f"{days} days",
+                **meta,
+            },
+        )
+
     def metric(self, pbi_name: str, spec: dict[str, Any]) -> None:
         while spec["name"] in self.measure_names or spec["name"] in {
             m["name"] for m in self.metrics
@@ -880,7 +961,7 @@ class _Translator:
 
 _TRANSLATABLE = (
     set(_AGGS)
-    | {"COUNTROWS", "DIVIDE", "CALCULATE", "KEEPFILTERS", "BLANK"}
+    | {"COUNTROWS", "DIVIDE", "CALCULATE", "KEEPFILTERS", "BLANK", "DATESINPERIOD"}
     | set(_ITERATORS)
     | set(_TO_DATE)
 )
