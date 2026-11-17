@@ -302,7 +302,7 @@ def test_rolling_windows_over_sum_count_min_and_max_pass_validation():
     # Validation and the planner accept the same aggregations.
     from cosmos_semantic import planner, spec
 
-    assert set(planner._WINDOW_AGGS) == set(spec.WINDOW_AGGS)
+    assert set(planner._COMBINE_AGGS) == set(spec.WINDOW_AGGS)
 
 
 @pytest.mark.parametrize(
@@ -320,3 +320,124 @@ def test_rolling_window_sql_for_every_dialect(dialect):
     sql = compiled.sql.upper().replace("`", "").replace('"', "")
     assert "OVER" not in sql  # a self-join, not a window frame (SQL Server has no RANGE)
     assert "MAX(PREV.TOP_AMOUNT)" in sql and "SUM(PREV.LINES)" in sql
+
+
+# -- Cumulative (to-date) metrics over each aggregation, and their grains (DEC-21) ----------
+
+TO_DATE = """
+version: 1
+semantic_models:
+  - name: sales
+    table: t_sales
+    entities: [{name: sale, type: primary, expr: id}]
+    dimensions: [{name: sold_at, type: time}, {name: kind, type: categorical}]
+    measures:
+      - {name: amount, agg: sum}
+      - {name: lines, agg: count}
+      - {name: top_amount, agg: max, expr: amount}
+      - {name: low_amount, agg: min, expr: amount}
+      - {name: mean_amount, agg: avg, expr: amount}
+      - {name: buyers, agg: count_distinct, expr: buyer_id}
+metrics:
+  - {name: amount_ytd, type: cumulative, measure: amount, grain_to_date: year}
+  - {name: lines_mtd, type: cumulative, measure: lines, grain_to_date: month}
+  - {name: top_ytd, type: cumulative, measure: top_amount, grain_to_date: year}
+  - {name: low_qtd, type: cumulative, measure: low_amount, grain_to_date: quarter}
+  - {name: amount_wtd, type: cumulative, measure: amount, grain_to_date: week}
+  - {name: amount_running, type: cumulative, measure: amount}
+"""
+UNACCUMULABLE = """
+  - {name: mean_ytd, type: cumulative, measure: mean_amount, grain_to_date: year}
+  - {name: buyers_ytd, type: cumulative, measure: buyers, grain_to_date: year}
+  - {name: buyers_running, type: cumulative, measure: buyers}
+"""
+
+
+def test_to_date_over_avg_or_count_distinct_is_a_validation_error():
+    with pytest.raises(ModelError, match="year-to-date over a `avg` measure"):
+        compile_project(project(TO_DATE + UNACCUMULABLE))
+    graph = compile_project(project(TO_DATE + UNACCUMULABLE), strict=False)
+    errors = {i.location: i.message for i in graph.issues if i.severity == "error"}
+    assert set(errors) == {"metrics.mean_ytd", "metrics.buyers_ytd", "metrics.buyers_running"}
+    assert errors["metrics.buyers_ytd"] == (
+        "a year-to-date over a `count_distinct` measure is not supported; it cannot be "
+        "accumulated from per-period values (use a sum, count, min or max measure)"
+    )
+    assert errors["metrics.buyers_running"].startswith("a running total over a `count_distinct`")
+    # sum, count, min and max accumulate: no issue at all.
+    assert not compile_project(project(TO_DATE)).issues
+
+
+def test_cli_validate_refuses_a_year_to_date_distinct_count(tmp_path):
+    from typer.testing import CliRunner
+
+    from cosmos_semantic.cli import app
+
+    (tmp_path / "model.yml").write_text(TO_DATE + UNACCUMULABLE, encoding="utf-8")
+    result = CliRunner().invoke(app, ["validate", "-m", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "[error] metrics.buyers_ytd: a year-to-date over a `count_distinct`" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("metric", "message"),
+    [
+        ("mean_ytd", "`mean_ytd`: a year-to-date over a `avg` measure is not supported"),
+        ("buyers_ytd", "`buyers_ytd`: a year-to-date over a `count_distinct` measure"),
+        ("buyers_running", "`buyers_running`: a running total over a `count_distinct`"),
+    ],
+)
+def test_to_date_over_avg_or_count_distinct_is_refused_at_query_time(metric, message):
+    """Even when the model was loaded despite the validation error."""
+    graph = compile_project(project(TO_DATE + UNACCUMULABLE), strict=False)
+    with pytest.raises(QueryError, match=message):
+        Planner(graph, "duckdb").plan(
+            QueryRequest(metrics=[metric], dimensions=["sales.sold_at__month"])
+        )
+
+
+@pytest.mark.parametrize(
+    ("metric", "grain", "refused"),
+    [
+        ("lines_mtd", "quarter", True),
+        ("lines_mtd", "year", True),
+        ("low_qtd", "year", True),
+        ("amount_wtd", "month", True),
+        ("lines_mtd", "month", False),
+        ("lines_mtd", "week", False),
+        ("lines_mtd", "day", False),
+        ("lines_mtd", "hour", False),
+        ("lines_mtd", None, False),
+        ("amount_ytd", "year", False),
+        ("amount_ytd", "quarter", False),
+        ("low_qtd", "quarter", False),
+        ("amount_running", "year", False),  # no to-date grain: a running total at any grain
+    ],
+)
+def test_to_date_grain_coarser_than_the_period_is_refused(metric, grain, refused):
+    graph = compile_project(project(TO_DATE))
+    dim = f"sales.sold_at__{grain}" if grain else "sales.sold_at"
+    request = QueryRequest(metrics=[metric], dimensions=["sales.kind", dim])
+    if refused:
+        with pytest.raises(QueryError, match=f"cannot be grouped by {grain}"):
+            Planner(graph, "duckdb").plan(request)
+    else:
+        Planner(graph, "duckdb").plan(request)
+
+
+@pytest.mark.parametrize(
+    "dialect", ["postgres", "duckdb", "databricks", "snowflake", "tsql", "mysql", "oracle"]
+)
+def test_to_date_combines_min_and_max_with_min_and_max(dialect):
+    graph = compile_project(project(TO_DATE))
+    compiled = Planner(graph, dialect).plan(
+        QueryRequest(
+            metrics=["amount_ytd", "lines_mtd", "top_ytd", "low_qtd"],
+            dimensions=["sales.kind", "sales.sold_at__day"],
+        )
+    )
+    ensure_read_only(compiled.sql, dialect)
+    sql = compiled.sql.upper().replace("`", "").replace('"', "")
+    assert "SUM(SALES_AGG.AMOUNT) OVER" in sql and "SUM(SALES_AGG.LINES) OVER" in sql
+    assert "MAX(SALES_AGG.TOP_AMOUNT) OVER" in sql
+    assert "MIN(SALES_AGG.LOW_AMOUNT) OVER" in sql

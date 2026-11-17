@@ -43,6 +43,10 @@ semantic_models:
         agg: min
         expr: amount
         description: Value of the smallest order
+      - name: max_order_value
+        agg: max
+        expr: amount
+        description: Largest order value
 
   - name: order_items
     table: public.order_items
@@ -156,6 +160,12 @@ metrics:
     measure: revenue
     grain_to_date: month
     description: Month-to-date revenue
+  - name: max_order_value_year_to_date
+    type: cumulative
+    owner: controllership
+    measure: max_order_value
+    grain_to_date: year
+    description: Largest order value so far this year
   - name: revenue_rolling_7_days
     type: cumulative
     owner: controllership

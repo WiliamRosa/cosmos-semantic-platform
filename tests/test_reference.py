@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from cosmos_semantic.reference import load_cases, run_case
+from cosmos_semantic.compiler import compile_project
+from cosmos_semantic.errors import ModelError
+from cosmos_semantic.loader import load_project
+from cosmos_semantic.planner import QueryRequest
+from cosmos_semantic.reference import ReferenceCase, load_cases, run_case
+from cosmos_semantic.spec import Project
 
-from .conftest import CASES
+from .conftest import CASES, EXAMPLE
 
 ALL = load_cases(CASES)
 ADVANCED = load_cases(CASES.with_name("queries_advanced.yml"))
@@ -65,6 +70,37 @@ def test_reference_mariadb(case, graph, mariadb_connector):
 @pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
 def test_reference_oracle(case, graph, oracle_connector):
     _check(case, graph, oracle_connector)
+
+
+def test_year_to_date_distinct_count_is_refused(duckdb_connector):
+    """A year-to-date over a `count_distinct` measure cannot be in a valid model (validation
+    refuses it, so it is not in the example and has no case in the YAML files); a model loaded
+    despite the error still gets no number from the planner (DEC-21)."""
+    data = load_project(EXAMPLE).model_dump(mode="json")
+    data["metrics"].append(
+        {
+            "name": "buyers_year_to_date",
+            "type": "cumulative",
+            "measure": "buyers",
+            "grain_to_date": "year",
+        }
+    )
+    with pytest.raises(ModelError, match="year-to-date over a `count_distinct` measure"):
+        compile_project(Project.model_validate(data))
+    loaded = compile_project(Project.model_validate(data), strict=False)
+    case = ReferenceCase(
+        id="DEC21-COUNT-DISTINCT",
+        category="tempo",
+        phase=3,
+        title="Distinct buyers year to date is refused (a buyer would count once per day)",
+        request=QueryRequest(
+            metrics=["buyers_year_to_date"], dimensions=["orders.ordered_at__month"]
+        ),
+        expect_error="QueryError",
+    )
+    result = run_case(case, loaded, duckdb_connector)
+    assert result.status == "pass", result.detail
+    assert "cannot be accumulated" in result.detail
 
 
 def test_there_are_twenty_cases():

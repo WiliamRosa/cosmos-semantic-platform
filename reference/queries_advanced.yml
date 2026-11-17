@@ -564,6 +564,45 @@ cases:
           AND f.ordered_at >= DATEADD(day, -6, d.dd) AND f.ordered_at < DATEADD(day, 1, d.dd)
         GROUP BY d.status, d.dd
 
+  # -- Cumulative metrics over min/max measures; refused grains (DEC-21) -----
+  - id: A31
+    category: tempo
+    phase: 3
+    title: Year-to-date maximum order value by status and month (a running max, not a sum)
+    request:
+      metrics: [max_order_value_year_to_date]
+      dimensions: [orders.status, orders.ordered_at__month]
+    sql: |
+      WITH m AS (SELECT DISTINCT status, DATE_TRUNC('month', ordered_at) AS m FROM public.orders)
+      SELECT m.status AS orders__status, m.m AS orders__ordered_at__month,
+             MAX(o.amount) AS max_order_value_year_to_date
+      FROM m
+      JOIN public.orders o
+        ON o.status = m.status
+        AND DATE_TRUNC('year', o.ordered_at) = DATE_TRUNC('year', m.m)
+        AND DATE_TRUNC('month', o.ordered_at) <= m.m
+      GROUP BY m.status, m.m
+    sql_by_dialect:
+      tsql: |
+        WITH m AS (SELECT DISTINCT status, DATETRUNC(month, ordered_at) AS m FROM public.orders)
+        SELECT m.status AS orders__status, m.m AS orders__ordered_at__month,
+               MAX(o.amount) AS max_order_value_year_to_date
+        FROM m
+        JOIN public.orders o
+          ON o.status = m.status
+          AND DATETRUNC(year, o.ordered_at) = DATETRUNC(year, m.m)
+          AND DATETRUNC(month, o.ordered_at) <= m.m
+        GROUP BY m.status, m.m
+
+  - id: A32
+    category: tempo
+    phase: 3
+    title: A month-to-date metric by quarter is refused (it would be the quarter's total)
+    request:
+      metrics: [revenue_month_to_date]
+      dimensions: [orders.ordered_at__quarter]
+    expect_error: QueryError
+
   # A rolling window over null groups: a null segment is a group of its own inside the window
   # (rows are matched null-safely), and a null day (customers without orders have no
   # last_order_at) is a row whose value is null: no day is within N days of an unknown day.

@@ -150,3 +150,15 @@ def test_same_result_hash_on_every_database(graph, request, tmp_path):
     if len(hashes) < 2:
         pytest.skip("needs at least two databases")
     assert len(set(hashes.values())) == 1, hashes
+
+
+def test_cumulative_formula_names_the_running_aggregate(graph):
+    from cosmos_semantic.evidence import EvidenceBuilder
+
+    builder = EvidenceBuilder(graph)
+    assert builder.formula("max_order_value_year_to_date") == (
+        "running maximum of MAX(orders.amount) within each year"
+    )
+    assert builder.formula("revenue_year_to_date") == (
+        "running total of SUM(orders.amount) within each year"
+    )

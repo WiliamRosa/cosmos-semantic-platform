@@ -40,6 +40,26 @@ format or the API; such changes are listed under **Changed**.
 
 ### Fixed
 
+- Cumulative metrics no longer return silently wrong numbers (DEC-21). A `grain_to_date`
+  metric (month-to-date, year-to-date) over a `min` or `max` measure now takes the minimum or
+  maximum so far (`MIN`/`MAX OVER`); before, it summed the daily values, so "largest order so
+  far this year" was a sum of daily maxima. Over an `avg` or `count_distinct` measure it is an
+  error in `cosmos validate` and `cosmos check` and is refused by the planner, since an average
+  or a distinct count to date cannot be rebuilt from daily values (a customer counted once per
+  day); the same holds for a running total without `grain_to_date`. Queried at a grain coarser
+  than its period (a month-to-date by quarter or year) it is refused instead of returning the
+  quarter's total. `sum` and `count` cumulative metrics generate byte-identical SQL. `cosmos
+  import powerbi` imports `TOTALYTD`, `TOTALQTD` and `TOTALMTD` over `min` and `max` measures
+  as running minima and maxima, and reports the ones over an average or a distinct count as
+  not imported. The example model gains the `max_order_value` measure and the
+  `max_order_value_year_to_date` metric, with reference cases A31 (hand-written SQL) and A32
+  (month-to-date by quarter, refused). The evidence formula of a running minimum or maximum
+  says so (`running maximum of MAX(orders.amount) within each year`).
+
+  **Compatibility:** a model with a cumulative metric over an `avg` or `count_distinct`
+  measure passed `cosmos validate` before and now fails it; such a metric returned wrong
+  numbers.
+
 - Ossie import without the root `COSMOS_SEMANTIC` extension keeps the business time zone for
   every model (DEC-19). The export now copies `timezone` into every dataset's extension, not
   only those with row filters, and the fallback import reads it, refusing copies that disagree.

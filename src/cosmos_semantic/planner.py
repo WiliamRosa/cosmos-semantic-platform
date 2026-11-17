@@ -17,7 +17,12 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 
 from cosmos_semantic import dialects
-from cosmos_semantic.compiler import DimensionRef, JoinEdge, SemanticGraph
+from cosmos_semantic.compiler import (
+    TIME_GRAINS,
+    DimensionRef,
+    JoinEdge,
+    SemanticGraph,
+)
 from cosmos_semantic.errors import PolicyError, QueryError
 from cosmos_semantic.expressions import (
     Template,
@@ -30,11 +35,13 @@ from cosmos_semantic.expressions import (
 )
 from cosmos_semantic.ontology import RULE_DIALECT, bind_rule, rule_logic
 from cosmos_semantic.spec import (
+    WINDOW_AGGS,
     CumulativeMetric,
     DerivedMetric,
     Measure,
     RatioMetric,
     SimpleMetric,
+    cumulative_agg_problem,
     window_agg_refusal,
 )
 
@@ -321,11 +328,14 @@ class Planner:
                         f"`{name}`: window `{metric.window}` is not supported; "
                         "only windows in days, such as `7 days`, for now"
                     )
-                agg = g.models[g.measure_owner[metric.measure]].measures[metric.measure].agg
-                # Model validation refuses it too; kept for graphs compiled without `strict`.
-                refusal = window_agg_refusal(agg)
-                if refusal:
-                    raise QueryError(f"`{name}`: {refusal}")
+            agg = g.models[g.measure_owner[metric.measure]].measures[metric.measure].agg
+            # Model validation refuses both too; kept for graphs compiled without `strict`.
+            if metric.window:
+                problem = window_agg_refusal(agg)
+            else:
+                problem = cumulative_agg_problem(metric, agg)
+            if problem:
+                raise QueryError(f"`{name}`: {problem}")
             if extra_filter or stack != {name}:
                 raise QueryError(f"`{name}`: a cumulative metric cannot be part of another metric")
             return self._input(_Input(metric.measure, None), groups)
@@ -704,7 +714,7 @@ class Planner:
         ] + [exp.NullSafeEQ(this=prev[d], expression=cur[d]) for d in dims if d != time]
         owner = self.graph.measure_owner[metric.measure]
         agg = self.graph.models[owner].measures[metric.measure].agg
-        combined = _WINDOW_AGGS[agg](this=exp.column(value.name, table="prev"))
+        combined = _COMBINE_AGGS[agg](this=exp.column(value.name, table="prev"))
         return (
             exp.select(*[c.copy().as_(d.alias) for d, c in cur.items()], combined.as_(value.name))
             .from_(source.copy().as_("cur"))
@@ -714,6 +724,14 @@ class Planner:
 
     def _cumulative(self, value, metric: CumulativeMetric, dims, dim_out) -> exp.Expression:
         time = self._time_dim(metric, dims)
+        to_date = metric.grain_to_date
+        if to_date and time.grain and TIME_GRAINS.index(time.grain) > TIME_GRAINS.index(to_date):
+            # A to-date value per coarser period would be the period's total, not a to-date.
+            raise QueryError(
+                f"`{metric.name}`: a {to_date}-to-date metric cannot be grouped by "
+                f"{time.grain} (`{_dim_member(time)}` requested); use the {to_date} grain or "
+                "a finer one"
+            )
         partition = [dim_out(d) for d in dims if d != time]
         if metric.grain_to_date:
             partition.append(self._trunc(dim_out(time), metric.grain_to_date))
@@ -732,8 +750,10 @@ class Planner:
             default=exp.Literal.number(0),
         )
         default_nulls_first = Dialect.get_or_raise(self.dialect).NULL_ORDERING == "nulls_are_small"
+        owner = self.graph.measure_owner[metric.measure]
+        agg = self.graph.models[owner].measures[metric.measure].agg
         return exp.Window(
-            this=exp.Sum(this=value),
+            this=_COMBINE_AGGS[agg](this=value),
             partition_by=partition or None,
             order=exp.Order(
                 expressions=[
@@ -745,8 +765,10 @@ class Planner:
         )
 
 
-# How daily aggregates combine over a rolling window; other aggregations are refused.
-_WINDOW_AGGS = {"sum": exp.Sum, "count": exp.Sum, "min": exp.Min, "max": exp.Max}
+# How per-period aggregates combine over a rolling window or a running (to-date) cumulative
+# metric; other aggregations are refused (DEC-21).
+_COMBINE_AGGS = {"sum": exp.Sum, "count": exp.Sum, "min": exp.Min, "max": exp.Max}
+assert tuple(_COMBINE_AGGS) == WINDOW_AGGS
 
 _LEVEL = {"personal": "personal", "sensitive": "sensitive personal"}
 

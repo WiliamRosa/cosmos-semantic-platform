@@ -10,11 +10,12 @@ become entities. DAX measures are translated when they map onto the Cosmos metri
 | ``SUMX``, ``AVERAGEX``, ``MINX``, ``MAXX`` over the measure's own table, with ``+ - *`` over its numeric columns | ``sum``, ``avg``, ``min``, ``max`` measure |
 | ``DIVIDE(a, b)`` | ratio metric |
 | ``CALCULATE(m, T[c] = "x", ...)`` with simple column filters | metric with ``filter`` |
-| ``TOTALYTD``, ``TOTALQTD``, ``TOTALMTD`` | cumulative metric |
+| ``TOTALYTD``, ``TOTALQTD``, ``TOTALMTD`` over a sum, count, min or max measure | cumulative metric |
 | arithmetic over measures (``[A] - [B]``) | derived metric |
 
 Everything else (other iterators such as ``COUNTX``; ``SUMX``, ``AVERAGEX``, ``MINX`` or
-``MAXX`` over another table, with a division, a function or ``RELATED``; ``FILTER``, ``ALL``,
+``MAXX`` over another table, with a division, a function or ``RELATED``; ``TOTALYTD``,
+``TOTALQTD`` or ``TOTALMTD`` over an average or a distinct count; ``FILTER``, ``ALL``,
 variables, calculated columns and tables, calculation groups, row-level security roles) is
 reported as a warning; nothing is dropped silently. No DAX is ever executed.
 """
@@ -30,7 +31,7 @@ from typing import Any
 
 from cosmos_semantic.interchange import ImportResult
 from cosmos_semantic.interchange.cube import _table_from_sql
-from cosmos_semantic.spec import Project
+from cosmos_semantic.spec import WINDOW_AGGS, Project
 
 _DATA_TYPES = {
     "string": "categorical",
@@ -546,6 +547,13 @@ class _Translator:
     def is_measure(self, member: str) -> bool:
         return member in self.measure_names
 
+    def measure_agg(self, member: str) -> str:
+        for table in self.tables.values():
+            for item in table.model.get("measures", []):
+                if item["name"] == member:
+                    return item["agg"]
+        raise _Unsupported(f"measure `{member}` was not imported")
+
     def column(self, table: str, column: str) -> tuple[_Table, dict[str, Any]]:
         t = self.tables.get(table)
         if t is None:
@@ -835,6 +843,16 @@ class _Translator:
             inner = self.operand(args[0], f"{name}_base")
             if not self.is_measure(inner):
                 raise _Unsupported(f"{tree[1]} over a metric; only measures accumulate")
+            agg = self.measure_agg(inner)
+            if agg not in WINDOW_AGGS:
+                # DAX evaluates the measure over all the dates to date at once; Cosmos
+                # accumulates per-period values, which only sums, counts, minima and maxima
+                # allow (DEC-21). Importing it would make the model fail validation.
+                raise _Unsupported(
+                    f"{tree[1]} over `{inner}`, an `{agg}` measure, cannot be accumulated from "
+                    "per-period values (only sum, count, min and max can); an average or a "
+                    "distinct count to date must be computed over the whole period"
+                )
             self.metric(
                 pbi_name,
                 {
