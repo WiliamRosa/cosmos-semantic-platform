@@ -18,7 +18,8 @@ Third slice (DEC-20): row filters become one ``access_policy`` per cube for ever
 ``{ securityContext.<claim> }``; personal and sensitive dimensions become ``member_level``
 excludes, with the level in the dimension's ``meta``. Only filters with an exact Cube equivalent
 are written (``=``, ``IN``, and ``<``, ``<=``, ``>``, ``>=`` on numbers, joined by AND and OR);
-``import_cube`` reads them back as the same row filters and sensitivity.
+``import_cube`` reads them back as the same row filters and sensitivity, and fails closed on any
+other policy (it would grant more access than Cube did) unless the caller accepts the loss.
 The export fails closed on row filters it cannot express, and on metrics it cannot carry (rolling
 windows in days, running totals of other aggregations or without a period, metrics over a
 cumulative one, filters beyond the measure's own cube), unless the caller accepts the loss.
@@ -69,7 +70,14 @@ def _strip_cube(sql: str) -> str:
     return _CUBE_REF.sub("", str(sql))
 
 
-def import_cube(path: str | Path, *, schema: str | None = None) -> ImportResult:
+def import_cube(
+    path: str | Path, *, schema: str | None = None, allow_policy_loss: bool = False
+) -> ImportResult:
+    """Reads Cube static YAML. Refuses, unless ``allow_policy_loss``, a cube whose
+    ``access_policy`` Cosmos cannot express, since the imported model would grant more access
+    than Cube did; with ``allow_policy_loss``, each cube's loss is a warning."""
+    from cosmos_semantic.errors import PolicyLossError
+
     root = Path(path)
     files = [root] if root.is_file() else sorted(p for p in root.rglob("*") if p.is_file())
     warnings: list[str] = []
@@ -109,6 +117,7 @@ def import_cube(path: str | Path, *, schema: str | None = None) -> ImportResult:
     metrics: list[dict[str, Any]] = []
     rules: list[dict[str, Any]] = []
     user_context: dict[str, dict[str, Any]] = {}
+    lost: dict[str, list[str]] = {}  # cube -> why its access_policy is not imported in full
 
     for cube in cubes:
         name = cube["name"]
@@ -157,7 +166,7 @@ def import_cube(path: str | Path, *, schema: str | None = None) -> ImportResult:
             model.setdefault("dimensions", []).append(item)
             col_to_dim[name][sql] = dname
         if cube.get("access_policy"):
-            filters = _read_policy(where, cube, model, user_context, warnings)
+            filters = _read_policy(where, cube, model, user_context, lost)
             if filters:
                 model["row_filters"] = filters
         for key in ("pre_aggregations", "refresh_key", "segments_meta", "hierarchies", "folders"):
@@ -182,6 +191,21 @@ def import_cube(path: str | Path, *, schema: str | None = None) -> ImportResult:
                 rules.append(rule)
         for join in cube.get("joins") or []:
             _join(name, join, models, pk, warnings)
+
+    if lost and not allow_policy_loss:
+        reasons = "; ".join(f"cubes.{c}: {', and '.join(r)}" for c, r in lost.items())
+        raise PolicyLossError(
+            f"the access_policy of {_plural(len(lost), 'cube')} ({', '.join(lost)}) would NOT "
+            f"be imported in full ({reasons}); the Cosmos model would grant more access than "
+            "Cube did. Pass --allow-policy-loss to import anyway"
+        )
+    for cube_name, reasons in lost.items():
+        for reason in reasons:
+            warnings.append(
+                f"cubes.{cube_name}: access_policy not imported in full ({reason}); the Cosmos "
+                "model grants more access than Cube did, so recreate it as row_filters and "
+                "sensitivity"
+            )
 
     project = Project.model_validate(
         {
@@ -382,10 +406,15 @@ _NUMBER = re.compile(r"^-?[0-9]+(\.[0-9]+)?$")
 _FIELD = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
-def _read_policy(where, cube, model, user_context, warnings) -> list[dict[str, Any]]:
+class _ClaimClash(ValueError):
+    """Two security context attributes that would become the same ``$user`` field."""
+
+
+def _read_policy(where, cube, model, user_context, lost) -> list[dict[str, Any]]:
     """The row filters of an ``access_policy`` of the shape ``export_cube`` writes: one policy
-    for every role, with ``row_level`` filters and ``member_level`` excludes. Any other shape is
-    reported and not imported, since part of a policy would show rows Cube hides."""
+    for every role, with ``row_level`` filters and ``member_level`` excludes. What Cosmos cannot
+    express goes in ``lost`` (cube -> reasons): importing without it grants more access than
+    Cube did, so ``import_cube`` refuses it unless the caller accepts the loss."""
     policies = cube["access_policy"]
     policy = policies[0] if isinstance(policies, list) and len(policies) == 1 else None
     policy = policy if isinstance(policy, dict) else {}
@@ -398,37 +427,56 @@ def _read_policy(where, cube, model, user_context, warnings) -> list[dict[str, A
         or set(row) - {"filters"}
         or set(member) - {"includes", "excludes"}
         or member.get("includes", "*") != "*"
+        or not isinstance(member.get("excludes") or [], list)
     ):
-        warnings.append(
-            f'{where}: `access_policy` is not one policy for every role (`role: "*"`) with '
-            "row_level filters and member_level excludes; recreate it as row_filters and "
-            "sensitivity"
+        lost.setdefault(cube["name"], []).append(
+            'it is not one policy for every role (`role: "*"`) with row_level filters and '
+            "member_level excludes"
         )
         return []
     dims = {d["name"]: d for d in model.get("dimensions", [])}
     for name in member.get("excludes") or []:
         if not dims.get(name, {}).get("sensitivity"):
-            warnings.append(
-                f"{where}: access_policy hides `{name}` from everyone, which Cosmos does not "
-                "express; mark it with `sensitivity` (its `meta.sensitivity` reads back)"
+            lost.setdefault(cube["name"], []).append(
+                f"it hides `{name}` from every user, which Cosmos expresses only as "
+                "`sensitivity` (the dimension's `meta.sensitivity`)"
             )
     found: dict[str, dict[str, Any]] = {}
     try:
-        texts = [_policy_sql(f, dims, found, top=True) for f in row.get("filters") or []]
+        texts = [
+            _policy_sql(f, dims, found, cube["name"], top=True) for f in row.get("filters") or []
+        ]
+    except _ClaimClash as exc:
+        raise _ClaimClash(f"{where}: {exc}") from None
     except ValueError as exc:
-        warnings.append(
-            f"{where}: access_policy row_level filters not imported ({exc}); recreate them as "
-            "row_filters"
-        )
+        lost.setdefault(cube["name"], []).append(f"its row_level filters cannot be read: {exc}")
         return []
-    user_context.update(found)
+    for field, spec in found.items():
+        known = user_context.get(field)
+        if known and known["claim"] != spec["claim"]:
+            raise _ClaimClash(
+                f"{where}: securityContext.{spec['claim']} and securityContext."
+                f"{known['claim']} (another cube) would both become `$user.{field}`"
+            )
+        user_context[field] = spec
     names = (cube.get("meta") or {}).get("row_filters")
     if not (isinstance(names, list) and len(names) == len(texts)):
         names = [f"access_policy_{i + 1}" for i in range(len(texts))]
     return [{"name": n, "filter": t} for n, t in zip(names, texts, strict=True)]
 
 
-def _policy_sql(item, dims, found, *, top: bool = False) -> str:
+def _policy_member(member: Any, cube: str) -> str:
+    """The dimension a filter names: plain, or after the cube's own name, ``CUBE``,
+    ``{CUBE}`` or ``${CUBE}``."""
+    match = re.fullmatch(
+        r"(?:(\$?\{CUBE\}|CUBE|[A-Za-z_][A-Za-z0-9_]*)\.)?([A-Za-z_]\w*)", str(member)
+    )
+    if not match or match.group(1) not in (None, cube, "CUBE", "{CUBE}", "${CUBE}"):
+        raise ValueError(f"`{member}`, not a member of this cube")
+    return match.group(2)
+
+
+def _policy_sql(item, dims, found, cube: str, *, top: bool = False) -> str:
     """A row_level filter or ``and``/``or`` group as a row filter expression."""
     if not isinstance(item, dict):
         raise ValueError(f"`{item}` is not a filter")
@@ -436,11 +484,11 @@ def _policy_sql(item, dims, found, *, top: bool = False) -> str:
         if key in item:
             if set(item) != {key} or not isinstance(item[key], list) or not item[key]:
                 raise ValueError(f"an `{key}` group with other keys or without filters")
-            text = f" {key.upper()} ".join(_policy_sql(f, dims, found) for f in item[key])
+            text = f" {key.upper()} ".join(_policy_sql(f, dims, found, cube) for f in item[key])
             return text if top else f"({text})"
     if set(item) != {"member", "operator", "values"}:
         raise ValueError(f"a filter with keys {', '.join(sorted(item))}")
-    name = str(item["member"]).split(".")[-1]
+    name = _policy_member(item["member"], cube)
     dim = dims.get(name)
     if dim is None or dim["type"] not in ("categorical", "number"):
         raise ValueError(f"`{item['member']}` is not a string or number dimension of the cube")
@@ -468,6 +516,11 @@ def _policy_value(value, dim, found) -> str:
         field = claim.lower()
         if not _FIELD.match(field):
             raise ValueError(f"the security context attribute `{claim}`")
+        if found.get(field, {"claim": claim})["claim"] != claim:
+            raise _ClaimClash(
+                f"securityContext.{claim} and securityContext.{found[field]['claim']} would "
+                f"both become `$user.{field}`"
+            )
         found[field] = {"claim": claim}
         return f"$user.{field}"
     if "{" in text or "}" in text:
@@ -791,7 +844,8 @@ class _CubeWriter:
                 plain = not re.search(r"[{}]|__ref_|__user_", node.this)
                 if node.is_string and dim.type == "categorical" and plain:
                     return node.this
-                if not node.is_string and dim.type == "number":
+                # Plain numbers only (no exponent), the ones `cosmos import cube` reads back.
+                if not node.is_string and dim.type == "number" and _NUMBER.match(node.this):
                     return node.this
             raise _NotExported(
                 f"it compares `{dim.name}` with `{shown(node)}`; only $user, a string for a "

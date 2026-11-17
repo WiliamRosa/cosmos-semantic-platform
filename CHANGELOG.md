@@ -17,8 +17,17 @@ format or the API; such changes are listed under **Changed**.
   `<`, `<=`, `>`, `>=` on numbers, joined by AND and OR); anything else, such as a filter that
   reads a business rule, `<>` (Cube's `notEquals` keeps null rows) or a function, is refused
   until `--allow-policy-loss`, which turns each one into a warning. The example no longer needs
-  `--allow-policy-loss`. Cube must reject a security context without the attribute (Cosmos
-  denies the query); the export warns about it
+  `--allow-policy-loss`. `cosmos import cube` fails closed too: a cube whose `access_policy`
+  Cosmos cannot express (a role-specific or second policy, `notEquals`, a member of another
+  cube, an exclude without `meta.sensitivity`, ...) is refused, since the import would grant
+  more access than Cube did, until `cosmos import cube --allow-policy-loss`, which warns for
+  each loss; two attributes that would become the same `$user` field are an error. Your Cube
+  `checkAuth` must reject a security context that lacks an attribute the policies read, or holds
+  a list (Cosmos denies those queries); the export warns about it. `member_level` hides personal
+  and sensitive dimensions from every Cube user, while Cosmos only refuses them to agents. Not
+  verified against Cube's runtime: whether `role: "*"` matches users with no roles, whether a
+  policy is enforced through views and joins, and how Cube treats a missing or list
+  `securityContext` attribute
   ([interoperability](docs/interoperability.md#exporting-cube)).
 - `cosmos export cube` carries running totals (DEC-16): a cumulative metric with
   `grain_to_date` over a `sum` or `count` measure becomes a Cube measure with

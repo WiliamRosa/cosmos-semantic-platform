@@ -1362,42 +1362,139 @@ def test_cube_access_policy_refuses_inexact_filters(graph, tmp_path, text):
     ]
 
 
-def test_cube_import_reads_only_known_policies(tmp_path):
-    """An access_policy of another shape is reported and not imported: part of a policy would
-    show rows Cube hides."""
-    base = {
-        "name": "t",
-        "sql_table": "public.t",
-        "dimensions": [
-            {"name": "id", "sql": "{CUBE}.id", "type": "string", "primary_key": True},
-            {"name": "region", "sql": "{CUBE}.region", "type": "string"},
-            {"name": "secret", "sql": "{CUBE}.secret", "type": "string"},
-        ],
-        "measures": [{"name": "n", "type": "count"}],
-    }
-    region = {"member": "region", "operator": "equals", "values": ["{ securityContext.region }"]}
-    shapes = {
-        "manager role": [{"role": "manager", "row_level": {"filters": [region]}}],
-        "two policies": [{"role": "*"}, {"role": "*"}],
-        "notEquals": [
-            {"role": "*", "row_level": {"filters": [{**region, "operator": "notEquals"}]}}
-        ],
-        "allow_all": [{"role": "*", "row_level": {"allow_all": True}}],
-        "unknown member": [{"role": "*", "row_level": {"filters": [{**region, "member": "x"}]}}],
-        "template": [{"role": "*", "row_level": {"filters": [{**region, "values": ["{ x.y }"]}]}}],
-    }
-    for label, policy in shapes.items():
-        path = tmp_path / f"{label.replace(' ', '_')}.yml"
-        path.write_text(yaml.safe_dump({"cubes": [{**base, "access_policy": policy}]}))
+_POLICY_CUBE = {
+    "name": "t",
+    "sql_table": "public.t",
+    "dimensions": [
+        {"name": "id", "sql": "{CUBE}.id", "type": "string", "primary_key": True},
+        {"name": "region", "sql": "{CUBE}.region", "type": "string"},
+        {"name": "secret", "sql": "{CUBE}.secret", "type": "string"},
+        {"name": "level", "sql": "{CUBE}.level", "type": "number"},
+    ],
+    "measures": [{"name": "n", "type": "count"}],
+}
+_REGION = {"member": "region", "operator": "equals", "values": ["{ securityContext.region }"]}
+
+
+def _policy_file(tmp_path: Path, label: str, *cubes: dict) -> Path:
+    path = tmp_path / f"{label.replace(' ', '_')}.yml"
+    path.write_text(yaml.safe_dump({"cubes": list(cubes)}), encoding="utf-8")
+    return path
+
+
+def _row_level(*filters: dict) -> list:
+    return [{"role": "*", "row_level": {"filters": list(filters)}}]
+
+
+# access_policy shapes Cosmos cannot express, and the reason the import gives.
+CUBE_UNREADABLE_POLICIES = {
+    "manager role": (
+        [{"role": "manager", "row_level": {"filters": [_REGION]}}],
+        'it is not one policy for every role (`role: "*"`)',
+    ),
+    "two policies": ([{"role": "*"}, {"role": "*"}], "it is not one policy for every role"),
+    "allow_all": (
+        [{"role": "*", "row_level": {"allow_all": True}}],
+        "it is not one policy for every role",
+    ),
+    "notEquals": (
+        _row_level({**_REGION, "operator": "notEquals"}),
+        "its row_level filters cannot be read: the operator `notEquals`",
+    ),
+    "unknown member": (
+        _row_level({**_REGION, "member": "x"}),
+        "`x` is not a string or number dimension of the cube",
+    ),
+    "other cube": (
+        _row_level({**_REGION, "member": "orders.region"}),
+        "`orders.region`, not a member of this cube",
+    ),
+    "template": (_row_level({**_REGION, "values": ["{ x.y }"]}), "the template `{ x.y }`"),
+    "exponent": (
+        _row_level({"member": "level", "operator": "gt", "values": ["1e1"]}),
+        "`1e1` is not a number",
+    ),
+    "exclude": (
+        [{"role": "*", "member_level": {"excludes": ["secret"]}}],
+        "it hides `secret` from every user",
+    ),
+}
+
+
+@pytest.mark.parametrize("label", list(CUBE_UNREADABLE_POLICIES))
+def test_cube_import_refuses_policies_it_cannot_express(tmp_path, label):
+    """Importing part of an access_policy would grant more access than Cube did: refused,
+    naming the cube and the reason, unless the caller accepts the loss."""
+    policy, reason = CUBE_UNREADABLE_POLICIES[label]
+    path = _policy_file(tmp_path, label, {**_POLICY_CUBE, "access_policy": policy})
+    with pytest.raises(PolicyLossError) as exc:
+        import_model("cube", path)
+    message = str(exc.value)
+    assert message.startswith("the access_policy of 1 cube (t) would NOT be imported in full")
+    assert "(cubes.t: " in message and reason in message
+    assert message.endswith(
+        "the Cosmos model would grant more access than Cube did. Pass --allow-policy-loss to "
+        "import anyway"
+    )
+    result = import_model("cube", path, allow_policy_loss=True)
+    warning = next(w for w in result.warnings if "access_policy" in w)
+    assert warning.startswith("cubes.t: access_policy not imported in full (")
+    assert reason in warning
+    assert "the Cosmos model grants more access than Cube did" in warning
+    assert not result.project.semantic_models[0].row_filters
+
+
+def test_cube_import_policy_members_and_claims(tmp_path):
+    """A filter member may be plain or carry the cube's own name, CUBE, {CUBE} or ${CUBE};
+    two security context attributes that would become one `$user` field are an error."""
+    for prefix in ("", "t.", "CUBE.", "{CUBE}.", "${CUBE}."):
+        policy = _row_level({**_REGION, "member": f"{prefix}region"})
+        path = _policy_file(tmp_path, "members", {**_POLICY_CUBE, "access_policy": policy})
         result = import_model("cube", path)
-        assert not result.project.semantic_models[0].row_filters, label
-        assert any("access_policy" in w for w in result.warnings), label
-    # An exclude without the sensitivity it came from is reported, not invented.
-    path = tmp_path / "excludes.yml"
-    policy = [{"role": "*", "member_level": {"excludes": ["secret"]}}]
-    path.write_text(yaml.safe_dump({"cubes": [{**base, "access_policy": policy}]}))
-    result = import_model("cube", path)
-    assert "access_policy hides `secret` from everyone" in " ".join(result.warnings)
+        assert result.warnings == [], prefix
+        filters = result.project.semantic_models[0].row_filters
+        assert [f.filter for f in filters] == ["{region} = $user.region"], prefix
+    upper = {**_REGION, "member": "secret", "values": ["{ securityContext.Region }"]}
+    path = _policy_file(
+        tmp_path, "case", {**_POLICY_CUBE, "access_policy": _row_level(_REGION, upper)}
+    )
+    with pytest.raises(ValueError, match=r"would both become `\$user.region`"):
+        import_model("cube", path, allow_policy_loss=True)
+    # Across cubes too.
+    first = {**_POLICY_CUBE, "access_policy": _row_level(_REGION)}
+    second = {**_POLICY_CUBE, "name": "u", "sql_table": "public.u"}
+    second["access_policy"] = _row_level(upper)
+    path = _policy_file(tmp_path, "cubes", first, second)
+    with pytest.raises(ValueError, match=r"cubes.u: securityContext.Region and securityContext"):
+        import_model("cube", path, allow_policy_loss=True)
+
+
+def test_cube_export_refuses_exponent_numbers(graph):
+    """Only plain numbers are exported, the set `cosmos import cube` reads back."""
+    data = graph.project.model_dump(mode="json")
+    payments = next(m for m in data["semantic_models"] if m["name"] == "payments")
+    payments["row_filters"] = [{"name": "many", "filter": "{installments} > 1e1"}]
+    with pytest.raises(PolicyLossError, match="it compares `installments` with `1e1`"):
+        export_cube(Project.model_validate(data), allow_metric_loss=True)
+    payments["row_filters"] = [{"name": "many", "filter": "{installments} > 10"}]
+    exported = export_cube(Project.model_validate(data), allow_metric_loss=True)
+    assert "- '10'" in exported.text
+
+
+def test_cli_import_cube_policy_loss(tmp_path):
+    runner = CliRunner()
+    policy = [{"role": "manager", "row_level": {"filters": [_REGION]}}]
+    path = _policy_file(tmp_path, "cli", {**_POLICY_CUBE, "access_policy": policy})
+    out = tmp_path / "out.yml"
+    refused = runner.invoke(app, ["import", "cube", str(path), "-o", str(out)])
+    assert refused.exit_code == 1
+    assert "would grant more access than Cube did" in refused.output
+    assert not out.exists()
+    flagged = runner.invoke(
+        app, ["import", "cube", str(path), "-o", str(out), "--allow-policy-loss"]
+    )
+    assert flagged.exit_code == 0, flagged.output
+    assert "warning: cubes.t: access_policy not imported in full" in flagged.output
 
 
 def _cube_test_metrics(project: Project) -> Project:

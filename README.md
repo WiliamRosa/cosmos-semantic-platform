@@ -123,8 +123,10 @@ uv run cosmos export skos -m examples/ecommerce/semantic -o glossary.ttl --base 
 uv run cosmos export ossie -m examples/ecommerce/semantic -o ecommerce.ossie.yaml
 
 # The model as Cube static YAML, which `cosmos import cube` reads back with the same numbers.
-# Row filters and sensitivity become a Cube access_policy; rolling windows in days are not
-# exported yet, so the example needs --allow-metric-loss
+# Row filters and sensitivity become a Cube access_policy (personal data is hidden from every
+# Cube user; Cube's checkAuth must reject a security context without the attributes the policy
+# reads; not verified against Cube's runtime, see docs/interoperability.md). Rolling windows in
+# days are not exported yet, so the example needs --allow-metric-loss
 uv run cosmos export cube -m examples/ecommerce/semantic -o model/cubes/ecommerce.yml --allow-metric-loss
 
 # The model as dbt Semantic Layer (MetricFlow) YAML, which `cosmos import dbt` reads back with the

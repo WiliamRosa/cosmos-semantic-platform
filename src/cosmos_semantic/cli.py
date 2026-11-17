@@ -1208,11 +1208,26 @@ def import_cmd(
     schema_name: Annotated[
         str | None, typer.Option("--schema", help="Table schema (dbt, Cube, Power BI fallback).")
     ] = None,
+    allow_policy_loss: Annotated[
+        bool,
+        typer.Option(
+            "--allow-policy-loss",
+            help=(
+                "Cube: import even though access_policy entries Cosmos cannot express are "
+                "dropped, which grants more access than Cube did."
+            ),
+        ),
+    ] = False,
 ) -> None:
-    """Imports a model from dbt (latest and legacy), Apache Ossie, Cube (static YAML) or Power BI (.bim or TMDL)."""
+    """Imports a model from dbt (latest and legacy), Apache Ossie, Cube (static YAML) or Power BI (.bim or TMDL).
+    A Cube access_policy Cosmos cannot express is refused unless --allow-policy-loss is given."""
     from cosmos_semantic.interchange import dump_project, import_model
 
-    options = {"schema": schema_name} if kind in ("dbt", "cube", "powerbi") and schema_name else {}
+    options: dict = (
+        {"schema": schema_name} if kind in ("dbt", "cube", "powerbi") and schema_name else {}
+    )
+    if kind == "cube" and allow_policy_loss:
+        options["allow_policy_loss"] = True
     try:
         result = import_model(kind, source, **options)
         graph = compile_project(result.project, strict=False)
