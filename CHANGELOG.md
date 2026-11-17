@@ -9,6 +9,16 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- `cosmos export cube` carries running totals (DEC-16): a cumulative metric with
+  `grain_to_date` over a `sum` or `count` measure becomes a Cube measure with
+  `rolling_window: {type: to_date, granularity: ...}`, and `cosmos import cube` reads it back as
+  the same metric, so the example's year-to-date and month-to-date revenue no longer need
+  `--allow-metric-loss`. Rolling windows in days, running totals over other aggregations or
+  without `grain_to_date`, and ratio or derived metrics over a cumulative metric are still
+  refused, each with its reason. The re-imported model answers the cumulative reference queries
+  (A08, A09) with the hand-written SQL's numbers; Cube itself must be queried with the time
+  dimension, and its date range reads rows back to the start of the period
+  ([interoperability](docs/interoperability.md#exporting-cube)).
 - `explain` over MCP and `GET /v1/explain/{name}` carry the member's `health` (DEC-15), so an
   agent about to quote a number can tell whether it is checked: `healthy`, `attention`,
   `failing` or `unchecked`, with the reasons (rule tests, last reconciliation). Metrics,
