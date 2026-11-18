@@ -4,12 +4,13 @@ and the legacy spec (``semantic_models`` and ``metrics`` with ``type_params``).
 Only the YAML is read; the dbt project is never executed. ``ref('x')`` becomes table ``x``
 (prefixed with ``schema=`` when given).
 
-Export (first slice): the legacy spec, which MetricFlow still reads. One semantic model per
-model with entities, dimensions and measures (each measure also a metric, ``create_metric``),
-and simple, ratio and derived metrics; filters become ``{{ Dimension('e__d') }}``. Division in
+Export: the legacy spec, which MetricFlow still reads. One semantic model per model with
+entities, dimensions and measures (each measure also a metric, ``create_metric``), simple,
+ratio and derived metrics, and cumulative metrics with a rolling window in days (``window``
+in ``cumulative_type_params``); filters become ``{{ Dimension('e__d') }}``. Division in
 derived metrics and AVG are written with a ``1e0 *`` factor, as in the Cube export.
 ``import_dbt`` reads the export back with the same numbers in Cosmos. The export fails closed on
-row filters and sensitivity, and on metrics it cannot carry (cumulative metrics, filters on a
+row filters and sensitivity, and on metrics it cannot carry (running totals, filters on a
 time dimension, a business rule or ``$user``), unless the caller accepts the loss. Business rules,
 the glossary and the business context are not exported yet; each one present is a warning.
 """
@@ -28,7 +29,14 @@ from cosmos_semantic.errors import QueryError
 from cosmos_semantic.expressions import REF_RE, USER_RE
 from cosmos_semantic.interchange import ExportResult, ImportResult, read_yaml_files
 from cosmos_semantic.interchange.cube import _plural, real_division, refuse_policy_loss
-from cosmos_semantic.spec import DerivedMetric, Project, RatioMetric, SimpleMetric
+from cosmos_semantic.spec import (
+    CumulativeMetric,
+    DerivedMetric,
+    Project,
+    RatioMetric,
+    SimpleMetric,
+    window_agg_refusal,
+)
 
 _REF_RE = re.compile(r"""ref\(\s*['"]([^'"]+)['"]\s*\)""")
 _JINJA_DIM_RE = re.compile(
@@ -570,6 +578,13 @@ class _DbtWriter:
     def _use(self, ref: str) -> str:
         """A member a metric references, placed first when it is a metric."""
         name = ref.split(".")[-1]
+        if isinstance(self.graph.metrics.get(name), CumulativeMetric):
+            # The planner refuses a cumulative metric inside another metric, so its numbers
+            # are not defined in Cosmos; MetricFlow must not get a definition of its own.
+            raise _NotExported(
+                f"it uses the cumulative metric `{name}`, and Cosmos does not compute a "
+                "cumulative metric inside another one"
+            )
         if name in self.graph.metrics:
             self._place(name)
         if name not in self.done:
@@ -616,12 +631,57 @@ class _DbtWriter:
         elif isinstance(metric, DerivedMetric):
             return self._derived(metric)
         else:
-            # At a grain coarser than the to-date period MetricFlow returns a value, while the
-            # engine refuses the query (DEC-21).
-            raise _NotExported("it is cumulative, and the dbt export does not carry it yet")
+            return self._cumulative(metric)
         if metric.filter:
             item["filter"] = self._filter(metric.filter, self._leaves(metric.name))
         return item
+
+    def _cumulative(self, metric: CumulativeMetric) -> dict[str, Any]:
+        """A rolling window in days: MetricFlow's ``window`` covers the days D - (N - 1) to D
+        of ``metric_time``, as the planner's does. Running totals wait for a later slice."""
+        if metric.grain_to_date:
+            # At a grain coarser than the to-date period MetricFlow returns a value, while the
+            # engine refuses the query (DEC-21).
+            raise _NotExported(
+                f"it is a running total (`grain_to_date: {metric.grain_to_date}`), and the dbt "
+                "export does not carry it yet"
+            )
+        if not metric.window:
+            raise _NotExported(
+                "it is a running total without a window, and the dbt export does not carry it yet"
+            )
+        days = metric.window_days()
+        if days is None:
+            raise _NotExported(
+                f"its window `{metric.window}` is not in days, the only unit the engine computes"
+            )
+        node, measure = self.graph.measure(metric.measure)
+        problem = window_agg_refusal(measure.agg)
+        if problem:
+            raise _NotExported(problem)
+        owner, spec = node.spec.name, node.spec
+        times = [d.name for d in spec.dimensions if d.type == "time"]
+        if not times:
+            raise _NotExported(
+                f"its measure's model `{owner}` has no time dimension for MetricFlow to window over"
+            )
+        others = ", ".join(f"`{owner}.{t}`" for t in times[1:])
+        self.warnings.append(
+            f"metrics.{metric.name}: MetricFlow windows over `metric_time`, which is "
+            f"`{owner}.{times[0]}`; by that dimension at day grain the numbers are the engine's on "
+            "the days with facts. MetricFlow also returns days without facts inside a window and "
+            "coarser grains (the engine refuses them), and a time constraint does not cut its "
+            "window, while the engine filters the facts first"
+            + (
+                f"; queried by {others}, the engine windows over that dimension instead, which "
+                "MetricFlow does not"
+                if others
+                else ""
+            )
+        )
+        window = f"{days} day" if days == 1 else f"{days} days"
+        params = {"measure": metric.measure, "cumulative_type_params": {"window": window}}
+        return {"type": "cumulative", "type_params": params}
 
     def _derived(self, metric) -> dict[str, Any]:
         if metric.inputs:
