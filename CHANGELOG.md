@@ -103,8 +103,9 @@ format or the API; such changes are listed under **Changed**.
 - A month-, quarter- or year-to-date metric queried by week is refused with an error instead of
   returning a wrong number (DEC-28). A week does not nest in a month, quarter or year, and the
   planner put each week in the period it starts in, so the week that crosses into a new period
-  was counted in the old one: on the demo data, `revenue_year_to_date` for the week of
-  2025-12-29 was 1,870,457.06, more than all of 2025's revenue (1,823,298.63). The error says
+  was counted in the old one: on the test data (600 customers, seed 7, anchored on 2026-11-16),
+  `revenue_year_to_date` for the week of 2025-12-29 was 1,870,457.06, more than all of 2025's
+  revenue (1,823,298.63), and any data gives more than the whole year's revenue there. The error says
   why and names the grains that work (day, month and up to the period). It shares one check
   with the refusal of a grain coarser than the period (DEC-21). Week-to-date metrics, running
   totals without `grain_to_date` and every request by day are unchanged; the SQL of every
