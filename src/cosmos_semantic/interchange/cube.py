@@ -1042,6 +1042,11 @@ class _CubeWriter:
         return node.name, item, {node.name}
 
     def _derived(self, metric) -> tuple[str, dict[str, Any], set[str]]:
+        if metric.inputs:
+            raise _NotExported(
+                "it reads an input at an earlier period (`offset`), and the Cube export does "
+                "not carry offsets yet"
+            )
         refs: list[str] = []
 
         def mask(match):

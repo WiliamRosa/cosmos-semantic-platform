@@ -21,6 +21,7 @@ from cosmos_semantic.spec import (
     SemanticModel,
     SimpleMetric,
     cumulative_agg_problem,
+    offset_problem,
     window_agg_refusal,
 )
 
@@ -284,7 +285,7 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
         g.metrics.setdefault(metric.name, metric)
     for metric in project.metrics:
         loc = f"metrics.{metric.name}"
-        for ref in _metric_refs(metric):
+        for ref in metric_refs(metric):
             if ref not in g.measure_owner and ref not in g.metrics:
                 err(loc, f"reference `{ref}` is neither a measure nor a metric")
         if isinstance(metric, CumulativeMetric) and metric.window and not metric.window_days():
@@ -301,6 +302,7 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
             if problem:
                 err(loc, problem)
     _check_metric_cycles(g, err)
+    _check_offsets(g, err)
 
     # Join ambiguity between any two reachable models
     for source in g.models:
@@ -338,7 +340,7 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
     return g
 
 
-def _metric_refs(metric: Metric) -> list[str]:
+def metric_refs(metric: Metric) -> list[str]:
     if isinstance(metric, SimpleMetric | CumulativeMetric):
         return [metric.measure]
     if isinstance(metric, RatioMetric):
@@ -346,6 +348,59 @@ def _metric_refs(metric: Metric) -> list[str]:
     if isinstance(metric, DerivedMetric):
         return REF_RE.findall(metric.expr)
     return []
+
+
+def metrics_under(g: SemanticGraph, name: str) -> list[str]:
+    """``name`` and every metric it uses, directly or not; each once, cycles cut."""
+    seen: list[str] = []
+
+    def visit(current: str) -> None:
+        if current in seen or current not in g.metrics:
+            return
+        seen.append(current)
+        for ref in metric_refs(g.metrics[current]):
+            visit(ref)
+
+    visit(name)
+    return seen
+
+
+def _check_offsets(g: SemanticGraph, err) -> None:
+    """Inputs of derived metrics read at an earlier period (DEC-18). The planner refuses the
+    same cases, for graphs compiled without ``strict``."""
+    for metric in g.metrics.values():
+        if not isinstance(metric, DerivedMetric) or not metric.inputs:
+            continue
+        loc = f"metrics.{metric.name}"
+        refs = set(REF_RE.findall(metric.expr))
+        for name in _dup([i.metric for i in metric.inputs]):
+            err(loc, f"`{name}` is listed more than once in `inputs`")
+        for item in metric.inputs:
+            if item.metric not in refs:
+                err(loc, f"input `{item.metric}` is not referenced in `expr`")
+                continue
+            problem = offset_problem(item.offset)
+            if problem:
+                err(loc, problem)
+            for name in metrics_under(g, item.metric):
+                problem = offset_input_problem(g.metrics[name], item.metric)
+                if problem:
+                    err(loc, problem)
+
+
+def offset_input_problem(metric: Metric, read: str) -> str | None:
+    """Why ``metric``, found under the input ``read`` with an offset, cannot be shifted."""
+    if isinstance(metric, CumulativeMetric):
+        return (
+            f"`{read}` is read with an offset, and it uses the cumulative metric "
+            f"`{metric.name}`; offsets of cumulative metrics are not supported"
+        )
+    if isinstance(metric, DerivedMetric) and metric.inputs:
+        return (
+            f"`{read}` is read with an offset, and it uses `{metric.name}`, which has offsets "
+            "of its own; offsets do not combine yet"
+        )
+    return None
 
 
 def _check_metric_cycles(g: SemanticGraph, err) -> None:
@@ -358,7 +413,7 @@ def _check_metric_cycles(g: SemanticGraph, err) -> None:
             err(f"metrics.{name}", "metric cycle: " + " -> ".join([*chain, name]))
             return
         state[name] = 1
-        for ref in _metric_refs(g.metrics[name]):
+        for ref in metric_refs(g.metrics[name]):
             visit(ref, [*chain, name])
         state[name] = 2
 

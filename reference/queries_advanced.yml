@@ -668,3 +668,170 @@ cases:
           ON o.status = d.status
           AND o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
         GROUP BY d.status, d.dd
+
+  # -- Inputs read at an earlier period (DEC-18) -----------------------------
+  # The value for a period is the input's value for the period that starts the offset earlier,
+  # at the query's grain. The rows are the periods with facts; a period whose earlier period has
+  # no facts gets NULL. The hand-written SQL pairs months by a month number (year * 12 + month),
+  # never by date arithmetic, so December -> January is checked independently of the engine.
+  - id: A35
+    category: tempo
+    phase: 3
+    title: Revenue, revenue of the month before and month-over-month growth, across a year change
+    request:
+      metrics: [revenue, revenue_prev_month, revenue_mom_growth]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      WITH monthly AS (
+        SELECT DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM public.orders
+        GROUP BY DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+             prev.revenue AS revenue_prev_month,
+             CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
+               AS revenue_mom_growth
+      FROM monthly cur
+      LEFT JOIN monthly prev ON prev.k = cur.k - 1
+    sql_by_dialect:
+      tsql: |
+        WITH monthly AS (
+          SELECT DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
+                 SUM(amount) AS revenue
+          FROM public.orders
+          GROUP BY DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+               prev.revenue AS revenue_prev_month,
+               CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
+                 AS revenue_mom_growth
+        FROM monthly cur
+        LEFT JOIN monthly prev ON prev.k = cur.k - 1
+
+  # A 70-day gap in the facts always holds a whole calendar month with no rows: that month is
+  # not in the output, and the month after it has no revenue of the month before (NULL, so the
+  # growth is NULL too). Each status is shifted on its own.
+  - id: A36
+    category: tempo
+    phase: 3
+    title: Revenue of the month before by status, with a month without orders
+    request:
+      metrics: [revenue_prev_month, revenue_mom_growth]
+      dimensions: [orders.status, orders.ordered_at__month]
+      filters:
+        - "{orders.ordered_at} < CURRENT_DATE - INTERVAL '300' DAY OR {orders.ordered_at} >= CURRENT_DATE - INTERVAL '230' DAY"
+    sql: |
+      WITH f AS (
+        SELECT status, ordered_at, amount FROM public.orders
+        WHERE ordered_at < CURRENT_DATE - INTERVAL '300' DAY
+           OR ordered_at >= CURRENT_DATE - INTERVAL '230' DAY
+      ), monthly AS (
+        SELECT status, DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM f
+        GROUP BY status, DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.status AS orders__status, cur.mon AS orders__ordered_at__month,
+             prev.revenue AS revenue_prev_month,
+             CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
+               AS revenue_mom_growth
+      FROM monthly cur
+      LEFT JOIN monthly prev
+        ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
+        AND prev.k = cur.k - 1
+    sql_by_dialect:
+      tsql: |
+        WITH f AS (
+          SELECT status, ordered_at, amount FROM public.orders
+          WHERE ordered_at < DATEADD(day, -300, CAST(GETDATE() AS DATE))
+             OR ordered_at >= DATEADD(day, -230, CAST(GETDATE() AS DATE))
+        ), monthly AS (
+          SELECT status, DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
+                 SUM(amount) AS revenue
+          FROM f
+          GROUP BY status, DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT cur.status AS orders__status, cur.mon AS orders__ordered_at__month,
+               prev.revenue AS revenue_prev_month,
+               CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
+                 AS revenue_mom_growth
+        FROM monthly cur
+        LEFT JOIN monthly prev
+          ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
+          AND prev.k = cur.k - 1
+
+  # An offset in days, alone in the request: the rows are the days with orders, and a day whose
+  # day a week before has no orders gets NULL, not 0. Days are paired by a day number (days
+  # since 2000-01-01), never by date arithmetic, so the check is independent of the engine's.
+  - id: A37
+    category: tempo
+    phase: 3
+    title: Orders of the same day one week before, by day
+    request:
+      metrics: [order_count_7_days_earlier]
+      dimensions: [orders.ordered_at__day]
+    sql: |
+      WITH daily AS (
+        SELECT DATE_TRUNC('day', ordered_at) AS dd, CAST(ordered_at AS DATE) - DATE '2000-01-01' AS k, COUNT(*) AS n
+        FROM public.orders GROUP BY DATE_TRUNC('day', ordered_at), CAST(ordered_at AS DATE) - DATE '2000-01-01'
+      )
+      SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+      FROM daily cur
+      LEFT JOIN daily prev ON prev.k = cur.k - 7
+    sql_by_dialect:
+      tsql: |
+        WITH daily AS (
+          SELECT DATETRUNC(day, ordered_at) AS dd, DATEDIFF(day, '2000-01-01', ordered_at) AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY DATETRUNC(day, ordered_at), DATEDIFF(day, '2000-01-01', ordered_at)
+        )
+        SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+        FROM daily cur
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
+      mysql: |
+        WITH daily AS (
+          SELECT CAST(DATE(ordered_at) AS DATETIME) AS dd, DATEDIFF(ordered_at, '2000-01-01') AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY CAST(DATE(ordered_at) AS DATETIME), DATEDIFF(ordered_at, '2000-01-01')
+        )
+        SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+        FROM daily cur
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
+      oracle: |
+        WITH daily AS (
+          SELECT CAST(TRUNC(ordered_at) AS TIMESTAMP) AS dd, CAST(TRUNC(ordered_at) AS DATE) - DATE '2000-01-01' AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY CAST(TRUNC(ordered_at) AS TIMESTAMP), CAST(TRUNC(ordered_at) AS DATE) - DATE '2000-01-01'
+        )
+        SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+        FROM daily cur
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
+      databricks: |
+        WITH daily AS (
+          SELECT DATE_TRUNC('day', ordered_at) AS dd, DATEDIFF(CAST(ordered_at AS DATE), DATE'2000-01-01') AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY DATE_TRUNC('day', ordered_at), DATEDIFF(CAST(ordered_at AS DATE), DATE'2000-01-01')
+        )
+        SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+        FROM daily cur
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
+      snowflake: |
+        WITH daily AS (
+          SELECT DATE_TRUNC('day', ordered_at) AS dd, DATEDIFF(day, '2000-01-01', ordered_at) AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY DATE_TRUNC('day', ordered_at), DATEDIFF(day, '2000-01-01', ordered_at)
+        )
+        SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+        FROM daily cur
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
+
+  - id: A38
+    category: tempo
+    phase: 3
+    title: An offset of 1 month by day is refused (only by month, quarter or year)
+    request:
+      metrics: [revenue_prev_month]
+      dimensions: [orders.ordered_at__day]
+    expect_error: QueryError

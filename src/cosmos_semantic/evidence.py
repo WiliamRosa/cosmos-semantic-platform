@@ -306,7 +306,16 @@ class EvidenceBuilder:
         if isinstance(metric, DerivedMetric):
             from cosmos_semantic.expressions import REF_RE
 
-            return REF_RE.sub(lambda m: f"({self.formula(m.group(1), seen)})", metric.expr)
+            offsets = metric.offsets()
+
+            def part(match) -> str:
+                ref = match.group(1)
+                inner = f"({self.formula(ref, seen)})"
+                if ref in offsets:
+                    return f"{inner} {offsets[ref]} earlier"
+                return inner
+
+            return REF_RE.sub(part, metric.expr)
         if isinstance(metric, CumulativeMetric):
             inner = self.formula(metric.measure, seen)
             if metric.window:

@@ -178,3 +178,24 @@ metrics:
     measure: smallest_order
     window: 7 days
     description: Value of the smallest order of the 7 days ending on each day
+  - name: revenue_prev_month
+    type: derived
+    owner: controllership
+    expr: "{revenue}"
+    inputs:
+      - metric: revenue
+        offset: 1 month
+    description: Revenue of the month before each month
+  - name: revenue_mom_growth
+    type: derived
+    owner: controllership
+    expr: "({revenue} - {revenue_prev_month}) / {revenue_prev_month}"
+    description: Revenue growth over the month before (null when that month has no revenue)
+  - name: order_count_7_days_earlier
+    type: derived
+    owner: controllership
+    expr: "{order_count}"
+    inputs:
+      - metric: order_count
+        offset: 7 days
+    description: Orders of the same day one week before

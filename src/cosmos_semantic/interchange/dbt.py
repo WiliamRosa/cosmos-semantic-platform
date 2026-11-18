@@ -624,6 +624,11 @@ class _DbtWriter:
         return item
 
     def _derived(self, metric) -> dict[str, Any]:
+        if metric.inputs:
+            raise _NotExported(
+                "it reads an input at an earlier period (`offset`), and the dbt export does "
+                "not map it to `offset_window` yet"
+            )
         refs: list[str] = []
 
         def mask(match):

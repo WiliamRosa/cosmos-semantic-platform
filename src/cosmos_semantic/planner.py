@@ -22,6 +22,8 @@ from cosmos_semantic.compiler import (
     DimensionRef,
     JoinEdge,
     SemanticGraph,
+    metrics_under,
+    offset_input_problem,
 )
 from cosmos_semantic.errors import PolicyError, QueryError
 from cosmos_semantic.expressions import (
@@ -42,6 +44,9 @@ from cosmos_semantic.spec import (
     RatioMetric,
     SimpleMetric,
     cumulative_agg_problem,
+    offset_grain_problem,
+    offset_problem,
+    parse_offset,
     window_agg_refusal,
 )
 
@@ -129,6 +134,24 @@ class _Input:
 class _Group:
     model: str
     inputs: dict[_Input, str] = field(default_factory=dict)
+    # (N, unit) for the inputs read N days or months earlier (DEC-18); one CTE per offset.
+    offset: tuple[int, str] | None = None
+
+    @property
+    def cte(self) -> str:
+        if self.offset is None:
+            return f"{self.model}_agg"
+        amount, unit = self.offset
+        return f"{self.model}_agg_offset_{amount}_{unit}"
+
+
+@dataclass(frozen=True)
+class _OffsetUse:
+    """A derived metric's input read at an earlier period, for the request checks."""
+
+    metric: str
+    input: str
+    offset: str
 
 
 _SAFE_AGGS = {
@@ -180,10 +203,11 @@ class Planner:
         for ref in dims:
             self._check_sensitivity(ref, principal)
 
-        groups: dict[str, _Group] = {}
+        groups: dict[tuple[str, tuple[int, str] | None], _Group] = {}
         metric_exprs: dict[str, exp.Expression] = {}
         cumulative: dict[str, CumulativeMetric] = {}
         windows: dict[str, CumulativeMetric] = {}
+        self._offset_uses: list[_OffsetUse] = []
         for name in request.metrics:
             if name in metric_exprs:
                 raise QueryError(f"metric `{name}` requested more than once")
@@ -191,6 +215,8 @@ class Planner:
             metric = g.metrics.get(name)
             if isinstance(metric, CumulativeMetric):
                 (windows if metric.window else cumulative)[name] = metric
+        shifts = {grp.cte: grp.offset for grp in groups.values() if grp.offset is not None}
+        time = self._offset_time(dims) if shifts else None
 
         models = {g.measure_owner[i.measure] for grp in groups.values() for i in grp.inputs}
         data_sources = {g.models[m].spec.data_source for m in models}
@@ -201,14 +227,14 @@ class Planner:
         used_models: set[str] = set()
         for group in groups.values():
             select, joined = self._group_select(group, dims, filters, principal)
-            ctes.append((f"{group.model}_agg", select))
+            ctes.append((group.cte, select))
             used_models |= joined
         for name, metric in windows.items():
             column = metric_exprs[name]
             ctes.append((f"{name}_window", self._window_select(column, metric, dims)))
             metric_exprs[name] = exp.column(column.name, table=f"{name}_window")
 
-        final = self._final_select(ctes, dims, metric_exprs, cumulative, request)
+        final = self._final_select(ctes, dims, metric_exprs, cumulative, request, shifts, time)
         clock = now if request.as_of is None else dt.datetime.combine(request.as_of, dt.time())
         final = _pin_clock(final, as_of, clock)
         columns = [OutputColumn(d.alias, "dimension", _dim_member(d)) for d in dims] + [
@@ -291,11 +317,16 @@ class Planner:
     # -- metrics ---------------------------------------------------------------
 
     def _metric_expr(
-        self, name: str, groups: dict[str, _Group], stack: set[str], extra_filter: str | None = None
+        self,
+        name: str,
+        groups: dict[tuple[str, tuple[int, str] | None], _Group],
+        stack: set[str],
+        extra_filter: str | None = None,
+        offset: tuple[int, str] | None = None,
     ) -> exp.Expression:
         g = self.graph
         if name in g.measure_owner:
-            return self._input(_Input(name, extra_filter), groups)
+            return self._input(_Input(name, extra_filter), groups, offset)
         metric = g.metrics.get(name)
         if metric is None:
             raise QueryError(f"metric `{name}` does not exist")
@@ -304,11 +335,12 @@ class Planner:
         stack = stack | {name}
 
         if isinstance(metric, SimpleMetric):
-            return self._input(_Input(metric.measure, _and(metric.filter, extra_filter)), groups)
+            item = _Input(metric.measure, _and(metric.filter, extra_filter))
+            return self._input(item, groups, offset)
         if isinstance(metric, RatioMetric):
             flt = _and(metric.filter, extra_filter)
-            num = self._metric_expr(metric.numerator, groups, stack, flt)
-            den = self._metric_expr(metric.denominator, groups, stack, flt)
+            num = self._metric_expr(metric.numerator, groups, stack, flt, offset)
+            den = self._metric_expr(metric.denominator, groups, stack, flt, offset)
             return exp.Div(
                 this=exp.Cast(this=num, to=exp.DataType.build("double")),
                 expression=exp.Nullif(this=den, expression=exp.Literal.number(0)),
@@ -316,11 +348,28 @@ class Planner:
         if isinstance(metric, DerivedMetric):
             template = parse_template(metric.expr, self.dialect)
             template.tree = template.tree.transform(_safe_division)
-            return exp.Paren(
-                this=substitute(
-                    template, lambda r: self._metric_expr(r, groups, stack, extra_filter)
+            shifted = metric.offsets()
+            if shifted and offset is not None:
+                raise QueryError(
+                    f"`{name}` has offsets and is read with an offset itself; "
+                    "offsets do not combine yet"
                 )
-            )
+
+            def resolve(ref: str) -> exp.Expression:
+                if ref not in shifted:
+                    return self._metric_expr(ref, groups, stack, extra_filter, offset)
+                text = shifted[ref]
+                problem = offset_problem(text)
+                if problem:
+                    raise QueryError(f"`{name}`: {problem}")
+                for under in metrics_under(g, ref):
+                    problem = offset_input_problem(g.metrics[under], ref)
+                    if problem:
+                        raise QueryError(f"`{name}`: {problem}")
+                self._offset_uses.append(_OffsetUse(name, ref, text))
+                return self._metric_expr(ref, groups, stack, extra_filter, parse_offset(text))
+
+            return exp.Paren(this=substitute(template, resolve))
         if isinstance(metric, CumulativeMetric):
             if metric.window:
                 if metric.window_days() is None:
@@ -341,13 +390,37 @@ class Planner:
             return self._input(_Input(metric.measure, None), groups)
         raise QueryError(f"unsupported metric type in `{name}`")
 
-    def _input(self, item: _Input, groups: dict[str, _Group]) -> exp.Expression:
+    def _input(
+        self,
+        item: _Input,
+        groups: dict[tuple[str, tuple[int, str] | None], _Group],
+        offset: tuple[int, str] | None = None,
+    ) -> exp.Expression:
         owner = self.graph.measure_owner[item.measure]
-        group = groups.setdefault(owner, _Group(owner))
+        group = groups.setdefault((owner, offset), _Group(owner, offset=offset))
         if item not in group.inputs:
             suffix = "" if item.filter is None else f"__f{len(group.inputs)}"
             group.inputs[item] = f"{item.measure}{suffix}"
-        return exp.column(group.inputs[item], table=f"{owner}_agg")
+        return exp.column(group.inputs[item], table=group.cte)
+
+    def _offset_time(self, dims: list[DimensionRef]) -> DimensionRef:
+        """The request's time dimension for inputs read at an earlier period (DEC-18): exactly
+        one, at a grain each offset is a whole number of periods of."""
+        uses = self._offset_uses
+        first = uses[0]
+        what = f"`{first.metric}` reads `{first.input}` {first.offset} earlier, so it"
+        time_dims = [d for d in dims if self.graph.dimension(d).type == "time"]
+        if len(time_dims) != 1:
+            found = "none" if not time_dims else f"{len(time_dims)}"
+            raise QueryError(
+                f"{what} needs exactly one time dimension in the request ({found} requested)"
+            )
+        time = time_dims[0]
+        for use in uses:
+            problem = offset_grain_problem(use.offset, time.grain)
+            if problem:
+                raise QueryError(f"`{use.metric}` reads `{use.input}` earlier: {problem}")
+        return time
 
     # -- one CTE per owner model -------------------------------------------------
 
@@ -369,7 +442,7 @@ class Planner:
         """
         g = self.graph
         base = group.model
-        label = label or f"{base}_agg"
+        label = label or group.cte
         joins: dict[str, JoinEdge] = {}
         reach = g.reachable(base)
 
@@ -618,14 +691,21 @@ class Planner:
         metric_exprs: dict[str, exp.Expression],
         cumulative: dict[str, CumulativeMetric],
         request: QueryRequest,
+        shifts: dict[str, tuple[int, str]] | None = None,
+        time: DimensionRef | None = None,
     ) -> exp.Select:
+        shifts = shifts or {}
         # A CTE only feeding another one (an aggregate under a rolling window) is not joined.
         used = {c.table for e in metric_exprs.values() for c in e.find_all(exp.Column)}
         names = [name for name, _ in ctes if name in used]
         # With more than one CTE and dimensions, the "spine" is the union of the dimension
         # combinations of all CTEs; each CTE is LEFT JOINed to it with null-safe equality.
-        # Postgres rejects FULL JOIN with IS NOT DISTINCT FROM.
-        use_spine = len(names) > 1 and bool(dims)
+        # Postgres rejects FULL JOIN with IS NOT DISTINCT FROM. A CTE of inputs read at an
+        # earlier period (DEC-18) adds its own periods to the spine, unshifted, and joins on
+        # its period moved forward by the offset: the rows are the periods with facts, and a
+        # period whose earlier period has none gets NULL. Plain equality on the period, so a
+        # null period never matches.
+        use_spine = (len(names) > 1 or bool(shifts)) and bool(dims)
         anchor = "dimensions" if use_spine else names[0]
 
         def dim_out(d: DimensionRef) -> exp.Expression:
@@ -640,16 +720,15 @@ class Planner:
         select = exp.select(*projections).from_(exp.to_table(anchor))
         if use_spine:
             for name in names:
-                on = exp.and_(
-                    *[
-                        exp.NullSafeEQ(
-                            this=exp.column(d.alias, table=anchor),
-                            expression=exp.column(d.alias, table=name),
-                        )
-                        for d in dims
-                    ]
-                )
-                select = select.join(exp.to_table(name), on=on, join_type="left")
+                conditions: list[exp.Expression] = []
+                for d in dims:
+                    mine = exp.column(d.alias, table=name)
+                    if name in shifts and d == time:
+                        moved = dialects.shift(mine, *shifts[name])
+                        conditions.append(exp.EQ(this=dim_out(d), expression=moved))
+                    else:
+                        conditions.append(exp.NullSafeEQ(this=dim_out(d), expression=mine))
+                select = select.join(exp.to_table(name), on=exp.and_(*conditions), join_type="left")
         else:
             for name in names[1:]:
                 select = select.join(exp.to_table(name), join_type="cross")

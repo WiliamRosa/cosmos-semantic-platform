@@ -148,7 +148,7 @@ Time dimensions accept a grain suffix in requests: `orders.ordered_at__day`, `__
 | --- | --- | --- |
 | `simple` | `measure`, optional `filter` | The measure, with an optional filter |
 | `ratio` | `numerator`, `denominator` | Real division, safe against zero; each side aggregated at its own grain |
-| `derived` | `expr` with `{measure}` or `{metric}` references | Expression over already aggregated values; division is real and safe against zero |
+| `derived` | `expr` with `{measure}` or `{metric}` references, optional `inputs` | Expression over already aggregated values; division is real and safe against zero. `inputs` reads references at an earlier period ([period over period](#period-over-period)) |
 | `cumulative` | `measure`, and `grain_to_date` or `window` | Running total (or running minimum or maximum) within each period (`grain_to_date`), or over a rolling window (`window`); requires exactly one time dimension in the request |
 
 Because the planner aggregates each measure at its own grain before combining them, ratios and derived metrics can use measures from different models without row multiplication.
@@ -193,6 +193,31 @@ metrics:
 - **Measures.** `sum` and `count` add up over the window; `min` and `max` take the minimum or maximum of the window. `avg` and `count_distinct` are refused: they cannot be combined from daily values, and recomputing them over each window is a later slice. The model itself is invalid (`cosmos validate` and `cosmos check` report it), not only a query of the metric.
 - **Supported for now.** Only windows in days (`1 day`, `7 days`, `30 days`), queried with the time dimension at day grain (`orders.ordered_at__day`). Other units (`2 weeks`, `1 month`) and other grains are refused with an error.
 - **SQL.** The daily aggregate is joined to itself on the date range, with no window frame, so the same SQL shape runs on every data source (SQL Server has no `RANGE` frame with an interval).
+
+#### Period over period
+
+A derived metric can read a reference at an earlier period: list it in `inputs` with an `offset`. The other references of `expr` are read at the same period.
+
+```yaml
+metrics:
+  - name: revenue_prev_month
+    type: derived
+    expr: "{revenue}"
+    inputs:
+      - metric: revenue       # a measure or a metric referenced in expr
+        offset: 1 month
+  - name: revenue_mom_growth
+    type: derived
+    expr: "({revenue} - {revenue_prev_month}) / {revenue_prev_month}"
+```
+
+- **Value.** The value for a period is the input's value for the period that starts the offset earlier, at the query's time grain: by month, `revenue_prev_month` for March is the revenue of February, and for January the revenue of the December before. The input is aggregated at the query's grain first, then its period start is moved, so a month end never has to be clamped (31 March minus a month does not exist), and `1 month` means the previous calendar month whatever its length.
+- **Grains.** The offset must be a whole number of periods of the request's time grain: an offset in months runs by month, by quarter in multiples of 3 months and by year in multiples of 12; an offset in days runs by day, and by ISO week in multiples of 7 days. Anything else is refused with an error: `1 month` by day (which day is "a month before" 31 March is where databases disagree), by week or by quarter, `7 days` by month, any offset by hour or on a time dimension without a grain.
+- **Rows.** As with cumulative metrics, there is no time spine yet: a row appears for each period (and combination of the other requested dimensions) that has facts after the request's filters, for any of the requested metrics, the offset inputs included before they are shifted. A period whose earlier period has no facts gets NULL, even for a count, and so does a growth computed from it; a period without facts is not output, so the month after the last month of data does not appear. A row whose period is null (a fact without a date) gets NULL too.
+- **Filters.** Request filters apply to the facts before the shift, as with rolling windows: with a filter on the last 90 days, the first month of the range has no month before it. Each combination of the other requested dimensions is shifted on its own.
+- **Requests.** A metric that reads an offset, directly (`revenue_prev_month`) or through another metric (`revenue_mom_growth`), needs exactly one time dimension in the request.
+- **Supported for now.** Offsets in days and months (`1 day`, `7 days`, `1 month`, `12 months`). Other units (`2 weeks`, `1 year`), an offset of zero, an input not referenced in `expr` or listed twice, an offset of a cumulative metric, and an offset over a metric that has offsets of its own are errors in `cosmos validate` and `cosmos check`; the planner refuses them too. An expression cannot yet read the same reference both shifted and unshifted, so growth is written over a second metric, as above. The Cube and dbt exports refuse these metrics, and Ossie keeps them only in the Cosmos extension; mapping dbt's `offset_window` and Power BI's time intelligence comes in later slices. MetricFlow's `offset_window` shifts each day of its time spine and then groups by the query's grain, which can give a different number at month ends; the mapping will have to account for it.
+- **SQL.** One aggregate per model and offset, grouped like the others at the query's grain, joined to the spine of dimension values on its period moved forward by the offset (`DATEADD`, `+ INTERVAL`, `NUMTOYMINTERVAL` in Oracle), with plain equality on the period and null-safe equality on the other dimensions.
 
 ### Row filters
 
@@ -475,6 +500,7 @@ Whatever Cube does not represent the same way produces a warning on export:
 - A `primary` or `unique` entity repeated in more than one model.
 - An ambiguous join path between two models.
 - A metric referencing a missing measure or dimension, or missing the fields of its type.
+- A derived metric's `inputs` with an unsupported offset, an input not referenced in `expr` or listed twice, or an offset of a cumulative metric or of a metric with offsets of its own.
 - An unknown `timezone`.
 - A concept whose `maps_to` points to a missing member or rule; a cycle in the `broader` hierarchy.
 - The same synonym in two different concepts: a warning, because the agent could not tell which to pick.
