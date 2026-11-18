@@ -280,10 +280,23 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> None:
     if kind not in _AGG:
         warnings.append(f"{where}: type `{kind}` is not supported; skipped")
         return
+    window = measure.get("rolling_window")
+    days = _trailing_days(window) if window else None
+    if days and (window.get("offset", "end") != "end" or "leading" in window):
+        warnings.append(
+            f"{where}: a trailing window in days with `offset: start` or `leading` does not "
+            "end on the row's day, as Cosmos windows do; measure skipped"
+        )
+        return
+    if days and _AGG[kind] not in WINDOW_AGGS:
+        warnings.append(
+            f"{where}: a trailing window over a measure of type `{kind}` cannot be combined from daily "
+            "values in Cosmos (use sum, count, min or max); measure skipped"
+        )
+        return
     if kind == "count_distinct_approx":
         warnings.append(f"{where}: count_distinct_approx imported as an exact count")
     filters = [f["sql"] for f in measure.get("filters") or [] if f.get("sql")]
-    window = measure.get("rolling_window")
     base_name = f"{name}__base" if filters or window else name
     item: dict[str, Any] = {"name": base_name, "agg": _AGG[kind]}
     if sql is not None and str(sql).strip() not in ("*", "1"):
@@ -293,19 +306,12 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> None:
     model.setdefault("measures", []).append(item)
     if window:
         metric: dict[str, Any] = {"name": name, "type": "cumulative", "measure": base_name}
-        days = _trailing_days(window)
         if window.get("type") == "to_date" and window.get("granularity"):
             metric["grain_to_date"] = window["granularity"]
-        elif days and window.get("offset", "end") == "end" and "leading" not in window:
+        elif days:
             # Cube's trailing window with `offset: end` ends at the end of each bucket: at day
             # grain, the N days ending on the row's day, as the planner's `window: N days`.
             metric["window"] = "1 day" if days == 1 else f"{days} days"
-        elif days:
-            warnings.append(
-                f"{where}: a trailing window in days with `offset: start` or `leading` does not "
-                "end on the row's day, as Cosmos windows do; metric skipped"
-            )
-            return
         else:
             metric["window"] = str(window.get("trailing", "unbounded"))
             warnings.append(

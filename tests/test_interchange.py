@@ -1753,21 +1753,30 @@ def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
 
 
 @pytest.mark.parametrize(
-    ("window", "metric", "warning"),
+    ("window", "kind", "metric", "warning"),
     [
-        ({"trailing": "7 day", "offset": "end"}, {"window": "7 days"}, None),
-        ({"trailing": "7 days"}, {"window": "7 days"}, None),  # `offset` defaults to `end`
-        ({"trailing": "1 day", "offset": "end"}, {"window": "1 day"}, None),
-        ({"type": "fixed", "trailing": "30 day"}, {"window": "30 days"}, None),
-        ({"trailing": "7 day", "offset": "start"}, None, "does not end on the row's day"),
-        ({"trailing": "7 day", "leading": "1 day"}, None, "does not end on the row's day"),
-        ({"trailing": "1 month"}, {"window": "1 month"}, "only rolling windows in days"),
+        ({"trailing": "7 day", "offset": "end"}, "sum", {"window": "7 days"}, None),
+        # `offset` defaults to `end`.
+        ({"trailing": "7 days"}, "min", {"window": "7 days"}, None),
+        ({"trailing": "1 day", "offset": "end"}, "count", {"window": "1 day"}, None),
+        ({"type": "fixed", "trailing": "30 day"}, "max", {"window": "30 days"}, None),
+        ({"trailing": "7 day", "offset": "start"}, "sum", None, "does not end on the row's day"),
+        ({"trailing": "7 day", "leading": "1 day"}, "sum", None, "does not end on the row's day"),
+        ({"trailing": "7 day"}, "avg", None, "of type `avg` cannot be combined"),
+        (
+            {"trailing": "7 day"},
+            "count_distinct",
+            None,
+            "of type `count_distinct` cannot be combined",
+        ),
+        ({"trailing": "1 month"}, "sum", {"window": "1 month"}, "only rolling windows in days"),
     ],
 )
-def test_cube_import_trailing_windows(tmp_path, window, metric, warning):
-    """A trailing window in days ending at the bucket's end is a Cosmos window in days; one
-    that does not end on the row's day is skipped, and other units stay refused at query
-    time."""
+def test_cube_import_trailing_windows(tmp_path, window, kind, metric, warning):
+    """A trailing window in days ending at the bucket's end, over a measure whose daily values
+    combine, is a Cosmos window in days and validates; one that does not end on the row's day,
+    or over an `avg` or `count_distinct` measure, is skipped with its base measure; other units
+    stay refused at query time."""
     doc = {
         "cubes": [
             {
@@ -1780,7 +1789,7 @@ def test_cube_import_trailing_windows(tmp_path, window, metric, warning):
                 "measures": [
                     {
                         "name": "revenue_window",
-                        "type": "sum",
+                        "type": kind,
                         "sql": "{CUBE}.amount",
                         "rolling_window": window,
                     }
@@ -1792,13 +1801,18 @@ def test_cube_import_trailing_windows(tmp_path, window, metric, warning):
     path.write_text(yaml.safe_dump(doc), encoding="utf-8")
     result = import_model("cube", path)
     metrics = {m.name: m for m in result.project.metrics}
+    measures = {x.name for m in result.project.semantic_models for x in m.measures}
     if metric is None:
+        # Skipped whole: no metric, and no `__base` measure left behind.
         assert "revenue_window" not in metrics
+        assert measures == set()
     else:
         assert metrics["revenue_window"].window == metric["window"]
         assert metrics["revenue_window"].measure == "revenue_window__base"
+        assert measures == {"revenue_window__base"}
     if warning is None:
         assert result.warnings == []
+        compile_project(result.project)  # validates
     else:
         assert [w for w in result.warnings if warning in w], result.warnings
 

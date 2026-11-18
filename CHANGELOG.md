@@ -16,7 +16,9 @@ format or the API; such changes are listed under **Changed**.
   no longer refused. With `offset: end`, Cube's window for a day bucket is the N days ending on
   that day, the row's day included, as in Cosmos. `cosmos import cube` reads it back as the same
   window; a trailing window in days with `offset: start` or `leading` does not end on the row's
-  day and is now skipped with a warning instead of being imported as a Cosmos window. The
+  day and is now skipped with a warning instead of being imported as a Cosmos window, and so
+  is a trailing window over an `avg` or `count_distinct` measure (it would not validate in
+  Cosmos); a skipped window leaves no `<name>__base` measure behind. The
   docs list where Cube's window differs: days without facts, grains coarser than a day, date
   filters (Cube reads the days before the range), a joined cube's day and rows with a null
   time. Ratio and derived metrics over a window and offsets stay refused. Tests: the
