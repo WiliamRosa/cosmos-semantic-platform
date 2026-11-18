@@ -57,6 +57,17 @@ completed,12562542.200000022,2615.561565688116
 
 `--csv` and `--json` cannot be combined.
 
+To keep only the rows whose numbers pass a threshold, add `--metric-filter` (repeatable). It
+applies after aggregation, so it compares each status's revenue, not each order's amount:
+
+```bash
+cosmos query revenue order_count --by orders.status --metric-filter "{revenue} > 1600000"
+```
+
+A condition compares a requested metric with a number (`=`, `<>`, `<`, `<=`, `>`, `>=`) or
+tests `IS NULL` / `IS NOT NULL`, joined by `AND`; anything else is refused. `--order` and
+`--limit` apply to the rows kept.
+
 ## 3. Business rules and policies
 
 The model defines `active_customer` as a business rule with an owner, a history and tests. Use it
@@ -100,7 +111,7 @@ Any MCP client works the same way: command `cosmos`, arguments `mcp -m <semantic
 | `search_concepts` | Finds glossary concepts by term or synonym, in English or Portuguese ("compradores ativos" finds `active_customer`) |
 | `explain` | Definition, owner, logic and history of a metric, rule, dimension or concept, and the member's health: whether its rule tests pass and its last reconciliation matched |
 | `list_members` | The metrics, dimensions and rules it can ask for |
-| `query` | Runs a metrics request with the user's policies and returns the evidence envelope |
+| `query` | Runs a metrics request with the user's policies and returns the evidence envelope; `metric_filters` (such as `{revenue} > 1000`) keep only the rows whose metric values meet the conditions |
 | `show_sql` | The SQL the engine would run, without running it |
 | `replay` | Re-runs one of the user's audited queries by `query_id` and tells whether the model, the SQL or the data changed (needs `COSMOS_AUDIT_LOG`) |
 | `impact` | What a change to a member (`kind:name`, such as `rule:active_customer`) affects, by owner, source systems and processes; who queried it is shown only to admins (`COSMOS_CONSOLE_ADMINS`) |

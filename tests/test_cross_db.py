@@ -224,9 +224,71 @@ def _offset_requests(graph, count: int, seed: int):
     return produced
 
 
+METRIC_CONDITIONS = ["> 0", ">= 1000", "< 50000", "<= 2500.5", "IS NOT NULL", "IS NULL"]
+
+
+def _metric_filter_requests(graph, count: int, seed: int):
+    """Requests with conditions on metric values (DEC-29): up to two metrics without running
+    totals or offsets, up to two dimensions, a request filter or none, and one or two
+    conditions on the requested metrics. No limit: strings sort by each database's collation,
+    so a limit could keep different rows (A39 checks the limit with a numeric order). Its own
+    generator, as for rolling windows."""
+    rng = random.Random(seed)
+    plain = sorted(
+        name
+        for name in set(graph.metrics) | set(graph.measure_owner)
+        if not isinstance(graph.metrics.get(name), CumulativeMetric)
+        and not _offset_grains(graph, name)
+    )
+    dims = sorted(
+        f"{m}.{d}"
+        for m, node in graph.models.items()
+        for d, spec in node.dimensions.items()
+        if not spec.sensitivity
+    )
+    produced, attempts = [], 0
+    while len(produced) < count and attempts < count * 50:
+        attempts += 1
+        metrics = rng.sample(plain, rng.randint(1, 2))
+        chosen = [
+            f"{d}__{rng.choice(TIME_GRAINS[1:])}"
+            if graph.dimension(graph.resolve_dimension(d)).type == "time"
+            else d
+            for d in rng.sample(dims, rng.randint(1, 2))
+        ]
+        conditions = [
+            f"{{{rng.choice(metrics)}}} {rng.choice(METRIC_CONDITIONS)}"
+            for _ in range(rng.randint(1, 2))
+        ]
+        request = QueryRequest(
+            metrics=metrics,
+            dimensions=chosen,
+            filters=rng.sample(FILTERS, rng.choice([0, 1])),
+            metric_filters=[" AND ".join(conditions)],
+        )
+        principal = Principal(
+            user={"region": rng.choice(REGIONS)}, channel=rng.choice(["api", "mcp"])
+        )
+        try:
+            for dialect in DIALECTS:
+                Planner(graph, dialect).plan(request, principal)
+        except CosmosError:
+            continue
+        produced.append((request, principal))
+    return produced
+
+
 REQUESTS_PER_RUN = 80
 ROLLING_PER_RUN = 12
 OFFSET_PER_RUN = 12
+METRIC_FILTER_PER_RUN = 8
+
+
+def test_metric_filter_draws_are_deterministic(graph):
+    first = _metric_filter_requests(graph, METRIC_FILTER_PER_RUN, seed=2026)
+    assert len(first) == METRIC_FILTER_PER_RUN
+    assert first == _metric_filter_requests(graph, METRIC_FILTER_PER_RUN, seed=2026)
+    assert all(request.metric_filters for request, _ in first)
 
 
 def test_offset_draws_are_deterministic_and_cover_every_offset_metric(graph):
@@ -262,6 +324,9 @@ def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     shifted = _offset_requests(graph, OFFSET_PER_RUN, seed=2026)
     assert len(shifted) == OFFSET_PER_RUN
     requests += shifted
+    kept = _metric_filter_requests(graph, METRIC_FILTER_PER_RUN, seed=2026)
+    assert len(kept) == METRIC_FILTER_PER_RUN
+    requests += kept
     for i, (request, principal) in enumerate(requests):
         results = {}
         for name, connector in connectors.items():

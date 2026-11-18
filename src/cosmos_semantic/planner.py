@@ -8,6 +8,7 @@ aggregation. The CTEs are then joined on the requested dimensions.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -59,6 +60,14 @@ class QueryRequest(BaseModel):
     filters: list[str] = Field([], description="Expressions with `{model.dimension}` references.")
     order_by: list[str] = Field(
         [], description="Requested members; prefix with `-` for descending order."
+    )
+    metric_filters: list[str] = Field(
+        [],
+        description=(
+            "Conditions on the values of requested metrics, applied after aggregation at the "
+            "requested grain, such as `{revenue} > 1000`: a metric compared with a number "
+            "(`=`, `<>`, `<`, `<=`, `>`, `>=`) or `IS [NOT] NULL`, joined by `AND`."
+        ),
     )
     limit: int | None = Field(None, ge=1)
     as_of: dt.date | None = Field(
@@ -120,6 +129,8 @@ class QueryTrace:
     row_filters: list[dict[str, Any]] = field(default_factory=list)
     joins: list[dict[str, str]] = field(default_factory=list)
     one_to_many: list[dict[str, Any]] = field(default_factory=list)
+    # Conditions on metric values (DEC-29), as applied: {"metric", "op", "value", "text"}.
+    metric_filters: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -217,6 +228,7 @@ class Planner:
                 (windows if metric.window else cumulative)[name] = metric
         shifts = {grp.cte: grp.offset for grp in groups.values() if grp.offset is not None}
         time = self._offset_time(dims) if shifts else None
+        kept = self._metric_conditions(request, [*cumulative, *windows])
 
         models = {g.measure_owner[i.measure] for grp in groups.values() for i in grp.inputs}
         data_sources = {g.models[m].spec.data_source for m in models}
@@ -234,7 +246,9 @@ class Planner:
             ctes.append((f"{name}_window", self._window_select(column, metric, dims)))
             metric_exprs[name] = exp.column(column.name, table=f"{name}_window")
 
-        final = self._final_select(ctes, dims, metric_exprs, cumulative, request, shifts, time)
+        final = self._final_select(
+            ctes, dims, metric_exprs, cumulative, request, shifts, time, kept
+        )
         clock = now if request.as_of is None else dt.datetime.combine(request.as_of, dt.time())
         final = _pin_clock(final, as_of, clock)
         columns = [OutputColumn(d.alias, "dimension", _dim_member(d)) for d in dims] + [
@@ -421,6 +435,42 @@ class Planner:
             if problem:
                 raise QueryError(f"`{use.metric}` reads `{use.input}` earlier: {problem}")
         return time
+
+    def _metric_conditions(
+        self, request: QueryRequest, running: list[str]
+    ) -> exp.Expression | None:
+        """The request's ``metric_filters`` as one condition over the output columns (DEC-29),
+        or None without them. Each filter is parsed strictly by ``parse_metric_filter``; only
+        requested metrics are compared, and not alongside running totals, rolling windows or
+        inputs read at an earlier period, whose rows the filter would remove from the window."""
+        if not request.metric_filters:
+            return None
+        if len(request.metric_filters) > MAX_METRIC_FILTERS:
+            raise QueryError(f"at most {MAX_METRIC_FILTERS} metric_filters are accepted")
+        if running:
+            raise QueryError(
+                f"metric_filters do not combine with cumulative metrics yet (`{running[0]}` "
+                "requested); request it without metric_filters"
+            )
+        if self._offset_uses:
+            use = self._offset_uses[0]
+            raise QueryError(
+                f"metric_filters do not combine with metrics that read an input at an earlier "
+                f"period yet (`{use.metric}` reads `{use.input}` {use.offset} earlier)"
+            )
+        conditions: list[exp.Expression] = []
+        for text in request.metric_filters:
+            for item in parse_metric_filter(text):
+                if item.metric not in request.metrics:
+                    raise QueryError(
+                        f"metric filter `{text}` compares `{item.metric}`, which is not among "
+                        "the requested metrics; add it to `metrics`"
+                    )
+                self._trace.metric_filters.append(
+                    {"metric": item.metric, "op": item.op, "value": item.value, "text": item.text}
+                )
+                conditions.append(item.condition())
+        return exp.and_(*conditions)
 
     # -- one CTE per owner model -------------------------------------------------
 
@@ -693,6 +743,7 @@ class Planner:
         request: QueryRequest,
         shifts: dict[str, tuple[int, str]] | None = None,
         time: DimensionRef | None = None,
+        kept: exp.Expression | None = None,
     ) -> exp.Select:
         shifts = shifts or {}
         # A CTE only feeding another one (an aggregate under a rolling window) is not joined.
@@ -717,7 +768,13 @@ class Planner:
                 expression = self._cumulative(expression, cumulative[name], dims, dim_out)
             projections.append(expression.as_(name))
 
-        select = exp.select(*projections).from_(exp.to_table(anchor))
+        body = select = exp.select(*projections).from_(exp.to_table(anchor))
+        if kept is not None:
+            # Metric filters (DEC-29): an outer WHERE over the result at the requested grain,
+            # read from a CTE (SQL Server accepts WITH only at the top). Ordering and the limit
+            # apply to the rows kept.
+            outputs = [d.alias for d in dims] + list(metric_exprs)
+            select = exp.select(*[exp.column(c) for c in outputs]).from_(_FILTERED).where(kept)
         if use_spine:
             for name in names:
                 conditions: list[exp.Expression] = []
@@ -728,10 +785,12 @@ class Planner:
                         conditions.append(exp.EQ(this=dim_out(d), expression=moved))
                     else:
                         conditions.append(exp.NullSafeEQ(this=dim_out(d), expression=mine))
-                select = select.join(exp.to_table(name), on=exp.and_(*conditions), join_type="left")
+                body = body.join(exp.to_table(name), on=exp.and_(*conditions), join_type="left")
         else:
             for name in names[1:]:
-                select = select.join(exp.to_table(name), join_type="cross")
+                body = body.join(exp.to_table(name), join_type="cross")
+        if kept is None:
+            select = body
         for name, cte in ctes:
             select = select.with_(name, as_=cte)
         if use_spine:
@@ -740,6 +799,8 @@ class Planner:
             for part in parts[1:]:
                 spine = exp.union(spine, part, distinct=True)
             select = select.with_(anchor, as_=spine)
+        if kept is not None:
+            select = select.with_(_FILTERED, as_=body)
 
         order = []
         known = {d.alias for d in dims}
@@ -850,6 +911,123 @@ _COMBINE_AGGS = {"sum": exp.Sum, "count": exp.Sum, "min": exp.Min, "max": exp.Ma
 assert tuple(_COMBINE_AGGS) == WINDOW_AGGS
 
 _LEVEL = {"personal": "personal", "sensitive": "sensitive personal"}
+
+
+# -- metric filters (DEC-29) ---------------------------------------------------------------
+
+# The CTE holding the result before the metric filters; the filtered select reads it.
+_FILTERED = "cosmos_result"
+MAX_METRIC_FILTERS = 20
+MAX_METRIC_FILTER_LENGTH = 500
+
+_COMPARISONS: dict[str, type[exp.Expression]] = {
+    "=": exp.EQ,
+    "<>": exp.NEQ,
+    "<": exp.LT,
+    "<=": exp.LTE,
+    ">": exp.GT,
+    ">=": exp.GTE,
+}
+# The whole grammar. Anything else (functions, columns, strings, parentheses, OR, comments,
+# semicolons, quotes) is refused: the text never reaches the SQL, only the parsed parts do.
+_METRIC_TOKEN = re.compile(
+    r"\s*(?:"
+    r"(?P<ref>\{[a-z_][a-z0-9_]{0,63}\})"
+    r"|(?P<op><=|>=|<>|=|<|>)"
+    r"|(?P<number>-?[0-9]{1,18}(?:\.[0-9]{1,18})?)(?![0-9A-Za-z_.])"
+    r"|(?P<word>[A-Za-z]+)(?![0-9A-Za-z_])"
+    r")"
+)
+_NUMBER = re.compile(r"-?[0-9]{1,18}(?:\.[0-9]{1,18})?")
+
+
+@dataclass(frozen=True)
+class MetricCondition:
+    """One comparison of a requested metric's value: ``op`` is a comparison with ``value`` (a
+    number, kept as its validated text), or ``IS NULL`` / ``IS NOT NULL`` with no value."""
+
+    metric: str
+    op: str
+    value: str | None
+
+    @property
+    def text(self) -> str:
+        return f"{{{self.metric}}} {self.op}" + ("" if self.value is None else f" {self.value}")
+
+    def condition(self) -> exp.Expression:
+        column = exp.column(self.metric)
+        if self.value is None:
+            test = exp.Is(this=column, expression=exp.null())
+            return exp.Not(this=test) if self.op == "IS NOT NULL" else test
+        # The value is rebuilt from digits the grammar matched; the sign becomes a negation.
+        assert _NUMBER.fullmatch(self.value)
+        number: exp.Expression = exp.Literal.number(self.value.lstrip("-"))
+        if self.value.startswith("-"):
+            number = exp.Neg(this=number)
+        return _COMPARISONS[self.op](this=column, expression=number)
+
+
+def parse_metric_filter(text: str) -> list[MetricCondition]:
+    """Parses one metric filter strictly: ``{metric} <op> <number>`` or ``{metric} IS [NOT]
+    NULL``, joined by ``AND`` (keywords in any case). Numbers are plain decimals, such as
+    ``1000``, ``-2.5`` or ``0.25``: no exponent, no quotes, at most 18 digits on each side of
+    the point. Raises QueryError on anything else."""
+    if not isinstance(text, str) or not text.strip():
+        raise QueryError("a metric filter cannot be empty")
+    if len(text) > MAX_METRIC_FILTER_LENGTH:
+        raise QueryError(f"a metric filter has at most {MAX_METRIC_FILTER_LENGTH} characters")
+    tokens: list[tuple[str, str]] = []
+    pos = 0
+    while pos < len(text):
+        if text[pos:].strip() == "":
+            break
+        match = _METRIC_TOKEN.match(text, pos)
+        if match is None or match.end() == pos:
+            raise QueryError(
+                f"metric filter `{text}`: unexpected text at position {pos + 1}; use "
+                "`{metric} <op> <number>` or `{metric} IS [NOT] NULL`, joined by AND"
+            )
+        kind = match.lastgroup
+        assert kind is not None
+        value = match.group(kind)
+        tokens.append((kind, value.upper() if kind == "word" else value))
+        pos = match.end()
+
+    def fail(detail: str) -> QueryError:
+        return QueryError(
+            f"metric filter `{text}`: {detail}; use `{{metric}} <op> <number>` or "
+            "`{metric} IS [NOT] NULL`, joined by AND"
+        )
+
+    out: list[MetricCondition] = []
+    i = 0
+    while True:
+        if i >= len(tokens) or tokens[i][0] != "ref":
+            raise fail("expected a `{metric}` reference")
+        metric = tokens[i][1][1:-1]
+        i += 1
+        if i < len(tokens) and tokens[i][0] == "op":
+            op = tokens[i][1]
+            i += 1
+            if i >= len(tokens) or tokens[i][0] != "number":
+                raise fail(f"`{op}` must be followed by a number")
+            out.append(MetricCondition(metric, op, tokens[i][1]))
+            i += 1
+        elif i < len(tokens) and tokens[i] == ("word", "IS"):
+            i += 1
+            negated = i < len(tokens) and tokens[i] == ("word", "NOT")
+            i += negated
+            if i >= len(tokens) or tokens[i] != ("word", "NULL"):
+                raise fail("`IS` must be followed by `NULL` or `NOT NULL`")
+            out.append(MetricCondition(metric, "IS NOT NULL" if negated else "IS NULL", None))
+            i += 1
+        else:
+            raise fail(f"`{{{metric}}}` must be followed by a comparison or `IS [NOT] NULL`")
+        if i == len(tokens):
+            return out
+        if tokens[i] != ("word", "AND"):
+            raise fail("conditions are joined by AND only")
+        i += 1
 
 
 def _pin_clock(tree: exp.Expression, as_of: dt.date, clock: dt.datetime) -> exp.Expression:

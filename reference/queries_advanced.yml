@@ -835,3 +835,88 @@ cases:
       metrics: [revenue_prev_month]
       dimensions: [orders.ordered_at__day]
     expect_error: QueryError
+
+  # -- Filters on metric values (DEC-29) --------------------------------------
+  # `metric_filters` keep the rows of the result whose metric values meet the conditions, after
+  # aggregation at the requested grain; the row filters still apply to the facts first, and the
+  # order and the limit apply to the rows kept. The hand-written SQL uses HAVING, never the
+  # outer WHERE the engine writes, so the two are checked against each other.
+  - id: A39
+    category: filtros
+    phase: 3
+    title: States above a revenue threshold under the user's row filter; the limit applies after it
+    request:
+      metrics: [revenue, order_count]
+      dimensions: [customers.state]
+      metric_filters: ["{revenue} > 450000", "{order_count} >= 100"]
+      order_by: [revenue]
+      limit: 1
+    user: { region: Northeast }
+    sql: |
+      SELECT c.state AS customers__state, SUM(o.amount) AS revenue, COUNT(*) AS order_count
+      FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+      WHERE c.region = 'Northeast'
+      GROUP BY c.state
+      HAVING SUM(o.amount) > 450000 AND COUNT(*) >= 100
+      ORDER BY revenue
+      LIMIT 1
+    sql_by_dialect:
+      tsql: |
+        SELECT TOP 1 c.state AS customers__state, SUM(o.amount) AS revenue,
+               COUNT(*) AS order_count
+        FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE c.region = 'Northeast'
+        GROUP BY c.state
+        HAVING SUM(o.amount) > 450000 AND COUNT(*) >= 100
+        ORDER BY revenue
+
+  # A ratio compared with a number, together with a count: a null segment is a group of its
+  # own and is kept when it meets the conditions.
+  - id: A40
+    category: filtros
+    phase: 3
+    title: Average order value above a threshold by status and segment, with enough orders
+    request:
+      metrics: [average_order_value, order_count]
+      dimensions: [orders.status, customers.segment]
+      metric_filters: ["{average_order_value} >= 2600 AND {order_count} > 5"]
+    user: { region: Northeast }
+    sql: |
+      SELECT o.status AS orders__status, c.segment AS customers__segment,
+             CAST(SUM(o.amount) AS DOUBLE PRECISION) / NULLIF(COUNT(*), 0) AS average_order_value,
+             COUNT(*) AS order_count
+      FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+      WHERE c.region = 'Northeast'
+      GROUP BY o.status, c.segment
+      HAVING CAST(SUM(o.amount) AS DOUBLE PRECISION) / NULLIF(COUNT(*), 0) >= 2600
+         AND COUNT(*) > 5
+    sql_by_dialect:
+      tsql: |
+        SELECT o.status AS orders__status, c.segment AS customers__segment,
+               CAST(SUM(o.amount) AS FLOAT) / NULLIF(COUNT(*), 0) AS average_order_value,
+               COUNT(*) AS order_count
+        FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+        WHERE c.region = 'Northeast'
+        GROUP BY o.status, c.segment
+        HAVING CAST(SUM(o.amount) AS FLOAT) / NULLIF(COUNT(*), 0) >= 2600
+           AND COUNT(*) > 5
+
+  - id: A41
+    category: filtros
+    phase: 3
+    title: A metric filter alongside a cumulative metric is refused (not in this slice)
+    request:
+      metrics: [revenue_month_to_date, revenue]
+      dimensions: [orders.ordered_at__day]
+      metric_filters: ["{revenue} > 0"]
+    expect_error: QueryError
+
+  - id: A42
+    category: filtros
+    phase: 3
+    title: A metric filter on a metric that is not requested is refused
+    request:
+      metrics: [revenue]
+      dimensions: [orders.status]
+      metric_filters: ["{order_count} > 10"]
+    expect_error: QueryError

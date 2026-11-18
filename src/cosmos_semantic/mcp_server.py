@@ -94,7 +94,10 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
 
     @mcp.tool(
         description=(
-            "Run a metrics request with the user's policies applied. "
+            "Run a metrics request with the user's policies applied. `metric_filters` keep "
+            "only the rows where a requested metric meets a condition, after aggregation, such "
+            "as `{revenue} > 1000`: a metric compared with a number (`=`, `<>`, `<`, `<=`, `>`, "
+            "`>=`) or `IS NULL` / `IS NOT NULL`, joined by AND; `limit` applies after them. "
             f"Returns at most {MAX_ROWS_FOR_AGENTS} rows."
         )
     )
@@ -103,6 +106,7 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
         ctx: Context,
         dimensions: list[str] | None = None,
         filters: list[str] | None = None,
+        metric_filters: list[str] | None = None,
         order_by: list[str] | None = None,
         limit: int | None = None,
         as_of: str | None = None,
@@ -113,6 +117,7 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
                 metrics=metrics,
                 dimensions=dimensions or [],
                 filters=filters or [],
+                metric_filters=metric_filters or [],
                 order_by=order_by or [],
                 limit=limit,
                 as_of=as_of,

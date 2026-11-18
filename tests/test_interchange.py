@@ -855,7 +855,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 58
+    assert len(REFERENCE) == 62
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1208,7 +1208,7 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     cases = _cube_cases(graph.project, policies=True, lost=CUBE_LOST)
     # A32 (month-to-date by quarter) is refused by the re-imported model too.
     assert {"R17", "R18", "A08", "A09", "A32"} <= {c.id for c in cases}
-    assert len(cases) == 43
+    assert len(cases) == 47
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1938,7 +1938,7 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     governed = compile_project(_with_policies(back.project, graph.project))
     cases = _cube_cases(graph.project, policies=True)
     assert {"R17", "R18"} <= {c.id for c in cases}
-    assert len(cases) == 40
+    assert len(cases) == 43
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"

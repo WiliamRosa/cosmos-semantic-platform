@@ -9,6 +9,24 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Filters on metric values, first slice (DEC-29): a request (`POST /v1/query`, `POST /v1/sql`,
+  the MCP tool `query`, `cosmos query` and `cosmos sql` with the repeatable `--metric-filter`)
+  takes `metric_filters` such as `{revenue} > 1000`, which keep only the rows of the result
+  whose metric values meet them, after aggregation at the requested grain. The row filters and
+  the request's `filters` still apply to the facts first; `order_by` and `limit` apply to the
+  rows kept. A condition compares one requested metric with a plain decimal number (`=`, `<>`,
+  `<`, `<=`, `>`, `>=`) or tests `IS NULL` / `IS NOT NULL`, joined by `AND`; the text is parsed
+  strictly and never reaches the SQL, and anything else (`OR`, parentheses, functions, strings,
+  comments, exponents, an unrequested metric) is refused. Simple, ratio and derived metrics are
+  allowed; requests with cumulative metrics or with inputs read at an earlier period are refused
+  with `metric_filters` for now. The planner computes the result into a CTE and keeps the rows
+  with an outer `WHERE` (SQL Server accepts `WITH` only at the top). The evidence lists the
+  conditions in `metric_filters`, next to `policies.row_filters`, with a caveat that a sum of
+  the rows kept is not the total. Reference cases A39 (a simple metric under a row filter, with
+  the limit after the filter) and A40 (a ratio, with a null group) have hand-written SQL with
+  `HAVING`; A41 and A42 are refusals; the randomized cross-database test draws 8 requests with
+  metric filters from its own generator. The SQL of every request without `metric_filters` is
+  unchanged ([semantic model](docs/semantic-model.md#filters-on-metric-values)).
 - Period-over-period metrics, first slice (DEC-18): a derived metric can read an input at an
   earlier period with `inputs: [{metric: revenue, offset: 1 month}]`, so `revenue_prev_month`
   and `revenue_mom_growth` (`({revenue} - {revenue_prev_month}) / {revenue_prev_month}`) are

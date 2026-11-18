@@ -62,8 +62,9 @@ The planner is the most delicate part of the product, because it is where a numb
 2. **Find the join path:** starting from the model that owns each measure, follow entities to the models of the requested dimensions, across several hops if needed. An ambiguous path is an error, never a silent choice.
 3. **Avoid row multiplication (fan-out):** when measures from different models appear together, each one is aggregated at its own grain, in a subquery, before the results are joined on the shared dimensions. This is the same strategy as MetricFlow.
 4. **Apply policies:** row filters from the user context enter the plan; columns marked as sensitive can only appear aggregated.
-5. **Generate SQL:** SQLGlot turns the plan into the source's dialect, including date truncation per grain.
-6. **Run and cap:** the connector runs the query with configurable row and time limits.
+5. **Filter on metric values:** `metric_filters` (such as `{revenue} > 1000`), parsed strictly into comparisons of requested metrics with numbers, keep the rows of the aggregated result that meet them, in an outer `WHERE`; ordering and the limit come after ([filters on metric values](semantic-model.md#filters-on-metric-values)).
+6. **Generate SQL:** SQLGlot turns the plan into the source's dialect, including date truncation per grain.
+7. **Run and cap:** the connector runs the query with configurable row and time limits.
 
 ## Engine behaviors the model must take into account
 
@@ -116,6 +117,7 @@ Every answer (REST, MCP and `cosmos query --evidence`) carries an `evidence` env
 | `data_source`, `principal` | Where the query ran, and who asked through which channel, with the user context |
 | `metrics` | Each metric expanded down to aggregations over model columns, its measures and glossary concepts |
 | `rules` | Business rules used (as filter or value), with owner, effective date, logic and test status |
+| `metric_filters` | Conditions on metric values the request applied after aggregation (`{revenue} > 1000`), each with its metric, operator and value |
 | `policies` | Row filters applied, the user context values they used and the CTEs they applied to |
 | `lineage` | Models and joins involved |
 | `sql`, `result` | Generated SQL and its hash; row count and an order-independent result hash |

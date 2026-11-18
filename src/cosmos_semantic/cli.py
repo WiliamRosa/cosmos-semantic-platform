@@ -58,12 +58,20 @@ def _principal(user: list[str] | None, channel: str = "cli") -> Principal:
 
 
 def _request(
-    metrics: list[str], dimensions, filters, order_by, limit, as_of, rules_as_of=None
+    metrics: list[str],
+    dimensions,
+    filters,
+    order_by,
+    limit,
+    as_of,
+    rules_as_of=None,
+    metric_filters=None,
 ) -> QueryRequest:
     return QueryRequest(
         metrics=metrics,
         dimensions=dimensions or [],
         filters=filters or [],
+        metric_filters=metric_filters or [],
         order_by=order_by or [],
         limit=limit,
         as_of=dt.date.fromisoformat(as_of) if as_of else None,
@@ -73,6 +81,16 @@ def _request(
 
 DimOpt = Annotated[list[str] | None, typer.Option("--by", "-b", help="Dimensions to group by.")]
 WhereOpt = Annotated[list[str] | None, typer.Option("--where", "-w", help="Filter expressions.")]
+MetricFilterOpt = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--metric-filter",
+        help=(
+            "Keep only the rows where a requested metric meets a condition, after aggregation, "
+            "such as `{revenue} > 1000`; repeatable (conditions are joined by AND)."
+        ),
+    ),
+]
 OrderOpt = Annotated[
     list[str] | None, typer.Option("--order", help="Order by; `-` for descending.")
 ]
@@ -180,6 +198,7 @@ def sql(
     connections: ConnOpt = Path("connections.yml"),
     dimension: DimOpt = None,
     filter: WhereOpt = None,
+    metric_filter: MetricFilterOpt = None,
     order_by: OrderOpt = None,
     limit: LimitOpt = None,
     as_of: AsOfOpt = None,
@@ -191,7 +210,9 @@ def sql(
     try:
         engine = Engine.from_paths(model, load_connections(connections))
         compiled = engine.compile(
-            _request(metrics, dimension, filter, order_by, limit, as_of, rules_as_of),
+            _request(
+                metrics, dimension, filter, order_by, limit, as_of, rules_as_of, metric_filter
+            ),
             _principal(user, "mcp" if agent else "cli"),
         )
     except errors.CosmosError as exc:
@@ -206,6 +227,7 @@ def query(
     connections: ConnOpt = Path("connections.yml"),
     dimension: DimOpt = None,
     filter: WhereOpt = None,
+    metric_filter: MetricFilterOpt = None,
     order_by: OrderOpt = None,
     limit: LimitOpt = None,
     as_of: AsOfOpt = None,
@@ -230,6 +252,8 @@ def query(
     Example:
 
         cosmos query revenue average_order_value --by orders.status --csv
+
+        cosmos query revenue --by customers.state --metric-filter "{revenue} > 1000"
     """
     from cosmos_semantic.service import SemanticService
 
@@ -238,7 +262,9 @@ def query(
     try:
         engine = Engine.from_paths(model, load_connections(connections))
         result = SemanticService(engine).query(
-            _request(metrics, dimension, filter, order_by, limit, as_of, rules_as_of),
+            _request(
+                metrics, dimension, filter, order_by, limit, as_of, rules_as_of, metric_filter
+            ),
             _principal(user, "mcp" if agent else "cli"),
         )
     except errors.CosmosError as exc:
@@ -309,6 +335,8 @@ def _print_evidence(ev: dict, out=typer.echo) -> None:
         )
     for f in ev["policies"]["row_filters"]:
         out(f"  policy  {f['model']}.{f['name']}: {f['filter']} {f['user_fields']}")
+    for f in ev.get("metric_filters", []):
+        out(f"  kept    {f['text']} (metric filter, after aggregation)")
     out(f"  lineage {', '.join(ev['lineage']['models'])}")
     out(
         f"  sql     {ev['sql']['hash'][:16]}  result {ev['result']['hash'][:16]} "
