@@ -28,7 +28,8 @@ Cosmos semantic layer. Before querying:
    `__week`, `__month`, `__quarter`, `__year`. Predicate business rules are used as the
    filter `{rule.name}`; filters compare `{model.dimension}` references with values. Before
    filtering by a value, call `dimension_values` to get the exact values (such as `BR` or
-   `Brazil`): a guessed value returns zero rows that look real.
+   `Brazil`): a guessed value returns zero rows that look real. For a time dimension it
+   returns the first and last day with data, so check it before a relative date range.
 Personal data (LGPD) never reaches agents: grouping or filtering by it is denied.
 Always answer with the number the tool returned. Every `query` result has an `evidence`
 envelope: cite the metric formula, the business rules applied (with owner and test status),
@@ -129,7 +130,10 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
             "user's row filters. Use it to filter by an exact value. Personal data is refused. "
             f"Returns at most {MAX_DIMENSION_VALUES} values; ties in count are ordered by value. "
             f"Past {VALUES_FETCH_CEILING} distinct values the list is marked truncated, and ties "
-            "at that cut-off may differ between databases."
+            "at that cut-off may differ between databases. For a time dimension it returns its "
+            "date range instead: `min` and `max` (the first and last day holding rows, ISO dates "
+            "in the model's time zone) and `distinct_days`; null, null and 0 when no row is "
+            "visible. Call it before answering 'last month' or 'since launch'."
         )
     )
     def dimension_values(name: str, ctx: Context, limit: int | None = None) -> dict[str, Any]:
