@@ -441,8 +441,9 @@ class Planner:
     ) -> exp.Expression | None:
         """The request's ``metric_filters`` as one condition over the output columns (DEC-29),
         or None without them. Each filter is parsed strictly by ``parse_metric_filter``; only
-        requested metrics are compared, and not alongside running totals, rolling windows or
-        inputs read at an earlier period, whose rows the filter would remove from the window."""
+        requested metrics are compared. Running totals, rolling windows and inputs read at an
+        earlier period are refused for now as a first-slice limit; they are computed inside
+        ``cosmos_result`` before the outer WHERE, so lifting it needs no change to the SQL."""
         if not request.metric_filters:
             return None
         if len(request.metric_filters) > MAX_METRIC_FILTERS:
