@@ -37,6 +37,28 @@ def test_schema_matches_committed_file():
     assert committed == json.loads(json.dumps(json_schema(), ensure_ascii=False))
 
 
+@pytest.mark.parametrize("value", ["7 days", "1 day", "12 hours", "2 weeks", " 3 Days "])
+def test_health_max_age_accepts_hours_days_and_weeks(value):
+    assert Project.model_validate({"version": 1, "health": {"max_age": value}}).health
+
+
+@pytest.mark.parametrize("value", ["7", "0 days", "1 month", "-1 days", "a week", "1.5 days"])
+def test_health_max_age_rejects_other_values(value):
+    with pytest.raises(ValueError, match="health.max_age"):
+        Project.model_validate({"version": 1, "health": {"max_age": value}})
+
+
+def test_model_files_must_agree_on_health_settings(tmp_path):
+    from cosmos_semantic.loader import load_project
+
+    (tmp_path / "a.yml").write_text("version: 1\nhealth: {max_age: 7 days}\n")
+    (tmp_path / "b.yml").write_text("version: 1\n")
+    assert load_project(tmp_path).health.max_age == "7 days"
+    (tmp_path / "c.yml").write_text("version: 1\nhealth: {max_age: 1 day}\n")
+    with pytest.raises(ModelError, match="health"):
+        load_project(tmp_path)
+
+
 def test_version_is_required():
     with pytest.raises(ValueError):
         Project.model_validate({"semantic_models": []})

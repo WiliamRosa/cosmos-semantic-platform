@@ -173,7 +173,12 @@ export interface Run {
 
 export interface Member {
   detail: Record<string, unknown> & { kind: string; name: string };
-  health: { state: State; reasons: Reason[] } | null;
+  health: {
+    state: State;
+    reasons: Reason[];
+    last_reconciled_at?: string | null;
+    last_tests_run_at?: string | null;
+  } | null;
   formula?: string;
   tests?: { total: number; failed: number; failures: string[] };
   impact?: {

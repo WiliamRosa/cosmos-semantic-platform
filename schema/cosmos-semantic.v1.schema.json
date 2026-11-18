@@ -566,6 +566,27 @@
       "title": "Entity",
       "type": "object"
     },
+    "HealthSettings": {
+      "additionalProperties": false,
+      "description": "How member health is judged (``explain`` and the console).",
+      "properties": {
+        "max_age": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How old the last reconciliation of a metric may be, such as `7 days`, before a healthy metric needs attention (`reconciliation_stale`). Hours, days or weeks. Default: no limit.",
+          "title": "Max Age"
+        }
+      },
+      "title": "HealthSettings",
+      "type": "object"
+    },
     "Measure": {
       "additionalProperties": false,
       "properties": {
@@ -1274,6 +1295,18 @@
       "default": null,
       "description": "Business time zone, such as `America/New_York`. Defines what \"today\" means for rules and filters using CURRENT_DATE, identically on every data source. Default: UTC.",
       "title": "Timezone"
+    },
+    "health": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HealthSettings"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How member health is judged, such as `max_age: 7 days`."
     },
     "semantic_models": {
       "default": [],
