@@ -293,6 +293,10 @@ def test_refusals_are_the_same_everywhere(graph, connectors):
             Principal(user={"region": "Midwest"}, channel="mcp"),
         ),
         (QueryRequest(metrics=["revenue_month_to_date"]), Principal()),
+        (
+            QueryRequest(metrics=["revenue_year_to_date"], dimensions=["orders.ordered_at__week"]),
+            Principal(),
+        ),
     ]
     for request, principal in bad:
         errors = set()

@@ -28,6 +28,28 @@ from cosmos_semantic.spec import (
 TIME_GRAINS = ("hour", "day", "week", "month", "quarter", "year")
 
 
+def to_date_grain_problem(to_date: str, grain: str | None) -> str | None:
+    """Why a ``to_date``-to-date metric cannot be grouped by ``grain``, or None when it can.
+
+    A grain coarser than the period would only give each bucket's total (DEC-21). A week does
+    not nest in a month, quarter or year: the week that crosses into a new period would be
+    counted in the old one (DEC-28)."""
+    period = TIME_GRAINS.index(to_date)
+    # Week nests only in a week; every other grain nests in each coarser one.
+    fits = [g for g in TIME_GRAINS[: period + 1] if g != "week" or to_date == "week"]
+    if not grain or grain in fits:
+        return None
+    if TIME_GRAINS.index(grain) > period:
+        why = f"each {grain} would only give its total"
+    else:
+        why = f"a week can cross into a new {to_date} and would be counted in the old one"
+    shown = fits[1:]  # hour is accepted too, but rarely what is meant
+    use = shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} or {shown[-1]}"
+    return (
+        f"a {to_date}-to-date metric cannot be grouped by {grain}, since {why}; use the {use} grain"
+    )
+
+
 @dataclass(frozen=True)
 class Issue:
     severity: Literal["error", "warning"]
