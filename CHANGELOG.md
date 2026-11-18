@@ -9,6 +9,21 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- `cosmos export cube` writes rolling windows in days (DEC-30): a cumulative metric with
+  `window: N days` over a `sum`, `count`, `min` or `max` measure becomes a measure of that type
+  with `rolling_window: {trailing: N day, offset: end}`, so the example's
+  `revenue_rolling_7_days`, `smallest_order_rolling_7_days` and `customers_rolling_30_days` are
+  no longer refused. With `offset: end`, Cube's window for a day bucket is the N days ending on
+  that day, the row's day included, as in Cosmos. `cosmos import cube` reads it back as the same
+  window; a trailing window in days with `offset: start` or `leading` does not end on the row's
+  day and is now skipped with a warning instead of being imported as a Cosmos window. The
+  docs list where Cube's window differs: days without facts, grains coarser than a day, date
+  filters (Cube reads the days before the range), a joined cube's day and rows with a null
+  time. Ratio and derived metrics over a window and offsets stay refused. Tests: the
+  re-imported example answers 30 reference queries (47 with its policies) with the
+  hand-written SQL's numbers, A29, A30, A33 and A34 among them, and windows of 1, 7 and 30
+  days over measures of two cubes return the native numbers by day, by day and another
+  dimension, and with a time filter. The planner and the SQL of every request are unchanged.
 - Period-over-period metrics, first slice (DEC-18): a derived metric can read an input at an
   earlier period with `inputs: [{metric: revenue, offset: 1 month}]`, so `revenue_prev_month`
   and `revenue_mom_growth` (`({revenue} - {revenue_prev_month}) / {revenue_prev_month}`) are
