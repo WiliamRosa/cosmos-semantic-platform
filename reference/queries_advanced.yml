@@ -841,7 +841,7 @@ cases:
   # aggregation at the requested grain; the row filters still apply to the facts first, and the
   # order and the limit apply to the rows kept. The hand-written SQL uses HAVING, never the
   # outer WHERE the engine writes, so the two are checked against each other.
-  - id: A39
+  - id: A40
     category: filtros
     phase: 3
     title: States above a revenue threshold under the user's row filter; the limit applies after it
@@ -872,7 +872,7 @@ cases:
 
   # A ratio compared with a number, together with a count: a null segment is a group of its
   # own and is kept when it meets the conditions.
-  - id: A40
+  - id: A41
     category: filtros
     phase: 3
     title: Average order value above a threshold by status and segment, with enough orders
@@ -901,7 +901,7 @@ cases:
         HAVING CAST(SUM(o.amount) AS FLOAT) / NULLIF(COUNT(*), 0) >= 2600
            AND COUNT(*) > 5
 
-  - id: A41
+  - id: A42
     category: filtros
     phase: 3
     title: A metric filter alongside a cumulative metric is refused (not in this slice)
@@ -911,7 +911,7 @@ cases:
       metric_filters: ["{revenue} > 0"]
     expect_error: QueryError
 
-  - id: A42
+  - id: A43
     category: filtros
     phase: 3
     title: A metric filter on a metric that is not requested is refused

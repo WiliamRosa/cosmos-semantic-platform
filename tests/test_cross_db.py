@@ -231,7 +231,7 @@ def _metric_filter_requests(graph, count: int, seed: int):
     """Requests with conditions on metric values (DEC-29): up to two metrics without running
     totals or offsets, up to two dimensions, a request filter or none, and one or two
     conditions on the requested metrics. No limit: strings sort by each database's collation,
-    so a limit could keep different rows (A39 checks the limit with a numeric order). Its own
+    so a limit could keep different rows (A40 checks the limit with a numeric order). Its own
     generator, as for rolling windows."""
     rng = random.Random(seed)
     plain = sorted(

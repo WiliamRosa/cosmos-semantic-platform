@@ -1,5 +1,5 @@
 """Filters on metric values (DEC-29): strict parsing, refusals, injection attempts and the
-numbers they keep. The reference cases A39-A42 check the numbers against hand-written SQL."""
+numbers they keep. The reference cases A40-A43 check the numbers against hand-written SQL."""
 
 from __future__ import annotations
 

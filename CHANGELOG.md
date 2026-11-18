@@ -22,9 +22,9 @@ format or the API; such changes are listed under **Changed**.
   with `metric_filters` for now. The planner computes the result into a CTE and keeps the rows
   with an outer `WHERE` (SQL Server accepts `WITH` only at the top). The evidence lists the
   conditions in `metric_filters`, next to `policies.row_filters`, with a caveat that a sum of
-  the rows kept is not the total. Reference cases A39 (a simple metric under a row filter, with
-  the limit after the filter) and A40 (a ratio, with a null group) have hand-written SQL with
-  `HAVING`; A41 and A42 are refusals; the randomized cross-database test draws 8 requests with
+  the rows kept is not the total. Reference cases A40 (a simple metric under a row filter, with
+  the limit after the filter) and A41 (a ratio, with a null group) have hand-written SQL with
+  `HAVING`; A42 and A43 are refusals; the randomized cross-database test draws 8 requests with
   metric filters from its own generator. The SQL of every request without `metric_filters` is
   unchanged ([semantic model](docs/semantic-model.md#filters-on-metric-values)).
 - Period-over-period metrics, first slice (DEC-18): a derived metric can read an input at an
