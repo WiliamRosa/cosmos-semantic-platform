@@ -396,7 +396,7 @@ _MAX_AGE_UNITS = {"hour": "hours", "day": "days", "week": "weeks"}
 def parse_max_age(text: str) -> dt.timedelta | None:
     """The age in ``N hours``, ``N days`` or ``N weeks`` (singular too); None for anything
     else."""
-    match = re.fullmatch(r"\s*(\d+)\s+(hour|day|week)s?\s*", text or "", re.IGNORECASE)
+    match = re.fullmatch(r"\s*(\d{1,4})\s+(hour|day|week)s?\s*", text or "", re.IGNORECASE)
     if not match or int(match.group(1)) <= 0:
         return None
     return dt.timedelta(**{_MAX_AGE_UNITS[match.group(2).lower()]: int(match.group(1))})

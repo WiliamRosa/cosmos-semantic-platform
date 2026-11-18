@@ -42,7 +42,9 @@ def test_health_max_age_accepts_hours_days_and_weeks(value):
     assert Project.model_validate({"version": 1, "health": {"max_age": value}}).health
 
 
-@pytest.mark.parametrize("value", ["7", "0 days", "1 month", "-1 days", "a week", "1.5 days"])
+@pytest.mark.parametrize(
+    "value", ["7", "0 days", "1 month", "-1 days", "a week", "1.5 days", "99999999999 weeks"]
+)
 def test_health_max_age_rejects_other_values(value):
     with pytest.raises(ValueError, match="health.max_age"):
         Project.model_validate({"version": 1, "health": {"max_age": value}})
