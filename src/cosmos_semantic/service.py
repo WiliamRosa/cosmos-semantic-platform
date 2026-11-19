@@ -289,7 +289,12 @@ class SemanticService:
             # The type only: the message of a parse error may quote the file.
             log.warning("cannot read the check runs log: %s", type(exc).__name__)
             g = self.engine.graph
-            unreadable = {"state": "unchecked", "reasons": [{"code": "runs_log_unreadable"}]}
+            unreadable = {
+                "state": "unchecked",
+                "reasons": [{"code": "runs_log_unreadable"}],
+                "last_reconciled_at": None,
+                "last_tests_run_at": None,
+            }
             keys = [f"rule:{n}" for n in g.rules] + [f"metric:{n}" for n in g.metrics]
             keys += [f"measure:{n}" for n in g.measure_owner]
             keys += [f"process:{p.name}" for p in g.project.processes]

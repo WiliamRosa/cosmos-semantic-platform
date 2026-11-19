@@ -10,9 +10,11 @@ from fastapi.testclient import TestClient
 
 from cosmos_semantic.api import create_app
 from cosmos_semantic.auth import Authenticator, AuthSettings, DevKey
+from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.connectors import ConnectionsFile, DataSourceConfig
 from cosmos_semantic.engine import Engine
 from cosmos_semantic.service import SemanticService
+from cosmos_semantic.spec import Project
 
 ISSUER = "https://login.microsoftonline.com/tenant-teste/v2.0"
 AUDIENCE = "api://cosmos-semantic"
@@ -116,6 +118,8 @@ def test_concepts_and_explain(client):
     assert rule["health"] == {
         "state": "healthy",
         "reasons": [{"code": "rule_tests_pass", "total": 3}],
+        "last_reconciled_at": None,
+        "last_tests_run_at": None,
     }
 
 
@@ -136,13 +140,42 @@ def test_explain_carries_the_console_health(graph, monkeypatch, tmp_path):
     console = client.get("/v1/console/members/metric:completed_revenue", headers=headers).json()
     assert metric["health"] == console["health"]
     assert metric["health"]["state"] == "failing"
+    assert metric["health"]["last_reconciled_at"] == "2026-11-15T12:00:00+00:00"
+    assert metric["health"]["reasons"][0]["at"] == "2026-11-15T12:00:00+00:00"
+    # The run recorded no rule tests, so none ran in it.
+    assert metric["health"]["last_tests_run_at"] is None
     assert {k: v for k, v in metric.items() if k != "health"} == console["detail"]
     assert client.get("/v1/explain/metric:net_revenue", headers=headers).json()["health"] == {
         "state": "unchecked",
         "reasons": [{"code": "never_reconciled"}],
+        "last_reconciled_at": None,
+        "last_tests_run_at": None,
     }
     unknown = client.get("/v1/explain/metric:does_not_exist", headers=headers)
     assert unknown.status_code == 400 and "health" not in unknown.text
+
+
+def test_explain_and_console_agree_on_a_stale_reconciliation(graph, monkeypatch, tmp_path):
+    data = graph.project.model_dump(mode="json")
+    data["health"] = {"max_age": "2 weeks"}
+    aged = compile_project(Project.model_validate(data))
+    runs = tmp_path / "runs.jsonl"
+    at = "2020-01-01T00:00:00+00:00"
+    case = {"id": "R2", "title": "Orders", "metrics": ["order_count"], "outcome": "pass"}
+    run = {"event": "check", "run_id": "run_1", "at": at, "reconciliations": [case]}
+    runs.write_text(json.dumps(run) + "\n")
+    monkeypatch.setenv("COSMOS_RUNS_LOG", str(runs))
+    engine = Engine(aged, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
+    settings = AuthSettings(dev_keys={"analyst": DevKey(subject="analyst@example.com", user={})})
+    service = SemanticService(engine, admins=set())
+    client = TestClient(create_app(service, Authenticator(settings, aged.project.user_context)))
+    headers = {"X-API-Key": "analyst"}
+
+    explained = client.get("/v1/explain/order_count", headers=headers).json()["health"]
+    member = client.get("/v1/console/members/measure:order_count", headers=headers).json()
+    assert explained == member["health"]
+    assert explained["state"] == "attention" and explained["last_reconciled_at"] == at
+    assert {"code": "reconciliation_stale", "at": at, "max_age": "2 weeks"} in explained["reasons"]
 
 
 def test_explain_survives_an_unreadable_runs_log(graph, monkeypatch, tmp_path, caplog):
@@ -160,6 +193,8 @@ def test_explain_survives_an_unreadable_runs_log(graph, monkeypatch, tmp_path, c
     assert response.json()["health"] == {
         "state": "unchecked",
         "reasons": [{"code": "runs_log_unreadable"}],
+        "last_reconciled_at": None,
+        "last_tests_run_at": None,
     }
     assert "cannot read the check runs log" in caplog.text and "secret-ish" not in caplog.text
 

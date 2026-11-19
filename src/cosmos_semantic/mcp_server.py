@@ -83,7 +83,8 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
             "definition, owner, source systems, processes and logic. Metrics, measures, rules "
             "and processes also carry `health`: whether the number is checked (`healthy`, "
             "`attention`, `failing` or `unchecked`), with the reasons (rule tests, last "
-            "reconciliation). Mention it when you quote a number that is not healthy."
+            "reconciliation) and `last_reconciled_at`. Mention it when you quote a number that "
+            "is not healthy or was last reconciled long ago."
         )
     )
     def explain(name: str, ctx: Context) -> dict[str, Any]:
