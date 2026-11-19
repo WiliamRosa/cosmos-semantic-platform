@@ -288,7 +288,7 @@ class Planner:
         if ref.grain or dim.type not in ("categorical", "boolean"):
             raise QueryError(
                 f"`{dimension}` is a {dim.type} dimension; values are listed only for "
-                "categorical and boolean dimensions"
+                "categorical and boolean dimensions (a time dimension gets its date range)"
             )
         counts, joined = self._group_select(
             _Group(ref.model), [ref], [], principal, label="dimension_values"
@@ -306,6 +306,59 @@ class Planner:
             sql=dialects.adapt(final, self.dialect).sql(dialect=self.dialect, pretty=True),
             dialect=self.dialect,
             columns=[OutputColumn(ref.alias, "dimension", _dim_member(ref))],
+            data_source=g.models[ref.model].spec.data_source,
+            models=sorted(joined),
+            as_of=now.date(),
+            rules_as_of=self._rules_as_of,
+            trace=self._trace,
+        )
+
+    def plan_time_range(self, dimension: str, principal: Principal | None = None) -> CompiledQuery:
+        """The first and last day of a time dimension that hold rows of its own model, and how
+        many distinct days do, after that model's row filters (DEC-24). Days are the model's
+        local days, the business time zone, as in a `__day` grouping: the dimension is
+        truncated to the day by the same path, then the days are aggregated. Rows whose time is
+        null hold no day. With no rows, the minimum and maximum are null and the count is 0.
+        Personal or sensitive dimensions are refused for every channel, as in ``plan_values``."""
+        principal = principal or Principal()
+        g = self.graph
+        self._trace = QueryTrace()
+        now = self.now()
+        self._rules_as_of = now.date()
+        ref = g.resolve_dimension(dimension)
+        dim = g.dimension(ref)
+        if dim.sensitivity:
+            raise PolicyError(
+                f"`{ref.model}.{ref.name}` is {_LEVEL[dim.sensitivity]} data (LGPD); "
+                "its range is never listed"
+            )
+        if dim.type != "time":
+            raise QueryError(f"`{dimension}` is a {dim.type} dimension, not a time dimension")
+        if ref.grain:
+            raise QueryError(
+                f"`{dimension}` has a grain; ask for `{ref.model}.{ref.name}`: "
+                "the range is always in days"
+            )
+        day = DimensionRef(ref.model, ref.name, "day")
+        days, joined = self._group_select(
+            _Group(ref.model), [day], [], principal, label="time_range"
+        )
+        column = exp.column(day.alias)
+        final = (
+            exp.select(
+                exp.Min(this=column.copy()).as_("min_day"),
+                exp.Max(this=column.copy()).as_("max_day"),
+                # COUNT(column) skips the null day of rows without a time.
+                exp.Count(this=column.copy()).as_("distinct_days"),
+            )
+            .from_("time_range")
+            .with_("time_range", as_=days)
+        )
+        final = _pin_clock(final, now.date(), now)
+        return CompiledQuery(
+            sql=dialects.adapt(final, self.dialect).sql(dialect=self.dialect, pretty=True),
+            dialect=self.dialect,
+            columns=[OutputColumn(day.alias, "dimension", _dim_member(ref))],
             data_source=g.models[ref.model].spec.data_source,
             models=sorted(joined),
             as_of=now.date(),

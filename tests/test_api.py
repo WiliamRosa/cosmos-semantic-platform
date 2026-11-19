@@ -313,7 +313,14 @@ def test_dimension_values_endpoint_is_audited(graph, duckdb_connector, tmp_path)
 
     personal = client.get("/v1/dimensions/customers.tax_id/values", headers=headers)
     assert personal.status_code == 403
-    assert client.get("/v1/dimensions/orders.ordered_at/values", headers=headers).status_code == 400
+    time_range = client.get(
+        "/v1/dimensions/customers.created_at/values", params={"limit": 1}, headers=headers
+    ).json()
+    assert time_range["type"] == "time" and time_range["distinct_days"] > 1
+    assert time_range["min"] <= time_range["max"]
+    assert time_range["evidence"]["row_filters"][0]["user_fields"] == {"region": "Midwest"}
+    grained = client.get("/v1/dimensions/orders.ordered_at__day/values", headers=headers)
+    assert grained.status_code == 400
     assert client.get("/v1/dimensions/nope.nope/values", headers=headers).status_code == 400
     zero = client.get("/v1/dimensions/orders.status/values", params={"limit": 0}, headers=headers)
     assert zero.status_code == 400
@@ -325,8 +332,13 @@ def test_dimension_values_endpoint_is_audited(graph, duckdb_connector, tmp_path)
     assert first["principal"]["subject"] == "dev@local"
     assert first["request"] == {"dimensions": ["orders.status"], "limit": 100}
     assert "GROUP BY" in first["sql"] and first["row_count"] == len(body["values"])
-    assert [r["outcome"] for r in values[-4:]] == ["error"] * 4
-    assert "PolicyError" in values[-4]["error"]
+    ranged = next(r for r in values if r["request"]["dimensions"] == ["customers.created_at"])
+    assert ranged["outcome"] == "ok" and ranged["request"] == {
+        "dimensions": ["customers.created_at"]
+    }
+    assert ranged["query_id"] == time_range["evidence"]["query_id"] and ranged["row_count"] == 1
+    assert [r["outcome"] for r in values[-5:]] == ["error", "ok", "error", "error", "error"]
+    assert "PolicyError" in values[-5]["error"] and "always in days" in values[-3]["error"]
     assert values[-1]["request"]["limit"] == 0 and "at least 1" in values[-1]["error"]
     # A dimension_values record is not a query: it does not replay.
     replay = client.post(f"/v1/replay/{first['query_id']}", headers=headers)

@@ -279,9 +279,10 @@ def test_dimension_values_refuse_personal_and_non_categorical(server, monkeypatc
     for name in ("customers.email", "customers.health_plan"):
         result = call(server, "dimension_values", name=name)
         assert result["error"] == "PolicyError" and "never listed" in result["detail"]
-    for name in ("customers.created_at", "customers.created_at__month", "payments.installments"):
-        result = call(server, "dimension_values", name=name)
-        assert result["error"] == "QueryError" and "categorical and boolean" in result["detail"]
+    result = call(server, "dimension_values", name="payments.installments")
+    assert result["error"] == "QueryError" and "categorical and boolean" in result["detail"]
+    grained = call(server, "dimension_values", name="customers.created_at__month")
+    assert grained["error"] == "QueryError" and "always in days" in grained["detail"]
     unknown = call(server, "dimension_values", name="customers.planet")
     assert unknown["error"] == "QueryError" and "does not exist" in unknown["detail"]
 
@@ -317,3 +318,41 @@ def test_agent_filters_on_metric_values(server, monkeypatch):
         metric_filters=["{customer_count} > 0; DELETE FROM public.customers"],
     )
     assert refused["error"] == "QueryError"
+
+
+def test_time_range_is_the_days_the_user_can_see(server, duckdb_connector, monkeypatch):
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    result = call(server, "dimension_values", name="customers.created_at", limit=1)
+    grouped = call(
+        server, "query", metrics=["customer_count"], dimensions=["customers.created_at__day"]
+    )
+    days = sorted(r["customers__created_at__day"][:10] for r in grouped["rows"])
+    assert result["dimension"] == "customers.created_at" and result["type"] == "time"
+    assert (result["min"], result["max"], result["distinct_days"]) == (
+        days[0],
+        days[-1],
+        len(days),
+    )
+    applied = result["evidence"]["row_filters"]
+    assert applied[0]["name"] == "by_region" and applied[0]["user_fields"] == {"region": "Midwest"}
+    assert result["evidence"]["timezone"] == "America/New_York"
+    # The row filter narrows the range: other regions' days are not revealed.
+    every = duckdb_connector.execute(
+        "SELECT COUNT(DISTINCT created_at) AS n FROM public.customers"
+    ).to_pylist()[0]["n"]
+    assert result["distinct_days"] < every
+
+
+def test_time_range_of_a_timestamp_column(server, duckdb_connector, monkeypatch):
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    result = call(server, "dimension_values", name="orders.ordered_at")
+    day = "CAST(ordered_at AS DATE)"
+    want = duckdb_connector.execute(
+        f"SELECT MIN({day}) AS a, MAX({day}) AS b, COUNT(DISTINCT {day}) AS n FROM public.orders"
+    ).to_pylist()[0]
+    assert (result["min"], result["max"], result["distinct_days"]) == (
+        want["a"].isoformat(),
+        want["b"].isoformat(),
+        want["n"],
+    )
+    assert len(result["min"]) == 10  # an ISO date, not a timestamp
