@@ -69,6 +69,8 @@ Health always uses the same four states:
 | Healthy | Its tests pass and, for a metric, its last reconciliation matched |
 | Not verified | Nothing verifies it yet |
 
+A metric's page also says when it was last reconciled and when the rule tests last ran. With `health.max_age` in the model (for example `7 days`), a metric whose last reconciliation is older than that needs attention ([member health](architecture.md#member-health)).
+
 ## Public demo
 
 [wiliamrosa.github.io/cosmos-semantic-platform](https://wiliamrosa.github.io/cosmos-semantic-platform/) is the console on the example model with synthetic data. The `demo` workflow rebuilds it on every change to `main`, and it needs no server:

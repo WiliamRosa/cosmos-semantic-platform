@@ -177,7 +177,7 @@ A request (`POST /v1/query`, `POST /v1/sql`, the MCP tool `query` and `cosmos qu
 
 Remote MCP clients use `/mcp` as an OAuth protected resource: requests without a valid token get HTTP 401 with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`, which names the identity provider (set `COSMOS_PUBLIC_URL` behind a proxy).
 
-For local MCP clients (Claude Desktop, Claude Code), use the stdio transport: `cosmos mcp -m ... -c ...` with `COSMOS_API_KEY` set. The tools are `search_concepts`, `explain`, `list_members`, `query`, `show_sql`, `replay`, `impact` and `dimension_values`. `explain` also tells whether a metric, measure, rule or process is checked: its `health` (`healthy`, `attention`, `failing` or `unchecked`) with the reasons (rule tests, last reconciliation), the same as in the console. Every call runs as the user who owns the token; personal data never reaches agents.
+For local MCP clients (Claude Desktop, Claude Code), use the stdio transport: `cosmos mcp -m ... -c ...` with `COSMOS_API_KEY` set. The tools are `search_concepts`, `explain`, `list_members`, `query`, `show_sql`, `replay`, `impact` and `dimension_values`. `explain` also tells whether a metric, measure, rule or process is checked: its `health` (`healthy`, `attention`, `failing` or `unchecked`) with the reasons (rule tests, last reconciliation) and when it was last reconciled, the same as in the console. Every call runs as the user who owns the token; personal data never reaches agents.
 
 ### Data sources
 

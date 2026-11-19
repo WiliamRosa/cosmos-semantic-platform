@@ -233,6 +233,29 @@ Every inference goes into the report (`--report report.json`); the draft is a st
 | `impact` | What a change to a member affects, by owner, source systems and processes |
 | `dimension_values` | The distinct values of a categorical or boolean dimension with their row counts, after the user's row filters (also `GET /v1/dimensions/{name}/values`) |
 
+### Member health
+
+`explain` (MCP and `GET /v1/explain/{name}`) and the console's member view (`GET /v1/console/members/{id}`) return the same `health`, computed by `cosmos_semantic.health` from the rule tests and the latest check run in `COSMOS_RUNS_LOG`. It holds no audit data, so any authenticated user sees it. Each member's health has a `state`, `reasons` (codes with parameters, never sentences) and two timestamps:
+
+| Field | Meaning |
+| --- | --- |
+| `last_reconciled_at` | When the latest check run reconciled this metric or measure (ISO 8601); null when it did not, and for rules and processes |
+| `last_tests_run_at` | When the latest check run ran the rule tests; null when no run recorded them |
+
+| Reason | State | Parameters |
+| --- | --- | --- |
+| `rule_tests_fail` | `failing` | `failed`, `total` |
+| `rule_tests_pass` | `healthy` | `total` |
+| `no_tests` | `unchecked` | |
+| `never_reconciled` | `unchecked` | |
+| `reconciliation_failed` | `failing` | `case`, `title`, `at` (when that check run ran) |
+| `reconciled` | `healthy` | `count`, `at` |
+| `reconciliation_stale` | `attention` | `at`, `max_age`: the metric matched, but longer ago than the project's `health.max_age` |
+| `depends_on_failing` | `attention` | `member` |
+| `runs_log_unreadable` | `unchecked` | |
+
+Without `health.max_age` no reconciliation is ever stale, and states are as before. A run without a readable `at` counts as stale when `max_age` is set. Rule tests run again each time health is computed, so they are never stale.
+
 ## Authoring flow
 
 1. The user edits files in `semantic/`, or imports an Ossie, dbt or Cube model.

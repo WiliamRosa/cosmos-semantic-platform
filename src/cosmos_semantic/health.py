@@ -10,10 +10,18 @@ The vocabulary, the same everywhere:
 - ``attention``: the member depends on something failing.
 - ``healthy``: tests pass and, for a metric, its last reconciliation matched.
 - ``unchecked``: nothing verifies it yet (no rule tests, or a metric never reconciled).
+
+Every state also says how fresh it is: ``last_reconciled_at`` (when the latest check run
+reconciled the metric or measure) and ``last_tests_run_at`` (when the latest check run ran the
+rule tests), ISO timestamps or null. With ``health.max_age`` in the project, a metric whose
+last reconciliation matched but is older than that needs ``attention``
+(``reconciliation_stale``). Rule tests run again each time health is computed, so they are
+never stale.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 from collections import defaultdict
 from functools import cached_property
@@ -21,11 +29,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cosmos_semantic.checks import read_runs
+from cosmos_semantic.spec import parse_max_age
 
 if TYPE_CHECKING:
     from cosmos_semantic.compiler import SemanticGraph
 
 RANK = {"failing": 3, "attention": 2, "unchecked": 1, "healthy": 0}
+
+
+def _parse_at(value: Any) -> dt.datetime | None:
+    """A run's ``at`` as an aware datetime (naive ones are UTC); None when it cannot be read."""
+    try:
+        at = dt.datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=dt.UTC)
 
 
 class Health:
@@ -79,6 +97,11 @@ class Health:
 
         runs = self.runs()
         latest = runs[-1] if runs else None
+        at = latest.get("at") if latest else None
+        tests_at = at if latest and latest.get("rule_tests") else None
+        settings = self.graph.project.health
+        max_age = parse_max_age(settings.max_age) if settings and settings.max_age else None
+        now = dt.datetime.now(dt.UTC)
         reconciled: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for case in latest["reconciliations"] if latest else []:
             for metric in case["metrics"]:
@@ -93,15 +116,26 @@ class Health:
             bad = [c for c in cases if c["outcome"] in ("fail", "error")]
             if bad:
                 reasons = [
-                    {"code": "reconciliation_failed", "case": c["id"], "title": c["title"]}
+                    {
+                        "code": "reconciliation_failed",
+                        "case": c["id"],
+                        "title": c["title"],
+                        "at": at,
+                    }
                     for c in bad
                 ]
-                states[member] = {"state": "failing", "reasons": reasons}
+                states[member] = {"state": "failing", "reasons": reasons, "last_reconciled_at": at}
             else:
-                states[member] = {
-                    "state": "healthy",
-                    "reasons": [{"code": "reconciled", "count": len(cases)}],
-                }
+                reasons = [{"code": "reconciled", "count": len(cases), "at": at}]
+                state = "healthy"
+                if max_age is not None:
+                    when = _parse_at(at)
+                    if when is None or now - when > max_age:
+                        state = "attention"
+                        reasons.append(
+                            {"code": "reconciliation_stale", "at": at, "max_age": settings.max_age}
+                        )
+                states[member] = {"state": state, "reasons": reasons, "last_reconciled_at": at}
 
         # Whatever depends on a failing rule, metric or measure needs attention.
         failing = list(
@@ -123,4 +157,7 @@ class Health:
                 current["reasons"].append({"code": "depends_on_failing", "member": source})
         for process in self.graph.project.processes:
             states.setdefault(f"process:{process.name}", {"state": "healthy", "reasons": []})
+        for state in states.values():
+            state.setdefault("last_reconciled_at", None)
+            state["last_tests_run_at"] = tests_at
         return states
