@@ -175,6 +175,16 @@ format or the API; such changes are listed under **Changed**.
 
 ### Fixed
 
+- `cosmos import cube` and `cosmos import dbt` skip a running total over an `avg` or
+  `count_distinct` measure, with a warning naming it, instead of writing a model that
+  `cosmos validate` then rejects (DEC-32). Since DEC-21 such a metric is invalid in Cosmos: an
+  average or a distinct count to date cannot be accumulated from per-period values. Cube
+  skips the measure with a `to_date` (or any other) `rolling_window`, with no `__base` measure
+  left behind; dbt skips the cumulative metric and keeps its measure, using the validator's own
+  condition. The metrics that use a skipped one (Cube `number` measures, dbt ratio and derived
+  metrics), directly or through another, are skipped too, each with a warning naming what it
+  depends on. The Power BI import already did this (#69). No SQL or number changes.
+
 - A month-, quarter- or year-to-date metric queried by week is refused with an error instead of
   returning a wrong number (DEC-28). A week does not nest in a month, quarter or year, and the
   planner put each week in the period it starts in, so the week that crosses into a new period
