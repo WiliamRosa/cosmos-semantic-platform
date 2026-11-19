@@ -855,7 +855,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 59
+    assert len(REFERENCE) == 63
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1230,8 +1230,8 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     cases = _cube_cases(graph.project, policies=True, lost=CUBE_LOST)
     # A32 (month-to-date by quarter) and A39 (year-to-date by week) are refused by the
     # re-imported model too; A33 is the 30-day window of customers by segment.
-    assert {"R17", "R18", "A08", "A09", "A32", "A33", "A39"} <= {c.id for c in cases}
-    assert len(cases) == 48
+    assert {"R17", "R18", "A08", "A09", "A32", "A33", "A39", "A40", "A41"} <= {c.id for c in cases}
+    assert len(cases) == 52
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -2134,8 +2134,8 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     # With the original policies put back, the queries that read the user pass too.
     governed = compile_project(_with_policies(back.project, graph.project))
     cases = _cube_cases(graph.project, policies=True, lost=DBT_LOST)
-    assert {"R17", "R18", "A33"} <= {c.id for c in cases}
-    assert len(cases) == 44
+    assert {"R17", "R18", "A33", "A40", "A41"} <= {c.id for c in cases}
+    assert len(cases) == 47
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"

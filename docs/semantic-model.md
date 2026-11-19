@@ -391,6 +391,29 @@ processes:
 
 Measures and dimensions inherit the owner of their model. `cosmos impact` groups the affected members by owner (`unowned` when nobody owns them) and lists the source systems, and `cosmos graph` exports everything as Mermaid, Graphviz DOT or JSON, optionally focused on one member (`--focus metric:net_revenue`): what it depends on, what depends on it and who owns each part.
 
+## Filters on metric values
+
+A request's `filters` restrict the facts before aggregation. Its `metric_filters` keep only the rows of the result whose metric values meet conditions, after aggregation, at the requested grain: "the states with more than 450,000 in revenue", "the segments whose average order value is at least 2,600 with more than 5 orders".
+
+```json
+{
+  "metrics": ["revenue", "order_count"],
+  "dimensions": ["customers.state"],
+  "metric_filters": ["{revenue} > 450000", "{order_count} >= 100"],
+  "order_by": ["-revenue"],
+  "limit": 3
+}
+```
+
+In the CLI: `cosmos query revenue order_count --by customers.state --metric-filter "{revenue} > 450000" --metric-filter "{order_count} >= 100"`; in MCP, the `metric_filters` argument of `query`.
+
+- **Grammar.** A condition compares one requested metric (or measure), written `{name}`, with a number: `=`, `<>`, `<`, `<=`, `>`, `>=`; or tests it with `IS NULL` or `IS NOT NULL`. Conditions are joined by `AND`, inside one filter or across the list. Numbers are plain decimals (`1000`, `-2.5`, `0.25`), with no exponent and at most 18 digits on each side of the point. Anything else is refused with an error: `OR`, `NOT`, parentheses, functions, strings, columns, dimensions, `$user`, comments, other metrics as the right-hand side, or a metric that is not in `metrics`. The text never reaches the SQL: the engine parses it and writes the comparison from the metric name, the operator and the digits. At most 20 filters of 500 characters each.
+- **Order.** The row filters and the request's `filters` apply to the facts first, as always; then the metrics are aggregated (and ratios and derived metrics computed) at the requested grain; then `metric_filters` remove rows; `order_by` and `limit` apply to the rows kept, so `limit: 3` returns three rows that meet the conditions.
+- **Nulls.** A comparison with a NULL value is not true, so a row whose metric is NULL (a ratio over zero orders, a metric from another model with no facts for that row) is never kept by `>` or `<>`; ask for `IS NULL` to see those rows.
+- **Totals.** Only rows are removed; the values of the rows kept are the same as without the filter. A sum of the rows returned is therefore not the metric's total, and the evidence says so in `caveats`. It lists the conditions applied in `metric_filters`, next to `policies.row_filters`.
+- **Metrics.** Simple, ratio and derived metrics and measures can be compared. Requests with cumulative metrics (running totals and rolling windows) or with metrics that read an input at an earlier period are refused when they carry `metric_filters`, in this first slice: removing rows from those would raise the question of whether the window or the earlier period still sees them.
+- **SQL.** The result is computed as before into a CTE, `cosmos_result`, and an outer `SELECT ... FROM cosmos_result WHERE ...` keeps the rows, then orders and limits them. SQL Server accepts `WITH` only at the top of a statement, so the result is a CTE, not a subquery. A request without `metric_filters` gets exactly the SQL it got before.
+
 ## The SQL the engine generates
 
 The examples below are Postgres output (lightly abridged). The same plan generates SQL for other dialects through SQLGlot; `cosmos sql` shows it for any request.

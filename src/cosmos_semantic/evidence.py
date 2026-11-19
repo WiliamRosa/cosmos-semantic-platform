@@ -128,6 +128,13 @@ class EvidenceBuilder:
                 f"`{item['base']}` row counts once in every value it relates to, so totals "
                 "across those values can exceed the overall total."
             )
+        if trace.metric_filters:
+            kept = " AND ".join(f["text"] for f in trace.metric_filters)
+            caveats.append(
+                f"Only the rows where {kept} are returned (metric_filters, applied after "
+                "aggregation at the requested grain): a sum of the returned rows is not the "
+                "metric's total. A comparison with a NULL value keeps no row."
+            )
         rules = []
         for name, uses in sorted(trace.rules.items()):
             rule = g.rules[name]
@@ -201,6 +208,8 @@ class EvidenceBuilder:
             "metrics": metrics,
             "dimensions": dimensions,
             "rules": rules,
+            # Conditions on metric values (DEC-29), after the row filters and aggregation.
+            "metric_filters": trace.metric_filters,
             "policies": {
                 "row_filters": merge_row_filters(trace.row_filters),
                 "sensitive_data_blocked_for_agents": principal.is_agent,

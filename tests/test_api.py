@@ -343,3 +343,21 @@ def test_dimension_values_endpoint_is_audited(graph, duckdb_connector, tmp_path)
     # A dimension_values record is not a query: it does not replay.
     replay = client.post(f"/v1/replay/{first['query_id']}", headers=headers)
     assert replay.status_code == 400
+
+
+def test_query_takes_metric_filters_and_refuses_raw_sql(client):
+    """DEC-29: conditions on metric values, parsed strictly; raw SQL is a 400."""
+    body = {
+        "metrics": ["customer_count"],
+        "dimensions": ["customers.segment"],
+        "metric_filters": ["{customer_count} > 0"],
+    }
+    response = client.post("/v1/query", headers={"X-API-Key": "dev-sul"}, json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["rows"]
+    assert response.json()["evidence"]["metric_filters"][0]["text"] == "{customer_count} > 0"
+    body["metric_filters"] = ["{customer_count} > 0 OR 1 = 1"]
+    response = client.post("/v1/query", headers={"X-API-Key": "dev-sul"}, json=body)
+    assert response.status_code == 400
+    response = client.post("/v1/sql", headers={"X-API-Key": "dev-sul"}, json=body)
+    assert response.status_code == 400

@@ -297,6 +297,29 @@ def test_dimension_values_are_capped(server, monkeypatch):
     assert call(server, "dimension_values", name="orders.status", limit=0)["error"] == "QueryError"
 
 
+def test_agent_filters_on_metric_values(server, monkeypatch):
+    """DEC-29: the `query` tool takes metric_filters; anything outside the grammar is an error."""
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    every = call(server, "query", metrics=["customer_count"], dimensions=["customers.segment"])
+    top = max(r["customer_count"] for r in every["rows"])
+    result = call(
+        server,
+        "query",
+        metrics=["customer_count"],
+        dimensions=["customers.segment"],
+        metric_filters=[f"{{customer_count}} >= {top}"],
+    )
+    assert [r["customer_count"] for r in result["rows"]] == [top]
+    assert result["evidence"]["metric_filters"][0]["metric"] == "customer_count"
+    refused = call(
+        server,
+        "query",
+        metrics=["customer_count"],
+        metric_filters=["{customer_count} > 0; DELETE FROM public.customers"],
+    )
+    assert refused["error"] == "QueryError"
+
+
 def test_time_range_is_the_days_the_user_can_see(server, duckdb_connector, monkeypatch):
     monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
     result = call(server, "dimension_values", name="customers.created_at", limit=1)

@@ -81,6 +81,12 @@ uv run cosmos query revenue average_order_value --by orders.status --csv \
 uv run cosmos query revenue paid_value customer_count --by customers.region -u region=Midwest --show-sql \
   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
+# Only the states whose revenue passes a threshold: --metric-filter applies after aggregation,
+# after the row filters; --order and --limit apply to the rows kept
+uv run cosmos query revenue order_count --by customers.state -u region=Northeast \
+  --metric-filter "{revenue} > 1600000" --order -revenue --limit 3 \
+  -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+
 # Business rules as a filter and as a grouping; --as-of pins "today"
 uv run cosmos query customer_count --where "{rule.active_customer}" --by customers.segment \
   -u region=Northeast --as-of 2026-10-22 -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
@@ -162,6 +168,8 @@ uv run cosmos serve -m examples/ecommerce/semantic -c examples/ecommerce/connect
 curl -X POST localhost:8080/v1/query -H "X-API-Key: <key>" -H "content-type: application/json" \
   -d '{"metrics": ["revenue"], "dimensions": ["customers.segment"]}'
 ```
+
+A request (`POST /v1/query`, `POST /v1/sql`, the MCP tool `query` and `cosmos query`) takes `metrics`, `dimensions`, `filters` (conditions on dimensions, applied to the facts), `metric_filters` (conditions on metric values, such as `{revenue} > 1000`, applied after aggregation; `--metric-filter` in the CLI), `order_by`, `limit`, `as_of` and `rules_as_of`. See [filters on metric values](docs/semantic-model.md#filters-on-metric-values).
 
 `GET /v1/impact/{kind:name}` (and the MCP tool `impact`) tells what a change to a member affects, grouped by owner, source systems and processes; who queried the affected members, from the audit log, is returned only to the subjects in `COSMOS_CONSOLE_ADMINS`.
 
