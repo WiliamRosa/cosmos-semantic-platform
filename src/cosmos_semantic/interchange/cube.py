@@ -20,9 +20,12 @@ excludes, with the level in the dimension's ``meta``. Only filters with an exact
 are written (``=``, ``IN``, and ``<``, ``<=``, ``>``, ``>=`` on numbers, joined by AND and OR);
 ``import_cube`` reads them back as the same row filters and sensitivity, and fails closed on any
 other policy (it would grant more access than Cube did) unless the caller accepts the loss.
-The export fails closed on row filters it cannot express, and on metrics it cannot carry (rolling
-windows in days, running totals of other aggregations or without a period, metrics over a
-cumulative one, filters beyond the measure's own cube), unless the caller accepts the loss.
+Fourth slice (DEC-30): a ``window: N days`` over a ``sum``, ``count``, ``min`` or ``max``
+measure is a measure with ``rolling_window: {trailing: N day, offset: end}``, which
+``import_cube`` reads back as the same window.
+The export fails closed on row filters it cannot express, and on metrics it cannot carry
+(running totals of other aggregations or without a period, metrics over a cumulative one,
+offsets, filters beyond the measure's own cube), unless the caller accepts the loss.
 Business rules, the glossary and the business context are not exported yet; each one present is
 a warning.
 """
@@ -42,6 +45,7 @@ from cosmos_semantic.errors import QueryError
 from cosmos_semantic.expressions import REF_RE, USER_RE
 from cosmos_semantic.interchange import ExportResult, ImportResult
 from cosmos_semantic.spec import (
+    WINDOW_AGGS,
     CumulativeMetric,
     DerivedMetric,
     Project,
@@ -253,6 +257,14 @@ def _cube_filter(sql: str, dims: dict[str, str]) -> str:
     return re.sub(r"__dim_([a-z0-9_]+)", lambda m: "{" + m.group(1) + "}", out)
 
 
+def _trailing_days(window: dict[str, Any]) -> int | None:
+    """N for a Cube rolling window with ``trailing: N day`` (or ``N days``), None otherwise."""
+    if window.get("type") not in (None, "fixed"):
+        return None
+    match = re.fullmatch(r"\s*(\d+)\s+days?\s*", str(window.get("trailing", "")), re.IGNORECASE)
+    return int(match.group(1)) if match and int(match.group(1)) > 0 else None
+
+
 def _measure(cube, model, measure, dims, metrics, warnings) -> None:
     name, kind = measure["name"], measure.get("type", "count")
     where = f"cubes.{cube}.measures.{name}"
@@ -268,10 +280,23 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> None:
     if kind not in _AGG:
         warnings.append(f"{where}: type `{kind}` is not supported; skipped")
         return
+    window = measure.get("rolling_window")
+    days = _trailing_days(window) if window else None
+    if days and (window.get("offset", "end") != "end" or "leading" in window):
+        warnings.append(
+            f"{where}: a trailing window in days with `offset: start` or `leading` does not "
+            "end on the row's day, as Cosmos windows do; measure skipped"
+        )
+        return
+    if days and _AGG[kind] not in WINDOW_AGGS:
+        warnings.append(
+            f"{where}: a trailing window over a measure of type `{kind}` cannot be combined from daily "
+            "values in Cosmos (use sum, count, min or max); measure skipped"
+        )
+        return
     if kind == "count_distinct_approx":
         warnings.append(f"{where}: count_distinct_approx imported as an exact count")
     filters = [f["sql"] for f in measure.get("filters") or [] if f.get("sql")]
-    window = measure.get("rolling_window")
     base_name = f"{name}__base" if filters or window else name
     item: dict[str, Any] = {"name": base_name, "agg": _AGG[kind]}
     if sql is not None and str(sql).strip() not in ("*", "1"):
@@ -283,10 +308,15 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> None:
         metric: dict[str, Any] = {"name": name, "type": "cumulative", "measure": base_name}
         if window.get("type") == "to_date" and window.get("granularity"):
             metric["grain_to_date"] = window["granularity"]
+        elif days:
+            # Cube's trailing window with `offset: end` ends at the end of each bucket: at day
+            # grain, the N days ending on the row's day, as the planner's `window: N days`.
+            metric["window"] = "1 day" if days == 1 else f"{days} days"
         else:
             metric["window"] = str(window.get("trailing", "unbounded"))
             warnings.append(
-                f"{where}: rolling windows are not in the MVP; queries using the metric will be refused"
+                f"{where}: only rolling windows in days (`trailing: 7 day`) are imported; "
+                "queries using the metric will be refused"
             )
         if filters:
             warnings.append(f"{where}: filters on a cumulative measure were dropped")
@@ -1020,12 +1050,28 @@ class _CubeWriter:
     def _cumulative(self, metric: CumulativeMetric) -> tuple[str, dict[str, Any], set[str]]:
         """A ``grain_to_date`` running total of a ``sum`` or ``count`` measure: a measure with a
         ``to_date`` rolling window, which sums the rows from the start of the period to the end
-        of each time bucket, as the planner's running total does."""
+        of each time bucket, as the planner's running total does. A ``window: N days`` over a
+        ``sum``, ``count``, ``min`` or ``max`` measure (DEC-30): a measure with
+        ``rolling_window: {trailing: N day, offset: end}``, which aggregates the rows after the
+        end of the bucket minus N days, up to the end of the bucket; at day grain, the days
+        D - (N - 1) to D, as the planner's window."""
         if metric.window:
-            raise _NotExported(
-                f"it is cumulative over a rolling window (`{metric.window}`), and the Cube "
-                "export does not carry rolling windows yet"
-            )
+            days = metric.window_days()
+            if days is None:
+                raise _NotExported(
+                    f"it is cumulative over a rolling window (`{metric.window}`) that is not in "
+                    "days, and the Cube export carries only windows in days"
+                )
+            node, measure = self.graph.measure(metric.measure)
+            if measure.agg not in WINDOW_AGGS:
+                raise _NotExported(
+                    "it is a rolling window over a measure that aggregates with "
+                    f"`{measure.agg}`, and the Cube export carries rolling windows of `sum`, "
+                    "`count`, `min` and `max` measures only"
+                )
+            item = self._measure(measure, name=metric.name)
+            item["rolling_window"] = {"trailing": f"{days} day", "offset": "end"}
+            return node.name, item, {node.name}
         if not metric.grain_to_date:
             raise _NotExported(
                 "it is cumulative without `grain_to_date`, and the Cube export carries only "
