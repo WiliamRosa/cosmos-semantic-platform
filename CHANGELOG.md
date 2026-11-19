@@ -122,6 +122,24 @@ format or the API; such changes are listed under **Changed**.
 
 ### Fixed
 
+- A month-, quarter- or year-to-date metric queried by week is refused with an error instead of
+  returning a wrong number (DEC-28). A week does not nest in a month, quarter or year, and the
+  planner put each week in the period it starts in, so the week that crosses into a new period
+  was counted in the old one: on the test data (600 customers, seed 7, anchored on 2026-11-16),
+  `revenue_year_to_date` for the week of 2025-12-29 was 1,870,457.06, more than all of 2025's
+  revenue (1,823,298.63), and any data gives more than the whole year's revenue there. The error says
+  why and names the grains that work (day, month and up to the period). It shares one check
+  with the refusal of a grain coarser than the period (DEC-21). Week-to-date metrics, running
+  totals without `grain_to_date` and every request by day are unchanged; the SQL of every
+  request still accepted is byte-identical. Derived metrics and offsets cannot wrap a
+  cumulative metric, so no request reaches the number through them. Reference case A39
+  (year-to-date by week, refused); the Cube and dbt notes now name the refusal
+  ([semantic model](docs/semantic-model.md#period-to-date)).
+
+  **Compatibility:** a request for a month-, quarter- or year-to-date metric with a time
+  dimension at `__week` planned before and now fails; its numbers were wrong at period
+  boundaries.
+
 - Cumulative metrics no longer return silently wrong numbers (DEC-21). A `grain_to_date`
   metric (month-to-date, year-to-date) over a `min` or `max` measure now takes the minimum or
   maximum so far (`MIN`/`MAX OVER`); before, it summed the daily values, so "largest order so

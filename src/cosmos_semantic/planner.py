@@ -18,12 +18,12 @@ from sqlglot.dialects.dialect import Dialect
 
 from cosmos_semantic import dialects
 from cosmos_semantic.compiler import (
-    TIME_GRAINS,
     DimensionRef,
     JoinEdge,
     SemanticGraph,
     metrics_under,
     offset_input_problem,
+    to_date_grain_problem,
 )
 from cosmos_semantic.errors import PolicyError, QueryError
 from cosmos_semantic.expressions import (
@@ -856,14 +856,9 @@ class Planner:
 
     def _cumulative(self, value, metric: CumulativeMetric, dims, dim_out) -> exp.Expression:
         time = self._time_dim(metric, dims)
-        to_date = metric.grain_to_date
-        if to_date and time.grain and TIME_GRAINS.index(time.grain) > TIME_GRAINS.index(to_date):
-            # A to-date value per coarser period would be the period's total, not a to-date.
-            raise QueryError(
-                f"`{metric.name}`: a {to_date}-to-date metric cannot be grouped by "
-                f"{time.grain} (`{_dim_member(time)}` requested); use the {to_date} grain or "
-                "a finer one"
-            )
+        problem = metric.grain_to_date and to_date_grain_problem(metric.grain_to_date, time.grain)
+        if problem:
+            raise QueryError(f"`{metric.name}` (`{_dim_member(time)}` requested): {problem}")
         partition = [dim_out(d) for d in dims if d != time]
         if metric.grain_to_date:
             partition.append(self._trunc(dim_out(time), metric.grain_to_date))
