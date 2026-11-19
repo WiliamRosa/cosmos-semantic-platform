@@ -35,6 +35,7 @@ def load_file(path: Path) -> Project:
 def merge(projects: list[Project]) -> Project:
     """Merges several files into one project; duplicate names are checked by the compiler."""
     merged: dict = {"version": 1, "user_context": {}, "custom_extensions": {}, "timezone": None}
+    merged["health"] = None
     for key in _LIST_KEYS:
         merged[key] = []
     for project in projects:
@@ -49,6 +50,10 @@ def merge(projects: list[Project]) -> Project:
             if merged["timezone"] and merged["timezone"] != project.timezone:
                 raise ModelError("model files declare different `timezone` values")
             merged["timezone"] = project.timezone
+        if project.health is not None:
+            if merged["health"] is not None and merged["health"] != project.health:
+                raise ModelError("model files declare different `health` settings")
+            merged["health"] = project.health
     return Project.model_construct(**merged)
 
 

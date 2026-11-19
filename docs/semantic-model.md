@@ -104,6 +104,7 @@ metrics:
 | --- | --- | --- |
 | `version` | Yes | Format version; currently `1` |
 | `timezone` | No | Business time zone (IANA name). Defines "today" for `CURRENT_DATE` in rules and filters, identically on every data source. Default: UTC |
+| `health.max_age` | No | How old a metric's last reconciliation may be, in hours, days or weeks (`7 days`), before its health is `attention` with `reconciliation_stale` instead of `healthy` ([member health](architecture.md#member-health)). Default: no limit |
 
 ### Semantic model
 
@@ -501,7 +502,7 @@ Whatever Cube does not represent the same way produces a warning on export:
 - An ambiguous join path between two models.
 - A metric referencing a missing measure or dimension, or missing the fields of its type.
 - A derived metric's `inputs` with an unsupported offset, an input not referenced in `expr` or listed twice, or an offset of a cumulative metric or of a metric with offsets of its own.
-- An unknown `timezone`.
+- An unknown `timezone`; a `health.max_age` that is not a whole number of hours, days or weeks; model files with different `timezone` or `health` settings.
 - A concept whose `maps_to` points to a missing member or rule; a cycle in the `broader` hierarchy.
 - The same synonym in two different concepts: a warning, because the agent could not tell which to pick.
 - A rule with an input not mapped in some `applies_to` model, or mapped to a column of an incompatible type.

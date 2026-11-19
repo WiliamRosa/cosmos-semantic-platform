@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 
 import pytest
 from mcp import Client
 
 from cosmos_semantic.auth import Authenticator, AuthSettings, DevKey
+from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.connectors import ConnectionsFile, DataSourceConfig
 from cosmos_semantic.engine import Engine
 from cosmos_semantic.mcp_server import build_mcp
 from cosmos_semantic.service import SemanticService
+from cosmos_semantic.spec import Project
 
 
 @pytest.fixture(scope="module")
@@ -151,7 +154,9 @@ def test_explain_tells_the_agent_whether_the_number_is_checked(graph, monkeypatc
         },
         {"id": "R2", "title": "Orders", "metrics": ["order_count"], "outcome": "pass"},
     ]
-    runs.write_text(json.dumps({"event": "check", "reconciliations": reconciliations}) + "\n")
+    at = "2026-11-15T12:00:00+00:00"
+    run = {"event": "check", "at": at, "rule_tests": {"total": 7, "passed": 7, "failed": 0}}
+    runs.write_text(json.dumps(run | {"reconciliations": reconciliations}) + "\n")
     monkeypatch.setenv("COSMOS_RUNS_LOG", str(runs))
     engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
     settings = AuthSettings(dev_keys={"agente-sul": DevKey(subject="agente", user={})})
@@ -162,18 +167,26 @@ def test_explain_tells_the_agent_whether_the_number_is_checked(graph, monkeypatc
     assert failing["kind"] == "metric" and failing["definition"]
     assert failing["health"] == {
         "state": "failing",
-        "reasons": [{"code": "reconciliation_failed", "case": "R1", "title": "Legacy revenue"}],
+        "reasons": [
+            {"code": "reconciliation_failed", "case": "R1", "title": "Legacy revenue", "at": at}
+        ],
+        "last_reconciled_at": at,
+        "last_tests_run_at": at,
     }
     order_count = call(server, "explain", name="order_count")
     assert order_count["health"] == {
         "state": "healthy",
-        "reasons": [{"code": "reconciled", "count": 1}],
+        "reasons": [{"code": "reconciled", "count": 1, "at": at}],
+        "last_reconciled_at": at,
+        "last_tests_run_at": at,
     }
     assert call(server, "explain", name="discount_rate")["health"]["state"] == "unchecked"
     rule = call(server, "explain", name="rule:active_customer")
     assert rule["health"] == {
         "state": "healthy",
         "reasons": [{"code": "rule_tests_pass", "total": 4}],
+        "last_reconciled_at": None,
+        "last_tests_run_at": at,
     }
     concept = call(server, "explain", name="active_customer")
     assert "health" not in concept and concept["defined_by"]["health"] == rule["health"]
@@ -182,6 +195,49 @@ def test_explain_tells_the_agent_whether_the_number_is_checked(graph, monkeypatc
     monkeypatch.delenv("COSMOS_API_KEY")
     denied = call(server, "explain", name="metric:completed_revenue")
     assert denied["error"] == "AuthError" and "health" not in denied
+
+
+def test_explain_flags_a_reconciliation_older_than_max_age(graph, monkeypatch, tmp_path):
+    data = graph.project.model_dump(mode="json")
+    data["health"] = {"max_age": "7 days"}
+    aged = compile_project(Project.model_validate(data))
+    now = dt.datetime.now(dt.UTC)
+    old = (now - dt.timedelta(days=30)).isoformat(timespec="seconds")
+    fresh = (now - dt.timedelta(hours=1)).isoformat(timespec="seconds")
+    runs = tmp_path / "runs.jsonl"
+    monkeypatch.setenv("COSMOS_RUNS_LOG", str(runs))
+    monkeypatch.setenv("COSMOS_API_KEY", "agente-sul")
+    reconciliations = [
+        {"id": "R1", "title": "Legacy", "metrics": ["completed_revenue"], "outcome": "fail"},
+        {"id": "R2", "title": "Orders", "metrics": ["order_count"], "outcome": "pass"},
+    ]
+
+    def explain(at, name):
+        runs.write_text(
+            json.dumps({"event": "check", "at": at, "reconciliations": reconciliations})
+        )
+        engine = Engine(
+            aged, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")})
+        )
+        settings = AuthSettings(dev_keys={"agente-sul": DevKey(subject="agente", user={})})
+        server = build_mcp(
+            SemanticService(engine), Authenticator(settings, aged.project.user_context)
+        )
+        return call(server, "explain", name=name)["health"]
+
+    stale = explain(old, "order_count")
+    assert stale["state"] == "attention" and stale["last_reconciled_at"] == old
+    assert stale["reasons"] == [
+        {"code": "reconciled", "count": 1, "at": old},
+        {"code": "reconciliation_stale", "at": old, "max_age": "7 days"},
+    ]
+    # A failing reconciliation stays failing, however old.
+    assert explain(old, "completed_revenue")["state"] == "failing"
+    recent = explain(fresh, "order_count")
+    assert recent["state"] == "healthy"
+    assert recent["reasons"] == [{"code": "reconciled", "count": 1, "at": fresh}]
+    # Without a readable time, freshness cannot be shown: stale.
+    assert explain(None, "order_count")["reasons"][-1]["code"] == "reconciliation_stale"
 
 
 def test_dimension_values_match_query_grouped_by_the_dimension(server, monkeypatch):
