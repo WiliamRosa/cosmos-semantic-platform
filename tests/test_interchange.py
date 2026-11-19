@@ -855,7 +855,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 58
+    assert len(REFERENCE) == 59
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1220,10 +1220,10 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     # return the same rows per principal, and the refused ones are refused.
     governed = compile_project(back.project)
     cases = _cube_cases(graph.project, policies=True, lost=CUBE_LOST)
-    # A32 (month-to-date by quarter) is refused by the re-imported model too; A33 is the
-    # 30-day window of customers by segment.
-    assert {"R17", "R18", "A08", "A09", "A32", "A33"} <= {c.id for c in cases}
-    assert len(cases) == 47
+    # A32 (month-to-date by quarter) and A39 (year-to-date by week) are refused by the
+    # re-imported model too; A33 is the 30-day window of customers by segment.
+    assert {"R17", "R18", "A08", "A09", "A32", "A33", "A39"} <= {c.id for c in cases}
+    assert len(cases) == 48
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1655,7 +1655,8 @@ def test_cube_export_to_date_same_numbers(graph, tmp_path, source, request):
                 try:
                     native = rows(full, connector, query)
                 except QueryError as refusal:
-                    # A grain coarser than the period is refused (DEC-21), on both sides.
+                    # A grain coarser than the period (DEC-21), or a week under a longer
+                    # period (DEC-28), is refused, on both sides.
                     assert "cannot be grouped by" in str(refusal)
                     refused += 1
                     with pytest.raises(QueryError, match="cannot be grouped by"):
