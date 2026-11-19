@@ -56,6 +56,18 @@ def jsonable(value: Any) -> Any:
     return value
 
 
+def _iso_day(value: Any) -> str | None:
+    """A day as an ISO date, whatever type the database returns it as (DATE, TIMESTAMP,
+    Oracle's DATE with a time of day, or text)."""
+    if value is None:
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date().isoformat()
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    return dt.date.fromisoformat(str(value)[:10]).isoformat()
+
+
 class SemanticService:
     def __init__(
         self,
@@ -138,10 +150,22 @@ class SemanticService:
     ) -> dict[str, Any]:
         """Distinct values of a categorical or boolean dimension with their counts: the rows
         of the dimension's own model (after the caller's row filters) carrying each value.
-        At most ``MAX_DIMENSION_VALUES``; audited like a query (event `dimension_values`)."""
+        At most ``MAX_DIMENSION_VALUES``; audited like a query (event `dimension_values`).
+        A time dimension gets its date range instead (``time_range``); ``limit`` does not
+        apply to it."""
         started = time.perf_counter()
         request: dict[str, Any] = {"dimensions": [dimension], "limit": limit}
         context: dict[str, Any] = {"request": request, "principal": principal}
+        try:
+            graph = self.engine.graph
+            ref = graph.resolve_dimension(dimension)
+            is_time = graph.dimension(ref).type == "time"
+        except CosmosError as exc:
+            self._audit(context, error=exc, event="dimension_values")
+            raise
+        if is_time:
+            del request["limit"]
+            return self._time_range(dimension, context, started)
         try:
             if limit is not None and limit < 1:
                 raise QueryError("limit must be at least 1")
@@ -167,24 +191,7 @@ class SemanticService:
         )
         kept = pairs[:limit]
         returned = pa.table({"value": [v for v, _ in kept], "count": [n for _, n in kept]})
-        versions = compiled.trace.rule_versions
-        evidence = {
-            "query_id": new_query_id(),
-            "as_of": compiled.as_of.isoformat() if compiled.as_of else None,
-            "data_source": {"name": self._source(compiled), "dialect": compiled.dialect},
-            "model_hash": self.evidence.model_hash,
-            "count_of": f"rows of `{self.engine.graph.resolve_dimension(dimension).model}`",
-            "row_filters": merge_row_filters(compiled.trace.row_filters),
-            "rules": [
-                {
-                    "name": r,
-                    "effective_from": versions[r].isoformat() if versions.get(r) else None,
-                }
-                for r in sorted(compiled.trace.rules)
-            ],
-            "sql": {"text": compiled.sql, "hash": sql_hash(compiled.sql)},
-            "result": {"row_count": len(kept), "hash": result_hash(returned)},
-        }
+        evidence = self._values_evidence(compiled, {"count_of": f"rows of `{ref.model}`"}, returned)
         self._audit(
             context, evidence=evidence, ms=time.perf_counter() - started, event="dimension_values"
         )
@@ -194,6 +201,73 @@ class SemanticService:
             "truncated": len(pairs) > limit or beyond_ceiling,
             "limit": limit,
             "evidence": evidence,
+        }
+
+    def _time_range(
+        self, dimension: str, context: dict[str, Any], started: float
+    ) -> dict[str, Any]:
+        """The first and last day with rows of the dimension's model, and the number of
+        distinct days, after the caller's row filters (DEC-24). Days are local days of the
+        model (its business time zone); ISO dates; with no rows, null, null and 0."""
+        principal: Principal = context["principal"]
+        try:
+            compiled = self.engine.compile_time_range(dimension, principal)
+            context["compiled"] = compiled
+            with self._lock:
+                connector = self.engine.connector(compiled.data_source)
+                table = connector.execute(compiled.sql)
+        except CosmosError as exc:
+            self._audit(context, error=exc, event="dimension_values")
+            raise
+        row = table.to_pylist()[0] if table.num_rows else {}
+        first, last = _iso_day(row.get("min_day")), _iso_day(row.get("max_day"))
+        days = int(row.get("distinct_days") or 0)
+        returned = pa.table(
+            {"min": [first], "max": [last], "distinct_days": [days]},
+            schema=pa.schema(
+                [("min", pa.string()), ("max", pa.string()), ("distinct_days", pa.int64())]
+            ),
+        )
+        model = compiled.columns[0].member.split(".")[0]
+        zone = self.engine.graph.project.timezone or "UTC"
+        evidence = self._values_evidence(
+            compiled,
+            {"count_of": f"days with rows of `{model}`", "timezone": zone},
+            returned,
+        )
+        self._audit(
+            context, evidence=evidence, ms=time.perf_counter() - started, event="dimension_values"
+        )
+        return {
+            "dimension": compiled.columns[0].member,
+            "type": "time",
+            "min": first,
+            "max": last,
+            "distinct_days": days,
+            "evidence": evidence,
+        }
+
+    def _values_evidence(
+        self, compiled: CompiledQuery, extra: dict[str, Any], returned: pa.Table
+    ) -> dict[str, Any]:
+        """The evidence of a `dimension_values` call: what ran, on what, under which filters."""
+        versions = compiled.trace.rule_versions
+        return {
+            "query_id": new_query_id(),
+            "as_of": compiled.as_of.isoformat() if compiled.as_of else None,
+            "data_source": {"name": self._source(compiled), "dialect": compiled.dialect},
+            "model_hash": self.evidence.model_hash,
+            **extra,
+            "row_filters": merge_row_filters(compiled.trace.row_filters),
+            "rules": [
+                {
+                    "name": r,
+                    "effective_from": versions[r].isoformat() if versions.get(r) else None,
+                }
+                for r in sorted(compiled.trace.rules)
+            ],
+            "sql": {"text": compiled.sql, "hash": sql_hash(compiled.sql)},
+            "result": {"row_count": returned.num_rows, "hash": result_hash(returned)},
         }
 
     def is_admin(self, principal: Principal) -> bool:

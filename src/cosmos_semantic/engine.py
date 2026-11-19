@@ -72,6 +72,15 @@ class Engine:
         planner = Planner(self.graph, config.dialect, config.schema_map)
         return planner.plan_values(dimension, principal, limit=limit)
 
+    def compile_time_range(
+        self, dimension: str, principal: Principal | None = None
+    ) -> CompiledQuery:
+        """The date range of a time dimension, in the dialect of its model's data source."""
+        model = self.graph.models[self.graph.resolve_dimension(dimension).model]
+        config = self.config(model.spec.data_source)
+        planner = Planner(self.graph, config.dialect, config.schema_map)
+        return planner.plan_time_range(dimension, principal)
+
     def query(self, request: QueryRequest, principal: Principal | None = None) -> QueryResult:
         compiled = self.compile(request, principal)
         table = self.connector(compiled.data_source).execute(compiled.sql, max_rows=request.limit)
