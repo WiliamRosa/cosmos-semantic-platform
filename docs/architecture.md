@@ -115,13 +115,26 @@ Every answer (REST, MCP and `cosmos query --evidence`) carries an `evidence` env
 | `model_hash`, `engine_version` | Exact version of the semantic model and of the engine |
 | `as_of`, `timezone` | The business date used for `CURRENT_DATE` |
 | `data_source`, `principal` | Where the query ran, and who asked through which channel, with the user context |
-| `metrics` | Each metric expanded down to aggregations over model columns, its measures and glossary concepts |
+| `metrics` | Each metric expanded down to aggregations over model columns, its measures and glossary concepts; for cumulative and offset metrics, a `time` block (below) |
 | `rules` | Business rules used (as filter or value), with owner, effective date, logic and test status |
 | `metric_filters` | Conditions on metric values the request applied after aggregation (`{revenue} > 1000`), each with its metric, operator and value |
 | `policies` | Row filters applied, the user context values they used and the CTEs they applied to |
 | `lineage` | Models and joins involved |
 | `sql`, `result` | Generated SQL and its hash; row count and an order-independent result hash |
 | `caveats` | What the evidence does not prove, such as untested rules or the reproducibility limit |
+
+The `time` block of a metric (DEC-37) states its time semantics as fields, next to the `formula` text; it is null for simple, ratio and derived metrics without an offset, and for measures:
+
+| Field | Contents |
+| --- | --- |
+| `kind` | `grain_to_date` (a running total or extreme within each period), `window` (a rolling window) or `offset` (inputs read at an earlier period) |
+| `period` | For `grain_to_date`: `day`, `week`, `month`, `quarter` or `year`; null for a running total over all time |
+| `window`, `days` | For `window`: the window as written (`7 days`) and its number of days |
+| `shifts` | For `offset`: each input read at an earlier period, with the metric that reads it and the `offset` (`1 month`, `7 days`), through nested metrics too |
+| `time_dimension`, `query_grain` | The request's time dimension (`orders.ordered_at__month`) and its grain |
+| `filters_applied` | When the request's `filters` and the row filters restrict the rows: `before` the window or shift. A filter on the time dimension therefore also leaves out the earlier days a window or an offset would read. The field is there so that a later change to this order shows in the evidence |
+
+The block adds fields only: the generated SQL, the numbers and the hashes are unchanged.
 
 With `COSMOS_AUDIT_LOG` pointing to a `.jsonl` file, every query is recorded with its hashes, and `cosmos replay <query_id>` (or `POST /v1/replay/{query_id}` and the MCP tool `replay`, only for the user who ran it) re-runs it with the same request, user context and `as_of`. The verdict is `identical`, `data_changed` (same model and SQL, different result), `model_changed` or `engine_changed`. Replaying only returns the same number if the source data has not changed; the envelope says so instead of promising more.
 

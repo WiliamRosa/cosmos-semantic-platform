@@ -176,3 +176,68 @@ def test_offset_formula_names_the_earlier_period(graph):
         "((SUM(orders.amount)) - ((SUM(orders.amount)) 1 month earlier)) / "
         "((SUM(orders.amount)) 1 month earlier)"
     )
+
+
+def test_cumulative_and_offset_metrics_carry_a_time_block(graph, connector, tmp_path):
+    """Cumulative and offset metrics state their time semantics as fields (DEC-37), not only
+    in the formula text; the request's filters apply before the window or shift today."""
+    service = make_service(graph, connector, tmp_path)
+
+    def times(request: QueryRequest) -> dict:
+        ev = service.query(request, Principal(channel="api"))["evidence"]
+        return {m["name"]: m["time"] for m in ev["metrics"]}
+
+    found = times(
+        QueryRequest(
+            metrics=["revenue_year_to_date", "revenue", "revenue_mom_growth"],
+            dimensions=["orders.ordered_at__month"],
+            filters=["{orders.status} <> 'cancelled'"],
+        )
+    )
+    assert found["revenue"] is None
+    assert found["revenue_year_to_date"] == {
+        "kind": "grain_to_date",
+        "period": "year",
+        "time_dimension": "orders.ordered_at__month",
+        "query_grain": "month",
+        "filters_applied": "before",
+    }
+    assert found["revenue_mom_growth"] == {
+        "kind": "offset",
+        "shifts": [{"metric": "revenue_prev_month", "input": "revenue", "offset": "1 month"}],
+        "time_dimension": "orders.ordered_at__month",
+        "query_grain": "month",
+        "filters_applied": "before",
+    }
+
+    found = times(
+        QueryRequest(
+            metrics=["revenue_rolling_7_days", "order_count_7_days_earlier"],
+            dimensions=["orders.status", "orders.ordered_at__day"],
+        )
+    )
+    assert found["revenue_rolling_7_days"] == {
+        "kind": "window",
+        "window": "7 days",
+        "days": 7,
+        "time_dimension": "orders.ordered_at__day",
+        "query_grain": "day",
+        "filters_applied": "before",
+    }
+    assert found["order_count_7_days_earlier"]["shifts"] == [
+        {"metric": "order_count_7_days_earlier", "input": "order_count", "offset": "7 days"}
+    ]
+
+
+def test_time_block_is_null_for_metrics_without_time_semantics(graph):
+    """Simple, ratio and derived metrics without an offset, and measures, have no time block;
+    an offset metric has one even when built outside a query (DEC-37)."""
+    from cosmos_semantic.evidence import EvidenceBuilder
+
+    builder = EvidenceBuilder(graph)
+    request = QueryRequest(metrics=["revenue"], dimensions=["orders.ordered_at__month"])
+    for name in ("revenue", "average_order_value", "customer_count"):
+        assert builder.time(name, request) is None
+    assert builder.time("revenue_prev_month", request)["shifts"] == [
+        {"metric": "revenue_prev_month", "input": "revenue", "offset": "1 month"}
+    ]

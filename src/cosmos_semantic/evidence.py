@@ -120,7 +120,9 @@ class EvidenceBuilder:
         g = self.graph
         trace = compiled.trace
         caveats = [REPRODUCIBILITY_CAVEAT]
-        metrics = [self._metric(name) for name in request.metrics]
+        metrics = [
+            self._metric(name) | {"time": self.time(name, request)} for name in request.metrics
+        ]
         for item in trace.one_to_many:
             what = ", ".join(item["dimensions"]) or "filters " + ", ".join(item["filters"])
             caveats.append(
@@ -253,6 +255,71 @@ class EvidenceBuilder:
             "measures": [self._measure(m) for m in sorted(self._leaf_measures(name))],
             "concepts": concepts,
         }
+
+    def time(self, name: str, request: QueryRequest) -> dict[str, Any] | None:
+        """The time semantics of a cumulative or offset metric (DEC-37), None for the others.
+
+        ``kind`` is ``grain_to_date`` (``period`` null for a running total over all time),
+        ``window`` (``window`` as written and its ``days``) or ``offset`` (each input read at
+        an earlier period, through nested metrics too). ``time_dimension`` and ``query_grain``
+        are the request's time dimension and its grain. ``filters_applied`` says when the
+        request's ``filters`` and the row filters restrict the rows: ``before`` the window
+        or shift, so a filter on the time dimension also leaves out the earlier periods a
+        window or offset would read.
+        """
+        g = self.graph
+        metric = g.metrics.get(name) if name not in g.measure_owner else None
+        if isinstance(metric, CumulativeMetric):
+            if metric.window:
+                time: dict[str, Any] = {
+                    "kind": "window",
+                    "window": metric.window,
+                    "days": metric.window_days(),
+                }
+            else:
+                time = {"kind": "grain_to_date", "period": metric.grain_to_date}
+        else:
+            shifts = self._shifts(name)
+            if not shifts:
+                return None
+            time = {"kind": "offset", "shifts": shifts}
+        refs = [g.resolve_dimension(d) for d in request.dimensions]
+        times = [r for r in refs if g.dimension(r).type == "time"]
+        ref = times[0] if len(times) == 1 else None
+        return time | {
+            "time_dimension": request.dimensions[refs.index(ref)] if ref else None,
+            "query_grain": ref.grain if ref else None,
+            "filters_applied": "before",
+        }
+
+    def _shifts(self, name: str, seen: frozenset[str] = frozenset()) -> list[dict[str, str]]:
+        """The inputs read at an earlier period under ``name`` (DEC-18), in definition order:
+        the metric that reads each, the input and the offset."""
+        g = self.graph
+        if name in seen or name in g.measure_owner or name not in g.metrics:
+            return []
+        metric = g.metrics[name]
+        seen = seen | {name}
+        refs: list[str] = []
+        own: list[dict[str, str]] = []
+        if isinstance(metric, RatioMetric):
+            refs = [metric.numerator, metric.denominator]
+        elif isinstance(metric, DerivedMetric):
+            from cosmos_semantic.expressions import REF_RE
+
+            refs = list(dict.fromkeys(REF_RE.findall(metric.expr)))
+            offsets = metric.offsets()
+            own = [
+                {"metric": name, "input": ref, "offset": offsets[ref]}
+                for ref in refs
+                if ref in offsets
+            ]
+        out = own
+        for ref in refs:
+            for shift in self._shifts(ref, seen):
+                if shift not in out:
+                    out.append(shift)
+        return out
 
     def _measure(self, name: str) -> dict[str, Any]:
         owner = self.graph.measure_owner[name]
