@@ -990,6 +990,14 @@ CUBE_LOST = (
     *OFFSETS,
 )
 SPANS_CUBES = ("collection_gap", "items_per_order")
+# Rolling windows in days the dbt export carries, and the cumulative metrics it does not.
+ROLLING = (
+    "customers_rolling_30_days",
+    "revenue_rolling_7_days",
+    "smallest_order_rolling_7_days",
+)
+RUNNING = ("revenue_year_to_date", "revenue_month_to_date", "max_order_value_year_to_date")
+DBT_LOST = (*RUNNING, *OFFSETS)
 LOSS_FLAGS = {"allow_policy_loss": True, "allow_metric_loss": True}
 
 
@@ -1809,8 +1817,8 @@ def _dbt_test_metrics(project: Project) -> Project:
 
 
 def test_dbt_export_fails_closed(graph):
-    """The example has row filters, sensitivity and cumulative metrics: each loss is refused
-    until the caller accepts it."""
+    """The example has row filters, sensitivity, running totals and offsets: each loss is
+    refused until the caller accepts it."""
     with pytest.raises(PolicyLossError) as exc:
         export_dbt(graph.project, allow_metric_loss=True)
     assert str(exc.value) == (
@@ -1823,17 +1831,14 @@ def test_dbt_export_fails_closed(graph):
     with pytest.raises(MetricLossError) as exc:
         export_dbt(graph.project, allow_policy_loss=True)
     assert str(exc.value) == (
-        "9 metrics (customers_rolling_30_days, revenue_year_to_date, revenue_month_to_date, "
-        "max_order_value_year_to_date, revenue_rolling_7_days, smallest_order_rolling_7_days, "
+        "6 metrics (revenue_year_to_date, revenue_month_to_date, max_order_value_year_to_date, "
         "revenue_prev_month, revenue_mom_growth, order_count_7_days_earlier) would NOT be exported "
-        "(customers_rolling_30_days: it is cumulative, and the dbt export does not carry it yet; "
-        "revenue_year_to_date: it is cumulative, and the dbt export does not carry it yet; "
-        "revenue_month_to_date: it is cumulative, and the dbt export does not carry it yet; "
-        "max_order_value_year_to_date: it is cumulative, and the dbt export does not carry it "
-        "yet; "
-        "revenue_rolling_7_days: it is cumulative, and the dbt export does not carry it yet; "
-        "smallest_order_rolling_7_days: it is cumulative, and the dbt export does not carry it "
-        "yet; "
+        "(revenue_year_to_date: it is a running total (`grain_to_date: year`), and the dbt "
+        "export does not carry it yet; "
+        "revenue_month_to_date: it is a running total (`grain_to_date: month`), and the dbt "
+        "export does not carry it yet; "
+        "max_order_value_year_to_date: it is a running total (`grain_to_date: year`), and the "
+        "dbt export does not carry it yet; "
         "revenue_prev_month: it reads an input at an earlier period (`offset`), and the dbt "
         "export does not map it to `offset_window` yet; "
         "revenue_mom_growth: it uses `revenue_prev_month`, which is not exported; "
@@ -1845,8 +1850,12 @@ def test_dbt_export_fails_closed(graph):
 
 def test_dbt_export_round_trip(graph, tmp_path):
     exported, back = _dbt_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
-    # The importer reads the whole export, with nothing to report.
-    assert back.warnings == []
+    # The importer reads the whole export; it reports only the rolling windows' conditions.
+    assert back.warnings == [
+        f"metrics.{name}: rolling window `{days} days`: only windows in days, queried by day, "
+        "are supported, and only days with data appear (MetricFlow uses a time spine)"
+        for name, days in zip(ROLLING, (30, 7, 7), strict=True)
+    ]
     doc = yaml.safe_load(exported.text)
     models = {m["name"]: m for m in doc["semantic_models"]}
     orders = models["orders"]
@@ -1856,7 +1865,12 @@ def test_dbt_export_round_trip(graph, tmp_path):
     assert orders["measures"][0]["expr"] == "1"
     assert all(m["create_metric"] for s in doc["semantic_models"] for m in s.get("measures", []))
     metrics = {m["name"]: m for m in doc["metrics"]}
-    assert not set(metrics) & {*CUMULATIVE, *OFFSETS}
+    assert not set(metrics) & set(DBT_LOST)
+    assert metrics["revenue_rolling_7_days"]["type"] == "cumulative"
+    assert metrics["revenue_rolling_7_days"]["type_params"] == {
+        "measure": "revenue",
+        "cumulative_type_params": {"window": "7 days"},
+    }
     assert metrics["completed_revenue"]["filter"] == (
         "{{ Dimension('order__status') }} = 'completed'"
     )
@@ -1896,21 +1910,30 @@ def test_dbt_export_round_trip(graph, tmp_path):
             out[m.name] = data
         return out
 
-    want = {
-        k: v for k, v in metric_shape(graph.project).items() if k not in (*CUMULATIVE, *OFFSETS)
-    }
+    want = {k: v for k, v in metric_shape(graph.project).items() if k not in DBT_LOST}
     want["completed_revenue"]["filter"] = "{orders.status} = 'completed'"
     want["orders_per_buyer"]["expr"] = "(1e0 * {order_count} / NULLIF({buyers}, 0))"
     want["items_per_order"]["expr"] = "(1e0 * {items_sold} / NULLIF({order_count}, 0))"
     assert metric_shape(back.project) == want
 
-    # Every loss is a warning: policies, cumulative metrics, the schema, and what a later
-    # slice exports.
+    # Every loss is a warning: policies, running totals, the schema, and what a later slice
+    # exports; each rolling window states where MetricFlow's numbers are the engine's.
     joined = "\n".join(exported.warnings)
     assert "semantic_models.customers.row_filters.by_region: not exported to dbt" in joined
     assert sum("its sensitivity is not exported" in w for w in exported.warnings) == 3
-    for name in CUMULATIVE:
-        assert f"metrics.{name}: it is cumulative" in joined
+    for name in RUNNING:
+        assert f"metrics.{name}: it is a running total" in joined
+    assert (
+        "metrics.revenue_rolling_7_days: MetricFlow windows over `metric_time`, which is "
+        "`orders.ordered_at`; by that dimension at day grain the numbers are the engine's on the "
+        "days with facts. MetricFlow also returns days without facts inside a window and coarser "
+        "grains (the engine refuses them), and a time constraint does not cut its window, while "
+        "the engine filters the facts first"
+    ) in exported.warnings
+    assert (
+        "the engine filters the facts first; queried by `customers.last_order_at`, the engine "
+        "windows over that dimension instead, which MetricFlow does not"
+    ) in joined
     for name in ("revenue_prev_month", "order_count_7_days_earlier"):
         assert f"metrics.{name}: it reads an input at an earlier period" in joined
     assert "metrics.revenue_mom_growth: it uses `revenue_prev_month`" in joined
@@ -1931,16 +1954,17 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     connector = request.getfixturevalue(source)
     _, back = _dbt_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
     other = compile_project(back.project)
-    cases = _cube_cases(graph.project, policies=False)
-    assert len(cases) == 25
+    cases = _cube_cases(graph.project, policies=False, lost=DBT_LOST)
+    assert {"A29", "A30", "A34"} <= {c.id for c in cases}
+    assert len(cases) == 28
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
     # With the original policies put back, the queries that read the user pass too.
     governed = compile_project(_with_policies(back.project, graph.project))
-    cases = _cube_cases(graph.project, policies=True)
-    assert {"R17", "R18"} <= {c.id for c in cases}
-    assert len(cases) == 43
+    cases = _cube_cases(graph.project, policies=True, lost=DBT_LOST)
+    assert {"R17", "R18", "A33", "A40", "A41"} <= {c.id for c in cases}
+    assert len(cases) == 47
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1977,6 +2001,86 @@ def test_dbt_export_metric_shapes_same_numbers(graph, tmp_path, source, request)
     # The boolean dimension keeps its type (SQL Server selects it through a CASE).
     query = QueryRequest(metrics=["revenue"], dimensions=["orders.has_discount"])
     same(rows(full, connector, query), rows(other, connector, query))
+
+
+def _dbt_window_metrics(project: Project) -> Project:
+    """The example without policies, plus rolling windows of 1, 3, 7 and 30 days over `sum`,
+    `count`, `min` and `max` measures of two models."""
+    data = _without_policies(_without_business(project))
+    data["glossary"] = []
+    data["metrics"] = [m for m in data["metrics"] if m["name"] not in (*DBT_LOST, *ROLLING)]
+    for days in (1, 3, 7, 30):
+        for measure in (
+            "revenue",
+            "order_count",
+            "smallest_order",
+            "max_order_value",
+            "paid_value",
+            "payment_count",
+        ):
+            data["metrics"].append(
+                {
+                    "name": f"{measure}_{days}d",
+                    "type": "cumulative",
+                    "measure": measure,
+                    "window": "1 day" if days == 1 else f"{days} days",
+                }
+            )
+    return Project.model_validate(data)
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_dbt_export_rolling_windows_same_numbers(graph, tmp_path, source, request):
+    """Every rolling window the export writes comes back with the native numbers, by day, by
+    day and another dimension, and with a filter on the time dimension; both models refuse
+    the other grains."""
+    connector = request.getfixturevalue(source)
+    project = _dbt_window_metrics(graph.project)
+    full = compile_project(project)
+    exported, back = _dbt_round_trip(project, tmp_path)
+    metrics = {m["name"]: m for m in yaml.safe_load(exported.text)["metrics"]}
+    assert metrics["payment_count_1d"] == {
+        "name": "payment_count_1d",
+        "label": "payment_count_1d",
+        "type": "cumulative",
+        "type_params": {"measure": "payment_count", "cumulative_type_params": {"window": "1 day"}},
+    }
+    names = [m.name for m in project.metrics if m.type == "cumulative"]
+    assert len(names) == 24
+    back_metrics = {m.name: m for m in back.project.metrics}
+    for name in names:
+        assert back_metrics[name].window == full.metrics[name].window
+        assert back_metrics[name].measure == full.metrics[name].measure
+    assert len(back.warnings) == len(names)
+    other = compile_project(back.project)
+    since = f"DATE '{(dt.date.today() - dt.timedelta(days=200)).isoformat()}'"
+    refused = compared = 0
+    for name in names:
+        model = "payments" if name.startswith(("paid_value", "payment_count")) else "orders"
+        time = "paid_at" if model == "payments" else "ordered_at"
+        extra = "payments.method" if model == "payments" else "orders.status"
+        for grain in ("day", "week", "month"):
+            for dims, filters in (
+                ([f"{model}.{time}__{grain}"], []),
+                ([extra, f"{model}.{time}__{grain}"], []),
+                # Both filter the facts first, so the window starts at the first day kept.
+                ([f"{model}.{time}__{grain}"], [f"{{{model}.{time}}} >= {since}"]),
+            ):
+                query = QueryRequest(metrics=[name], dimensions=dims, filters=filters)
+                try:
+                    native = rows(full, connector, query)
+                except QueryError as refusal:
+                    assert grain != "day"
+                    assert "needs the time dimension at day grain" in str(refusal)
+                    refused += 1
+                    with pytest.raises(QueryError, match="needs the time dimension at day grain"):
+                        rows(other, connector, query)
+                    continue
+                assert native
+                same(native, rows(other, connector, query))
+                compared += 1
+    assert compared == 3 * len(names)
+    assert refused == 6 * len(names)
 
 
 def test_dbt_export_states_each_reason(graph):
@@ -2057,16 +2161,54 @@ def test_dbt_export_states_each_reason(graph):
             "filter": "{status} = 'completed'",
         },
     ]
+    # A rolling window is exported; one in another unit, over a model without a time
+    # dimension or inside another metric is not, and neither is a running total.
+    data["metrics"] += [
+        {"name": "revenue_month", "type": "cumulative", "measure": "revenue", "window": "1 month"},
+        {
+            "name": "products_7d",
+            "type": "cumulative",
+            "measure": "product_count",
+            "window": "7 days",
+        },
+        {"name": "revenue_running", "type": "cumulative", "measure": "revenue"},
+        {
+            "name": "rolling_share",
+            "type": "ratio",
+            "numerator": "revenue_rolling_7_days",
+            "denominator": "revenue",
+        },
+        {"name": "rolling_gap", "type": "derived", "expr": "{revenue_7d} - {revenue}"},
+    ]
     project = Project.model_validate(data)
     with pytest.raises(MetricLossError) as exc:
         export_dbt(project)
     assert str(exc.value).startswith(
-        "21 metrics (customers_rolling_30_days, revenue_year_to_date, revenue_month_to_date, "
+        "22 metrics (revenue_year_to_date, revenue_month_to_date, max_order_value_year_to_date, "
     )
     result = export_dbt(project, allow_metric_loss=True)
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in result.warnings}
-    for name in (*CUMULATIVE, "revenue_7d"):
-        assert reasons[f"metrics.{name}"].startswith("it is cumulative")
+    for name in RUNNING:
+        assert reasons[f"metrics.{name}"].startswith("it is a running total (`grain_to_date: ")
+    for name in (*ROLLING, "revenue_7d"):
+        assert reasons[f"metrics.{name}"].startswith("MetricFlow windows over `metric_time`")
+    assert reasons["metrics.revenue_running"] == (
+        "it is a running total without a window, and the dbt export does not carry it yet; it "
+        "is not exported to dbt"
+    )
+    assert reasons["metrics.revenue_month"] == (
+        "its window `1 month` is not in days, the only unit the engine computes; it is not "
+        "exported to dbt"
+    )
+    assert reasons["metrics.products_7d"] == (
+        "its measure's model `products` has no time dimension for MetricFlow to window over; it "
+        "is not exported to dbt"
+    )
+    for name, ref in (("rolling_share", "revenue_rolling_7_days"), ("rolling_gap", "revenue_7d")):
+        assert reasons[f"metrics.{name}"] == (
+            f"it uses the cumulative metric `{ref}`, and Cosmos does not compute a cumulative "
+            "metric inside another one; it is not exported to dbt"
+        )
     for name, ref in (
         ("recent_revenue", "orders.ordered_at__month"),
         ("january_revenue", "orders.ordered_at"),
@@ -2078,7 +2220,7 @@ def test_dbt_export_states_each_reason(graph):
     assert reasons["metrics.raw_gap"].startswith("its expression uses bare columns (amount)")
     assert reasons["metrics.gap_share"].startswith("it uses `raw_gap`, which is not exported")
     assert reasons["metrics.ytd_share"].startswith(
-        "it uses `revenue_year_to_date`, which is not exported"
+        "it uses the cumulative metric `revenue_year_to_date`, and Cosmos does not compute"
     )
     for name, ref in (
         ("open_orders", "completed_orders"),
@@ -2095,8 +2237,9 @@ def test_dbt_export_states_each_reason(graph):
             "returns as NULL where the engine returns 0; it is not exported to dbt"
         )
     lost = {k.split(".", 1)[1] for k, r in reasons.items() if r.endswith("not exported to dbt")}
-    assert len(lost) == 21
+    assert len(lost) == 22
     exported = {m["name"] for m in yaml.safe_load(result.text)["metrics"]}
+    assert {*ROLLING, "revenue_7d"} <= exported
     assert not exported & lost
     assert {"completed_orders", "completed_buyers", "open_revenue", "cnt_diff"} <= exported
     assert "completed_aov" in exported
@@ -2126,8 +2269,7 @@ def test_cli_export_dbt(tmp_path):
     refused = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "--allow-policy-loss"])
     assert refused.exit_code == 1
     assert (
-        "9 metrics (customers_rolling_30_days, revenue_year_to_date, revenue_month_to_date, "
-        "max_order_value_year_to_date, revenue_rolling_7_days, smallest_order_rolling_7_days, "
+        "6 metrics (revenue_year_to_date, revenue_month_to_date, max_order_value_year_to_date, "
         "revenue_prev_month, revenue_mom_growth, order_count_7_days_earlier)" in refused.stderr
     )
     flags = ["--allow-policy-loss", "--allow-metric-loss"]
@@ -2135,9 +2277,10 @@ def test_cli_export_dbt(tmp_path):
     assert result.exit_code == 0, result.output
     assert yaml.safe_load(result.stdout)["semantic_models"]
     assert "warning:" not in result.stdout
-    assert "warning: metrics.revenue_year_to_date: it is cumulative" in result.stderr
+    assert "warning: metrics.revenue_year_to_date: it is a running total" in result.stderr
+    assert "warning: metrics.revenue_rolling_7_days: MetricFlow windows over" in result.stderr
     out = tmp_path / "models" / "semantic_models.yml"
     result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
     assert "23 warnings" in result.stdout
-    assert import_model("dbt", out, schema="public").warnings == []
+    assert len(import_model("dbt", out, schema="public").warnings) == len(ROLLING)
