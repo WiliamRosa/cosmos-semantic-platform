@@ -980,15 +980,11 @@ CUMULATIVE = (
 )
 # Derived metrics that read an input at an earlier period (DEC-18): no export carries them.
 OFFSETS = ("revenue_prev_month", "revenue_mom_growth", "order_count_7_days_earlier")
-# Running totals Cube carries as `to_date` rolling windows, and the cumulative metrics it does not.
+# Running totals Cube carries as `to_date` rolling windows, rolling windows in days it carries
+# as `trailing` ones (DEC-30), and the cumulative metrics it does not.
 TO_DATE = ("revenue_year_to_date", "revenue_month_to_date")
-CUBE_LOST = (
-    "customers_rolling_30_days",
-    "max_order_value_year_to_date",
-    "revenue_rolling_7_days",
-    "smallest_order_rolling_7_days",
-    *OFFSETS,
-)
+TRAILING = ("customers_rolling_30_days", "revenue_rolling_7_days", "smallest_order_rolling_7_days")
+CUBE_LOST = ("max_order_value_year_to_date", *OFFSETS)
 SPANS_CUBES = ("collection_gap", "items_per_order")
 # Rolling windows in days the dbt export carries, and the cumulative metrics it does not.
 ROLLING = (
@@ -1040,7 +1036,8 @@ def _cube_cases(
 
 def test_cube_export_fails_closed(graph, tmp_path):
     """The example's row filter and sensitivity are exported; a row filter that reads a
-    business rule and a rolling window are refused until the caller accepts the loss."""
+    business rule, a running maximum and offsets are refused until the caller accepts the
+    loss."""
     with pytest.raises(PolicyLossError) as exc:
         export_cube(_with_rule_filter(graph.project), allow_metric_loss=True)
     assert str(exc.value) == (
@@ -1051,22 +1048,18 @@ def test_cube_export_fails_closed(graph, tmp_path):
     with pytest.raises(MetricLossError) as exc:
         export_cube(graph.project)
     assert str(exc.value).startswith(
-        "7 metrics (customers_rolling_30_days, max_order_value_year_to_date, "
-        "revenue_rolling_7_days, smallest_order_rolling_7_days, revenue_prev_month, "
-        "revenue_mom_growth, order_count_7_days_earlier) would NOT be exported "
-        "(customers_rolling_30_days: it is cumulative over a rolling window (`30 days`), and the "
-        "Cube export does not carry rolling windows yet; max_order_value_year_to_date: it is "
+        "4 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
+        "order_count_7_days_earlier) would NOT be exported (max_order_value_year_to_date: it is "
         "cumulative over a measure that aggregates with `max`, and the Cube export carries "
-        "running totals of `sum` and `count` measures only; revenue_rolling_7_days: it is "
-        "cumulative over a rolling window (`7 days`)"
+        "running totals of `sum` and `count` measures only; revenue_prev_month:"
     )
     assert (
         "revenue_prev_month: it reads an input at an earlier period (`offset`), and the Cube "
         "export does not carry offsets yet; revenue_mom_growth: it uses `revenue_prev_month`, "
         "which is not exported"
     ) in str(exc.value)
-    # Without policies or the rolling window there is nothing to refuse: the year-to-date and
-    # month-to-date metrics are exported.
+    # Without policies, the running maximum or the offsets there is nothing to refuse: the
+    # year-to-date, month-to-date and rolling metrics are exported.
     data = _without_policies(_without_business(graph.project))
     data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUBE_LOST]
     data["user_context"], data["timezone"], data["glossary"] = {}, None, []
@@ -1142,7 +1135,20 @@ def test_cube_export_round_trip(graph, tmp_path):
         "type": "to_date",
         "granularity": "month",
     }
-    assert "revenue_rolling_7_days" not in measures
+    # A rolling window in days: a trailing window ending at the end of each bucket (DEC-30).
+    assert measures["revenue_rolling_7_days"] == {
+        "name": "revenue_rolling_7_days",
+        "type": "sum",
+        "sql": "{CUBE}.amount",
+        "rolling_window": {"trailing": "7 day", "offset": "end"},
+        "description": "Revenue of the 7 days ending on each day",
+        "meta": {"owner": "controllership"},
+    }
+    assert measures["smallest_order_rolling_7_days"]["type"] == "min"
+    assert measures["customers_rolling_30_days"]["rolling_window"] == {
+        "trailing": "30 day",
+        "offset": "end",
+    }
 
     # Models, tables, dimensions and measures come back as they were (the primary key as an
     # entity named after the cube; AVG with a `1e0 *` factor, so it is real in Cube too).
@@ -1172,15 +1178,22 @@ def test_cube_export_round_trip(graph, tmp_path):
         assert metrics[name].window is None
         assert metrics[name].measure == f"{name}__base"
         assert metrics[name].description == native.description
+    # The rolling windows come back as the same window in days.
+    for name in TRAILING:
+        native = graph.metrics[name]
+        assert metrics[name].type == "cumulative"
+        assert metrics[name].window == native.window
+        assert metrics[name].grain_to_date is None
+        assert metrics[name].measure == f"{name}__base"
     orders_back = next(m for m in back.project.semantic_models if m.name == "orders")
     base = next(x for x in orders_back.measures if x.name == "revenue_year_to_date__base")
     assert (base.agg, base.expr) == ("sum", "amount")
-    # Every loss is a warning: policies, the rolling window and what a later slice exports;
-    # metrics spanning cubes are exported, with Rule 3's warning.
+    # Every loss is a warning: the running maximum, the offsets and what a later slice
+    # exports; metrics spanning cubes are exported, with Rule 3's warning.
     joined = "\n".join(exported.warnings)
     assert "row_filters" not in joined and "sensitivity" not in joined
-    assert "metrics.revenue_rolling_7_days: it is cumulative over a rolling window" in joined
-    for name in TO_DATE:
+    assert "metrics.max_order_value_year_to_date: it is cumulative over a measure" in joined
+    for name in (*TO_DATE, *TRAILING):
         assert f"metrics.{name}:" not in joined
     for name in SPANS_CUBES:
         assert f"metrics.{name}: it spans cubes" in joined
@@ -1192,7 +1205,7 @@ def test_cube_export_round_trip(graph, tmp_path):
     ) in joined
     assert "timezone: not exported to Cube. Model timestamps are local time, so keep" in joined
     assert "relative dates such as today then follow UTC in Cube, not America/New_York" in joined
-    assert len(exported.warnings) == 16
+    assert len(exported.warnings) == 13
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -1204,9 +1217,10 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     ungoverned = _without_policies(back.project.model_dump(mode="json"))
     other = compile_project(Project.model_validate(ungoverned))
     cases = _cube_cases(graph.project, policies=False, lost=CUBE_LOST)
-    # A08 (year-to-date by month) and A09 (month-to-date by status and day) among them.
-    assert {"A08", "A09"} <= {c.id for c in cases}
-    assert len(cases) == 27
+    # A08 (year-to-date by month), A09 (month-to-date by status and day) and the rolling
+    # windows A29, A30 (by status, from 45 days ago) and A34 (a minimum) among them.
+    assert {"A08", "A09", "A29", "A30", "A34"} <= {c.id for c in cases}
+    assert len(cases) == 30
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1215,9 +1229,9 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     governed = compile_project(back.project)
     cases = _cube_cases(graph.project, policies=True, lost=CUBE_LOST)
     # A32 (month-to-date by quarter) and A39 (year-to-date by week) are refused by the
-    # re-imported model too.
-    assert {"R17", "R18", "A08", "A09", "A32", "A39"} <= {c.id for c in cases}
-    assert len(cases) == 48
+    # re-imported model too; A33 is the 30-day window of customers by segment.
+    assert {"R17", "R18", "A08", "A09", "A32", "A33", "A39", "A40", "A41"} <= {c.id for c in cases}
+    assert len(cases) == 52
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1628,7 +1642,7 @@ def test_cube_export_to_date_same_numbers(graph, tmp_path, source, request):
         "rolling_window": {"type": "to_date", "granularity": "week"},
     }
     other = compile_project(back.project)
-    names = [m.name for m in project.metrics if m.type == "cumulative"]
+    names = [m.name for m in project.metrics if m.type == "cumulative" and m.grain_to_date]
     assert len(names) == 22
     # A literal date, not CURRENT_DATE: the Cube export drops the business time zone, so in the
     # evening in New York the re-imported model (UTC) is already on the next day.
@@ -1660,6 +1674,156 @@ def test_cube_export_to_date_same_numbers(graph, tmp_path, source, request):
                 same(native, rows(other, connector, query))
                 compared += 1
     assert refused and compared
+
+
+# Rolling windows the Cube export writes as `trailing` windows (DEC-30): every aggregation a
+# window combines, over measures of two cubes.
+TRAILING_MEASURES = {
+    "orders": ("revenue", "order_count", "smallest_order", "max_order_value"),
+    "payments": ("paid_value", "payment_count"),
+}
+
+
+def _cube_trailing_metrics(project: Project) -> Project:
+    """The example without policies, plus a 1, 7 and 30-day window over `sum`, `count`,
+    `min` and `max` measures of two cubes."""
+    data = _without_policies(_without_business(project))
+    data["glossary"] = []
+    data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUBE_LOST]
+    for measures in TRAILING_MEASURES.values():
+        for measure in measures:
+            for days in (1, 7, 30):
+                data["metrics"].append(
+                    {
+                        "name": f"rolling_{days}_{measure}",
+                        "type": "cumulative",
+                        "measure": measure,
+                        "window": "1 day" if days == 1 else f"{days} days",
+                    }
+                )
+    return Project.model_validate(data)
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
+    """Every rolling window in days the export writes as a `trailing` window returns the native
+    numbers after the round trip, by day, by day and another dimension,
+    and with a filter on the time dimension that cuts the first windows; other grains are
+    refused on both sides."""
+    connector = request.getfixturevalue(source)
+    project = _cube_trailing_metrics(graph.project)
+    full = compile_project(project)
+    exported, back = _cube_round_trip(project, tmp_path)
+    assert back.warnings == []
+    measures = {
+        m["name"]: m for c in yaml.safe_load(exported.text)["cubes"] for m in c.get("measures", [])
+    }
+    assert measures["rolling_30_payment_count"] == {
+        "name": "rolling_30_payment_count",
+        "type": "count",
+        "rolling_window": {"trailing": "30 day", "offset": "end"},
+    }
+    assert measures["rolling_1_max_order_value"]["rolling_window"] == {
+        "trailing": "1 day",
+        "offset": "end",
+    }
+    other = compile_project(back.project)
+    names = [m.name for m in project.metrics if m.type == "cumulative" and m.window]
+    assert len(names) == 21
+    for name in names:
+        assert other.metrics[name].window == full.metrics[name].window
+    # A literal date, not CURRENT_DATE (see the running totals above).
+    since = f"DATE '{(dt.date.today() - dt.timedelta(days=200)).isoformat()}'"
+    refused = compared = 0
+    for model, measure_names in TRAILING_MEASURES.items():
+        time = "paid_at" if model == "payments" else "ordered_at"
+        extra = "payments.method" if model == "payments" else "orders.status"
+        for measure in measure_names:
+            for days in (1, 7, 30):
+                name = f"rolling_{days}_{measure}"
+                for dims, filters in (
+                    ([f"{model}.{time}__day"], []),
+                    ([extra, f"{model}.{time}__day"], []),
+                    # Both sides filter rows first: the first windows of the range are cut.
+                    ([f"{model}.{time}__day"], [f"{{{model}.{time}}} >= {since}"]),
+                ):
+                    query = QueryRequest(metrics=[name], dimensions=dims, filters=filters)
+                    native = rows(full, connector, query)
+                    assert native
+                    same(native, rows(other, connector, query))
+                    compared += 1
+                for grain in ("week", "month"):
+                    query = QueryRequest(metrics=[name], dimensions=[f"{model}.{time}__{grain}"])
+                    for side in (full, other):
+                        with pytest.raises(QueryError, match="needs the time dimension at day"):
+                            rows(side, connector, query)
+                    refused += 1
+    assert compared == 54 and refused == 36
+
+
+@pytest.mark.parametrize(
+    ("window", "kind", "metric", "warning"),
+    [
+        ({"trailing": "7 day", "offset": "end"}, "sum", {"window": "7 days"}, None),
+        # `offset` defaults to `end`.
+        ({"trailing": "7 days"}, "min", {"window": "7 days"}, None),
+        ({"trailing": "1 day", "offset": "end"}, "count", {"window": "1 day"}, None),
+        ({"type": "fixed", "trailing": "30 day"}, "max", {"window": "30 days"}, None),
+        ({"trailing": "7 day", "offset": "start"}, "sum", None, "does not end on the row's day"),
+        ({"trailing": "7 day", "leading": "1 day"}, "sum", None, "does not end on the row's day"),
+        ({"trailing": "7 day"}, "avg", None, "of type `avg` cannot be combined"),
+        (
+            {"trailing": "7 day"},
+            "count_distinct",
+            None,
+            "of type `count_distinct` cannot be combined",
+        ),
+        ({"trailing": "1 month"}, "sum", {"window": "1 month"}, "only rolling windows in days"),
+    ],
+)
+def test_cube_import_trailing_windows(tmp_path, window, kind, metric, warning):
+    """A trailing window in days ending at the bucket's end, over a measure whose daily values
+    combine, is a Cosmos window in days and validates; one that does not end on the row's day,
+    or over an `avg` or `count_distinct` measure, is skipped with its base measure; other units
+    stay refused at query time."""
+    doc = {
+        "cubes": [
+            {
+                "name": "orders",
+                "sql_table": "public.orders",
+                "dimensions": [
+                    {"name": "order_id", "sql": "{CUBE}.order_id", "type": "string"},
+                    {"name": "ordered_at", "sql": "{CUBE}.ordered_at", "type": "time"},
+                ],
+                "measures": [
+                    {
+                        "name": "revenue_window",
+                        "type": kind,
+                        "sql": "{CUBE}.amount",
+                        "rolling_window": window,
+                    }
+                ],
+            }
+        ]
+    }
+    path = tmp_path / "model.yml"
+    path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    result = import_model("cube", path)
+    metrics = {m.name: m for m in result.project.metrics}
+    measures = {x.name for m in result.project.semantic_models for x in m.measures}
+    if metric is None:
+        # Skipped whole: no metric, and no `__base` measure left behind.
+        assert "revenue_window" not in metrics
+        assert measures == set()
+    else:
+        assert metrics["revenue_window"].window == metric["window"]
+        assert metrics["revenue_window"].measure == "revenue_window__base"
+        assert measures == {"revenue_window__base"}
+    if warning is None:
+        assert result.warnings == []
+        compile_project(result.project)  # validates
+    else:
+        assert [w for w in result.warnings if warning in w], result.warnings
 
 
 def test_cube_export_states_each_reason(graph):
@@ -1696,15 +1860,21 @@ def test_cube_export_states_each_reason(graph):
         # A running maximum is valid, but Cube carries only `sum` and `count` running totals.
         {"name": "max_order_mtd", "type": "cumulative", "measure": "max_order_value"},
         {"name": "revenue_running", "type": "cumulative", "measure": "revenue"},
+        {"name": "rolling_gap", "type": "derived", "expr": "{revenue_rolling_7_days} - {revenue}"},
+        {
+            "name": "rolling_share",
+            "type": "ratio",
+            "numerator": "revenue_rolling_7_days",
+            "denominator": "revenue",
+        },
     ]
-    data["metrics"][-2]["grain_to_date"] = "month"
+    data["metrics"][-4]["grain_to_date"] = "month"
     project = Project.model_validate(data)
     with pytest.raises(MetricLossError) as exc:
         export_cube(project)
     assert str(exc.value).startswith(
-        "16 metrics (customers_rolling_30_days, max_order_value_year_to_date, "
-        "revenue_rolling_7_days, smallest_order_rolling_7_days, revenue_prev_month, "
-        "revenue_mom_growth, order_count_7_days_earlier, midwest_revenue, "
+        "15 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
+        "order_count_7_days_earlier, midwest_revenue, "
     )
     warnings = export_cube(project, allow_metric_loss=True).warnings
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in warnings}
@@ -1724,9 +1894,11 @@ def test_cube_export_states_each_reason(graph):
         assert reasons[f"metrics.{name}"].startswith(
             "it uses the cumulative metric `revenue_year_to_date`, and Cosmos does not compute"
         )
-    assert reasons["metrics.revenue_rolling_7_days"].startswith(
-        "it is cumulative over a rolling window (`7 days`)"
-    )
+    assert "metrics.revenue_rolling_7_days" not in reasons
+    for name in ("rolling_gap", "rolling_share"):
+        assert reasons[f"metrics.{name}"].startswith(
+            "it uses the cumulative metric `revenue_rolling_7_days`, and Cosmos does not compute"
+        )
     for name in ("max_order_mtd", "max_order_value_year_to_date"):
         assert reasons[f"metrics.{name}"].startswith(
             "it is cumulative over a measure that aggregates with `max`, and the Cube export "
@@ -1766,9 +1938,8 @@ def test_cli_export_cube(tmp_path):
     assert refused.stdout == ""
     assert "row filter" not in refused.stderr
     assert (
-        "7 metrics (customers_rolling_30_days, max_order_value_year_to_date, "
-        "revenue_rolling_7_days, smallest_order_rolling_7_days, revenue_prev_month, "
-        "revenue_mom_growth, order_count_7_days_earlier) would NOT be exported" in refused.stderr
+        "4 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
+        "order_count_7_days_earlier) would NOT be exported" in refused.stderr
     )
     flags = ["--allow-metric-loss"]
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), *flags])
@@ -1779,7 +1950,7 @@ def test_cli_export_cube(tmp_path):
     out = tmp_path / "model" / "cubes.yml"
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "16 warnings" in result.stdout
+    assert "13 warnings" in result.stdout
     assert import_model("cube", out).warnings == []
 
 
