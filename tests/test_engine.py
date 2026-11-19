@@ -427,26 +427,82 @@ def test_to_date_over_avg_or_count_distinct_is_refused_at_query_time(metric, mes
         ("lines_mtd", "year", True),
         ("low_qtd", "year", True),
         ("amount_wtd", "month", True),
+        # A week does not nest in a month, quarter or year (DEC-28).
+        ("lines_mtd", "week", True),
+        ("low_qtd", "week", True),
+        ("amount_ytd", "week", True),
+        ("top_ytd", "week", True),
         ("lines_mtd", "month", False),
-        ("lines_mtd", "week", False),
         ("lines_mtd", "day", False),
         ("lines_mtd", "hour", False),
         ("lines_mtd", None, False),
         ("amount_ytd", "year", False),
         ("amount_ytd", "quarter", False),
+        ("amount_ytd", "month", False),
+        ("amount_ytd", "day", False),
         ("low_qtd", "quarter", False),
+        ("low_qtd", "month", False),
+        ("amount_wtd", "week", False),
+        ("amount_wtd", "day", False),
         ("amount_running", "year", False),  # no to-date grain: a running total at any grain
+        ("amount_running", "week", False),
     ],
 )
 def test_to_date_grain_coarser_than_the_period_is_refused(metric, grain, refused):
     graph = compile_project(project(TO_DATE))
     dim = f"sales.sold_at__{grain}" if grain else "sales.sold_at"
-    request = QueryRequest(metrics=[metric], dimensions=["sales.kind", dim])
-    if refused:
-        with pytest.raises(QueryError, match=f"cannot be grouped by {grain}"):
+    for dims in (["sales.kind", dim], [dim]):
+        request = QueryRequest(metrics=[metric], dimensions=dims)
+        if refused:
+            with pytest.raises(QueryError, match=f"cannot be grouped by {grain}"):
+                Planner(graph, "duckdb").plan(request)
+        else:
             Planner(graph, "duckdb").plan(request)
-    else:
+
+
+@pytest.mark.parametrize(
+    ("metric", "message"),
+    [
+        (
+            "lines_mtd",
+            "`lines_mtd` (`sales.sold_at__week` requested): a month-to-date metric cannot be "
+            "grouped by week, since a week can cross into a new month and would be counted in "
+            "the old one; use the day or month grain",
+        ),
+        (
+            "amount_ytd",
+            "`amount_ytd` (`sales.sold_at__week` requested): a year-to-date metric cannot be "
+            "grouped by week, since a week can cross into a new year and would be counted in "
+            "the old one; use the day, month, quarter or year grain",
+        ),
+    ],
+)
+def test_week_under_a_longer_to_date_period_says_why(metric, message):
+    graph = compile_project(project(TO_DATE))
+    request = QueryRequest(metrics=[metric], dimensions=["sales.sold_at__week"])
+    with pytest.raises(QueryError) as refusal:
         Planner(graph, "duckdb").plan(request)
+    assert str(refusal.value) == message
+
+
+WEEK_UNDER_YEAR = """
+  - {name: amount_ytd_doubled, type: derived, expr: "{amount_ytd} * 2"}
+  - name: amount_ytd_prev_month
+    type: derived
+    expr: "{amount_ytd}"
+    inputs: [{metric: amount_ytd, offset: 1 month}]
+"""
+
+
+@pytest.mark.parametrize("metric", ["amount_ytd_doubled", "amount_ytd_prev_month"])
+def test_week_under_a_year_to_date_reaches_no_number_through_another_metric(metric):
+    """A derived metric or an offset cannot wrap a cumulative metric, so no request reaches a
+    year-to-date by week through one (DEC-28)."""
+    graph = compile_project(project(TO_DATE + WEEK_UNDER_YEAR), strict=False)
+    for grain in ("week", "month"):
+        request = QueryRequest(metrics=[metric], dimensions=[f"sales.sold_at__{grain}"])
+        with pytest.raises(QueryError, match="cumulative"):
+            Planner(graph, "duckdb").plan(request)
 
 
 @pytest.mark.parametrize(

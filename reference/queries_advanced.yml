@@ -836,6 +836,16 @@ cases:
       dimensions: [orders.ordered_at__day]
     expect_error: QueryError
 
+  # -- A week under a longer to-date period (DEC-28) --------------------------
+  - id: A39
+    category: tempo
+    phase: 3
+    title: A year-to-date metric by week is refused (a week across a new year would count in the old one)
+    request:
+      metrics: [revenue_year_to_date]
+      dimensions: [orders.ordered_at__week]
+    expect_error: QueryError
+
   # -- Filters on metric values (DEC-29) --------------------------------------
   # `metric_filters` keep the rows of the result whose metric values meet the conditions, after
   # aggregation at the requested grain; the row filters still apply to the facts first, and the

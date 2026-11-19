@@ -616,8 +616,9 @@ class _DbtWriter:
         elif isinstance(metric, DerivedMetric):
             return self._derived(metric)
         else:
-            # At a grain coarser than the to-date period MetricFlow returns a value, while the
-            # engine refuses the query (DEC-21).
+            # At a grain coarser than the to-date period, and by week under a month, quarter or
+            # year, MetricFlow returns a value, while the engine refuses the query (DEC-21,
+            # DEC-28).
             raise _NotExported("it is cumulative, and the dbt export does not carry it yet")
         if metric.filter:
             item["filter"] = self._filter(metric.filter, self._leaves(metric.name))
