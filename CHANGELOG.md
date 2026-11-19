@@ -21,8 +21,10 @@ format or the API; such changes are listed under **Changed**.
   ends inside one, gives DAX a partial earlier period while Cosmos filters the earlier period's
   facts too; other columns of the date table (a weekday) give different numbers; Power BI also
   shows periods without facts; and by day, where DAX clamps month ends, a month offset is
-  refused. Adding or subtracting a shifted measure gets a warning too (DAX counts BLANK as zero
-  in `+` and `-`). `PARALLELPERIOD` by quarter or year (the whole earlier quarter or year, even
+  refused. Adding or subtracting a shifted measure, or a ratio over one, gets a warning too (DAX
+  counts BLANK as zero in `+` and `-`). `DIVIDE` with an alternate result other than `BLANK()`
+  (`DIVIDE(a, b, 0)`) is imported with a warning that Cosmos returns NULL where DAX returns the
+  alternate result, and `[A] / DIVIDE([B], [C])` now imports as a / (b / c). `PARALLELPERIOD` by quarter or year (the whole earlier quarter or year, even
   by month), forward shifts, other `CALCULATE` filters, the fact's own date column, shifts of a
   running total or of another shifted measure, and other units stay warnings. An equivalence
   test checks them against hand-written SQL and a model of DAX by day, week, month, quarter,

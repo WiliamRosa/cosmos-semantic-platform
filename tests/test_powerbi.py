@@ -1044,6 +1044,81 @@ def test_period_shifts_import_as_offset_inputs(tmp_path):
     assert "OFFSET_12_MONTH" in Planner(graph, "duckdb").plan(request).sql.upper()
 
 
+def test_divide_inside_arithmetic_keeps_its_grouping(tmp_path, duckdb_connector):
+    """`[A] / DIVIDE([B], [C])` is a / (b / c), not (a / b) / c."""
+    path = _shift_bim(
+        tmp_path,
+        {
+            "Nested": "[Amount] / DIVIDE([Lines], [Amount])",
+            "Left": "DIVIDE([Amount], [Lines]) / [Lines]",
+        },
+    )
+    graph, _ = imported("powerbi", path)
+    metrics = {m.name: m for m in graph.project.metrics}
+    assert metrics["nested"].expr == "{amount} / (({lines}) / ({amount}))"
+    assert metrics["left"].expr == "(({amount}) / ({lines})) / {lines}"
+    # Amount 4 over 2 lines: 4 / (2 / 4) = 8, where (4 / 2) / 4 would be 0.5.
+    schema = pa.schema([("amount", pa.float64())])
+    table = pa.table([[3.0, 1.0]], schema=schema)
+    demo_data.load(duckdb_connector, {"powerbi_shift_sales": table})
+    try:
+        sql = Planner(graph, "duckdb").plan(QueryRequest(metrics=["nested", "left"])).sql
+        assert list(duckdb_connector.execute(sql).to_pylist()[0].values()) == [8.0, 1.0]
+    finally:
+        duckdb_connector.run_script("DROP TABLE public.powerbi_shift_sales")
+
+
+def test_divide_with_an_alternate_result_imports_with_a_warning(tmp_path):
+    path = _shift_bim(
+        tmp_path,
+        {
+            "Zero": "DIVIDE([Amount], [Lines], 0)",
+            "Minus One": "DIVIDE([Amount] - [Lines], [Lines], -1)",
+            "Inside": "[Amount] + DIVIDE([Amount], [Lines], 0) + DIVIDE([Lines], [Amount], 1)",
+            "Blank": "DIVIDE([Amount], [Lines], BLANK())",
+            "Lost": "DIVIDE([Amount], [Missing], 0)",
+        },
+    )
+    graph, warnings = imported("powerbi", path)
+    metrics = {m.name: m for m in graph.project.metrics}
+    assert metrics["zero"].type == "ratio"
+    assert metrics["minus_one"].expr == "({amount} - {lines}) / ({lines})"
+    assert {"inside", "blank"} <= set(metrics) and "lost" not in metrics
+    joined = "\n".join(warnings)
+    for name in ("Zero", "Minus One", "Inside"):
+        message = f"measure `{name}`: DIVIDE with an alternate result; DAX returns the alternate"
+        assert joined.count(message) == 1, name
+    assert "Cosmos returns NULL there" in joined
+    assert "`Blank`: DIVIDE" not in joined and "`Lost`: DIVIDE" not in joined
+
+
+def test_blank_as_zero_warning_follows_the_shifted_operand(tmp_path):
+    path = _shift_bim(
+        tmp_path,
+        {
+            "PY": f"CALCULATE([Amount], SAMEPERIODLASTYEAR({DAY}))",
+            "Share": "DIVIDE([PY], [Amount])",
+            "Share Copy": "CALCULATE([Share])",
+            "Share A": 'CALCULATE([Share], KEEPFILTERS(Sales[buyer] = "a"))',
+            "Share Minus": "[Share] - 1",
+            "Copy Plus": "[Share Copy] + 1",
+            "A Plus": "[Share A] + 1",
+            "Over PY": "DIVIDE([Amount] - [Lines], [PY])",
+            "Minus Ratio": "[Amount] - DIVIDE([Amount], [PY])",
+        },
+    )
+    graph, warnings = imported("powerbi", path)
+    assert {"share", "share_a", "share_minus", "over_py"} <= {m.name for m in graph.project.metrics}
+    joined = "\n".join(warnings)
+    assert "`Share Minus`: adds or subtracts `share`" in joined
+    assert "`Copy Plus`: adds or subtracts `share_copy`" in joined
+    assert "`A Plus`: adds or subtracts `share_a`" in joined
+    assert "`Minus Ratio`: adds or subtracts `py`" in joined
+    # The shifted metric only divides here, outside the subtraction: no BLANK-as-zero warning.
+    assert "`Over PY`: adds" not in joined
+    assert "`Share`: adds" not in joined
+
+
 @pytest.mark.parametrize(
     ("dax", "reason"),
     [
@@ -1343,6 +1418,23 @@ def test_period_shifts_match_hand_written_sql_and_dax(source, request, tmp_path)
             "amount_pp": None,
             "amount_py": None,
         }
+        # A filter of whole periods (the year 2025) cuts nothing in DAX, whose January still
+        # reads December 2024; in Cosmos the first period's earlier period is filtered out.
+        year_2025 = cosmos(
+            ["amount_pm", "amount_py"],
+            "month",
+            filters=["{calendar.cal_day} >= DATE '2025-01-01'"],
+        )
+        january = _period(dt.date(2025, 1, 1), "month")
+        in_2025 = lambda day: day.year == 2025  # noqa: E731
+        assert _dax("amount_pm", "month", in_2025)[january] == 2.0
+        assert _dax("amount_py", "month", in_2025)[january] == 10.0
+        assert year_2025[january] == {"amount_pm": None, "amount_py": None}
+        # February reads a January inside the filter, so the month offset agrees again; the
+        # year offset reads February 2024, which the filter removes in Cosmos only.
+        assert year_2025[january + 1] == {"amount_pm": 23.0, "amount_py": None}
+        assert _dax("amount_pm", "month", in_2025)[january + 1] == 23.0
+        assert _dax("amount_py", "month", in_2025)[january + 1] == 6.0
         # Periods without facts: Power BI shows April 2025, whose March has facts; Cosmos
         # outputs only the periods with facts.
         assert _period(dt.date(2025, 4, 1), "month") not in cosmos(["amount_pm"], "month")

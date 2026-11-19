@@ -535,6 +535,8 @@ class _Translator:
         self.helpers = 0
         # Cosmos metrics that read an input at an earlier period, directly or through others.
         self.reads_earlier: set[str] = set()
+        self.alternate_warned: set[str] = set()
+        self._measures: list[str] = []  # the Power BI measures being translated, innermost last
         self._in_progress: set[str] = set()
 
     # Members -----------------------------------------------------------------------------
@@ -709,10 +711,12 @@ class _Translator:
             return "{" + self.operand(node) + "}"
         if kind == "call":  # DIVIDE inside arithmetic: the engine divides safely
             args = node[2]
-            if len(args) == 3 and args[2] not in (("num", "0"), ("call", "BLANK", [])):
-                raise _Unsupported("DIVIDE with an alternate result")
+            if len(args) < 2:
+                raise _Unsupported("DIVIDE needs two arguments")
+            self.alternate_result(args)
             num, den = (self.arithmetic(a) for a in args[:2])
-            return f"{_parenthesized(num)} / {_parenthesized(den)}"
+            # Parenthesized as a whole: `[A] / DIVIDE([B], [C])` is a / (b / c).
+            return f"({_parenthesized(num)} / {_parenthesized(den)})"
         if kind == "neg":
             return f"-({self.arithmetic(node[1])})"
         if kind == "bin" and node[1] in ("+", "-", "*", "/"):
@@ -764,10 +768,13 @@ class _Translator:
     def translate(self, pbi_name: str) -> None:
         source = self.dax[pbi_name]
         self._in_progress.add(pbi_name)
+        self._measures.append(pbi_name)
         try:
             self._translate(pbi_name, source)
         except (_Unsupported, DaxError) as exc:
             self.failed[pbi_name] = str(exc)
+            alternate = f"measure `{pbi_name}`: DIVIDE with an alternate result"
+            self.warnings = [w for w in self.warnings if not w.startswith(alternate)]
             functions = sorted(set(_safe_functions(source["expression"])) - _TRANSLATABLE)
             hint = f" (DAX {', '.join(functions)} has no equivalent)" if functions else ""
             expr = " ".join(source["expression"].split())
@@ -775,6 +782,7 @@ class _Translator:
                 f"measure `{pbi_name}` not imported{hint}: {exc}. DAX: {expr[:120]}"
             )
         finally:
+            self._measures.pop()
             self._in_progress.discard(pbi_name)
 
     def _translate(self, pbi_name: str, source: dict[str, Any]) -> None:
@@ -800,14 +808,13 @@ class _Translator:
             return
         if kind == "call" and tree[1] == "DIVIDE":
             args = tree[2]
-            if len(args) == 3 and args[2] not in (("num", "0"), ("call", "BLANK", [])):
-                raise _Unsupported("DIVIDE with an alternate result")
             if len(args) < 2:
                 raise _Unsupported("DIVIDE needs two arguments")
             if not all(_is_operand(a) for a in args[:2]):
                 # DIVIDE([m] - [m PY], [m PY]): arithmetic over measures, divided safely.
                 self.derived(pbi_name, tree, name, meta)
                 return
+            self.alternate_result(args)
             numerator = self.operand(args[0], f"{name}_numerator")
             denominator = self.operand(args[1], f"{name}_denominator")
             self.metric(
@@ -820,6 +827,8 @@ class _Translator:
                     **meta,
                 },
             )
+            if {numerator, denominator} & self.reads_earlier:
+                self.reads_earlier.add(self.done[pbi_name])
             return
         if (
             kind == "call"
@@ -865,6 +874,8 @@ class _Translator:
                 spec["name"] = name
                 spec["filter"] = f"({base['filter']}) AND {flt}" if base.get("filter") else flt
             self.metric(pbi_name, {**spec, **meta})
+            if inner in self.reads_earlier:  # a filtered copy of a ratio over a shifted metric
+                self.reads_earlier.add(self.done[pbi_name])
             return
         if kind == "call" and tree[1] in _TO_DATE:
             args = tree[2]
@@ -905,14 +916,59 @@ class _Translator:
         if not earlier:
             return
         self.reads_earlier.add(self.done[pbi_name])
-        if _adds_or_subtracts(tree):
+        shifted = self.added_or_subtracted_earlier(tree)
+        if shifted:
             self.warnings.append(
-                f"measure `{pbi_name}`: adds or subtracts `{earlier[0]}`, which reads an earlier "
+                f"measure `{pbi_name}`: adds or subtracts `{shifted}`, which reads an earlier "
                 "period. In DAX a BLANK side of + or - counts as zero, while in Cosmos a NULL "
                 "side makes the result NULL: where the earlier period has no facts, "
                 "`[m] - [m PY]` is [m] in Power BI and NULL in Cosmos (a growth that divides by "
                 "the earlier period is BLANK and NULL alike)"
             )
+
+    def alternate_result(self, args: list) -> None:
+        """``DIVIDE(a, b, alt)``: imported as a safe division, with a warning unless ``alt``
+        is ``BLANK()``. DAX returns ``alt`` where ``b`` is zero or BLANK; Cosmos returns NULL."""
+        if len(args) > 3:
+            raise _Unsupported("DIVIDE takes at most three arguments")
+        if len(args) < 3 or args[2] == ("call", "BLANK", []):
+            return
+        pbi_name = self._measures[-1]
+        if pbi_name in self.alternate_warned:
+            return
+        self.alternate_warned.add(pbi_name)
+        self.warnings.append(
+            f"measure `{pbi_name}`: DIVIDE with an alternate result; DAX returns the alternate "
+            "result where the denominator is zero or BLANK, while Cosmos returns NULL there"
+        )
+
+    def added_or_subtracted_earlier(self, node: tuple) -> str | None:
+        """The shifted member that is an operand (or inside an operand) of a ``+`` or ``-``,
+        or None. A shifted member only in a DIVIDE denominator, say, does not count."""
+        if node[0] == "bin" and node[1] in ("+", "-"):
+            for side in node[2:]:
+                found = self.shifted_inside(side)
+                if found:
+                    return found
+        children = node[2] if node[0] == "call" else node[1:]
+        for child in children:
+            if isinstance(child, tuple):
+                found = self.added_or_subtracted_earlier(child)
+                if found:
+                    return found
+        return None
+
+    def shifted_inside(self, node: tuple) -> str | None:
+        if node[0] == "mref":
+            member = self.done.get(node[1])
+            return member if member in self.reads_earlier else None
+        children = node[2] if node[0] == "call" else node[1:]
+        for child in children:
+            if isinstance(child, tuple):
+                found = self.shifted_inside(child)
+                if found:
+                    return found
+        return None
 
     def measures_under(self, member: str, seen: set[str] | None = None) -> set[str]:
         """The measures a member reads, refusing what an offset cannot shift."""
@@ -1197,13 +1253,6 @@ def _strip_parens(expr: str) -> str:
 
 def _parenthesized(expr: str) -> str:
     return expr if _wrapped(expr) else f"({expr})"
-
-
-def _adds_or_subtracts(node: tuple) -> bool:
-    if node[0] == "bin" and node[1] in ("+", "-"):
-        return True
-    children = node[2] if node[0] == "call" else node[1:]
-    return any(_adds_or_subtracts(c) for c in children if isinstance(c, tuple))
 
 
 def _safe_functions(expression: str) -> list[str]:
