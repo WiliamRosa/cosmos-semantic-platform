@@ -26,6 +26,24 @@ format or the API; such changes are listed under **Changed**.
   hand-written SQL's numbers, A29, A30, A33 and A34 among them, and windows of 1, 7 and 30
   days over measures of two cubes return the native numbers by day, by day and another
   dimension, and with a time filter. The planner and the SQL of every request are unchanged.
+- `cosmos export dbt` writes rolling windows in days (DEC-25): a cumulative metric with
+  `window: N days` over a `sum`, `count`, `min` or `max` measure becomes a MetricFlow
+  `cumulative` metric with `cumulative_type_params.window: N days`, which `cosmos import dbt`
+  reads back as the same metric, so the example's `revenue_rolling_7_days`,
+  `smallest_order_rolling_7_days` and `customers_rolling_30_days` no longer need
+  `--allow-metric-loss`. Both windows cover the days D - (N - 1) to D; a warning per metric
+  says where MetricFlow's numbers are the engine's (by the model's `agg_time_dimension` at day
+  grain, on the days with facts) and where they differ: MetricFlow also returns days without
+  facts and coarser grains, its time constraint does not cut the window while the engine
+  filters the facts first, and it always windows over `metric_time`, never over another time
+  dimension of the model. Running totals (`grain_to_date` or without a window), windows in other
+  units, windows over a model without a time dimension, and ratio or derived metrics over a
+  cumulative metric (the planner does not compute one inside another metric) stay refused,
+  each with its reason; offset metrics too. The re-imported example answers 28 reference
+  queries (44 with policies), A29, A30, A33 and A34 among them; windows of 1, 3, 7 and 30 days
+  over four aggregations of two models return the native numbers by day, by day and another
+  dimension, and with a time filter
+  ([interoperability](docs/interoperability.md#exporting-dbt)).
 - Date range of a time dimension for agents (DEC-24): the MCP tool `dimension_values` and
   `GET /v1/dimensions/{name}/values` now accept time dimensions and return
   `{min, max, distinct_days}` instead of a list of values: the first and last day holding rows
