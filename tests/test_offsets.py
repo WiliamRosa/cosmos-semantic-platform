@@ -16,6 +16,8 @@ from cosmos_semantic import demo_data
 from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.connectors import ensure_read_only
 from cosmos_semantic.errors import ModelError, QueryError
+from cosmos_semantic.interchange import import_model
+from cosmos_semantic.interchange.dbt import export_dbt
 from cosmos_semantic.planner import Planner, QueryRequest
 from cosmos_semantic.spec import Project, offset_grain_problem, parse_offset
 
@@ -373,3 +375,103 @@ def test_sql_for_every_dialect(dialect, shifted):
     ensure_read_only(compiled.sql, dialect)
     assert "sales_agg_offset_1_month" in compiled.sql
     assert shifted in compiled.sql
+
+
+# -- dbt export and import as `offset_window` (DEC-36) ------------------------------------------
+
+SHIFTED = [
+    "amount_prev_month",
+    "amount_growth",
+    "amount_prev_quarter",
+    "amount_prev_year",
+    "amount_week_before",
+    "lines_day_before",
+    "avg_amount_prev_month",
+]
+
+
+def _dbt_round_trip(tmp_path):
+    exported = export_dbt(_graph().project, allow_metric_loss=True)
+    path = tmp_path / "dbt" / "semantic_models.yml"
+    path.parent.mkdir()
+    path.write_text(exported.text, encoding="utf-8")
+    return exported, import_model("dbt", path, schema="public")
+
+
+def test_dbt_export_writes_offset_window(tmp_path):
+    """Months are written in the largest unit they are a whole number of, so MetricFlow
+    shifts the aggregated period at every grain the engine accepts; the import reads them
+    back as the same offsets."""
+    exported, back = _dbt_round_trip(tmp_path)
+    metrics = {m["name"]: m for m in yaml.safe_load(exported.text)["metrics"]}
+    windows = {
+        name: metrics[name]["type_params"]["metrics"] for name in SHIFTED if name != "amount_growth"
+    }
+    assert windows == {
+        "amount_prev_month": [{"name": "amount", "offset_window": "1 month"}],
+        "amount_prev_quarter": [{"name": "amount", "offset_window": "1 quarter"}],
+        "amount_prev_year": [{"name": "amount", "offset_window": "1 year"}],
+        "amount_week_before": [{"name": "amount", "offset_window": "7 days"}],
+        "lines_day_before": [{"name": "lines", "offset_window": "1 day"}],
+        "avg_amount_prev_month": [{"name": "avg_amount", "offset_window": "1 month"}],
+    }
+    assert "amount_running" not in metrics  # running totals wait for a later slice
+    native = {m.name: m for m in _graph().project.metrics}
+    for metric in back.project.metrics:
+        if metric.name in SHIFTED:
+            assert metric.offsets() == native[metric.name].offsets(), metric.name
+    warning = next(w for w in exported.warnings if w.startswith("metrics.amount_prev_quarter:"))
+    assert warning.startswith(
+        "metrics.amount_prev_quarter: `amount` read 3 months earlier is `offset_window: 1 "
+        "quarter` over MetricFlow's `metric_time`, which is `sales.sold_at`; by that dimension "
+        "(by month, by quarter in multiples of 3 months) the numbers are the engine's"
+    )
+    assert warning.endswith(
+        "; queried by `sales.shipped_at`, the engine shifts that dimension instead, which "
+        "MetricFlow does not"
+    )
+    # Read back from `1 quarter` and `1 year`, the import has nothing to add about grains.
+    assert not any("shifts each day before grouping" in w for w in back.warnings)
+
+
+def test_dbt_export_offsets_same_numbers(source, tmp_path):
+    """Exported to dbt and imported back, every metric that reads an input at an earlier
+    period returns the native numbers at every grain the engine accepts, with another
+    dimension and on the second time dimension, and both refuse the same queries."""
+    native = _graph()
+    _, back = _dbt_round_trip(tmp_path)
+    other = compile_project(back.project)
+
+    def run(graph, metrics, dimensions):
+        compiled = Planner(graph, source.dialect, source.config.schema_map).plan(
+            QueryRequest(metrics=metrics, dimensions=dimensions)
+        )
+        columns = [c.name for c in compiled.columns]
+        out = source.execute(compiled.sql).to_pylist()
+        rows = [tuple(_norm(r[c]) for c in columns) for r in out]
+        return sorted(rows, key=lambda t: tuple((v is None, str(v)) for v in t))
+
+    compared = refused = 0
+    for name in SHIFTED:
+        for grain in ("day", "week", "month", "quarter", "year"):
+            for dims in (
+                [f"sales.sold_at__{grain}"],
+                ["sales.kind", f"sales.sold_at__{grain}"],
+                [f"sales.shipped_at__{grain}"],
+            ):
+                metrics = ["amount", name]
+                try:
+                    want = run(native, metrics, dims)
+                except QueryError as exc:
+                    with pytest.raises(QueryError) as again:
+                        run(other, metrics, dims)
+                    assert str(again.value) == str(exc)
+                    refused += 1
+                    continue
+                assert want
+                assert run(other, metrics, dims) == want, (name, dims)
+                compared += 1
+    # Per dimension set: 1 month by month (3 metrics); 3 months by month and quarter;
+    # 12 months by month, quarter and year; 7 days by day and week; 1 day by day.
+    assert compared == 3 * (3 + 2 + 3 + 2 + 1)
+    assert compared + refused == 7 * 5 * 3

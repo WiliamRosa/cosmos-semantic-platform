@@ -144,9 +144,12 @@ def test_cube_rejects_code_and_templates(tmp_path):
 
 
 def test_dbt_reports_what_was_not_imported():
-    _, legacy = imported("dbt", FIXTURES / "dbt_legacy", schema="public")
+    graph, legacy = imported("dbt", FIXTURES / "dbt_legacy", schema="public")
     assert any("percentile" in w for w in legacy)
-    assert any("offset_window" in w for w in legacy)
+    # `offset_window` is read since DEC-36: `revenue - revenue_7d` reads `revenue` both ways,
+    # so the shifted one becomes a metric of its own.
+    assert graph.metrics["revenue_growth"].expr == "{revenue} - {revenue_growth__revenue_7d}"
+    assert graph.metrics["revenue_growth__revenue_7d"].offsets() == {"revenue": "7 days"}
     _, latest = imported("dbt", FIXTURES / "dbt_latest", schema="public")
     assert any("conversion" in w for w in latest)
 
@@ -993,7 +996,8 @@ ROLLING = (
     "smallest_order_rolling_7_days",
 )
 RUNNING = ("revenue_year_to_date", "revenue_month_to_date", "max_order_value_year_to_date")
-DBT_LOST = (*RUNNING, *OFFSETS)
+# Offsets are exported as `offset_window` (DEC-36).
+DBT_LOST = RUNNING
 LOSS_FLAGS = {"allow_policy_loss": True, "allow_metric_loss": True}
 
 
@@ -1988,8 +1992,8 @@ def _dbt_test_metrics(project: Project) -> Project:
 
 
 def test_dbt_export_fails_closed(graph):
-    """The example has row filters, sensitivity, running totals and offsets: each loss is
-    refused until the caller accepts it."""
+    """The example has row filters, sensitivity and running totals: each loss is refused until
+    the caller accepts it."""
     with pytest.raises(PolicyLossError) as exc:
         export_dbt(graph.project, allow_metric_loss=True)
     assert str(exc.value) == (
@@ -2002,30 +2006,34 @@ def test_dbt_export_fails_closed(graph):
     with pytest.raises(MetricLossError) as exc:
         export_dbt(graph.project, allow_policy_loss=True)
     assert str(exc.value) == (
-        "6 metrics (revenue_year_to_date, revenue_month_to_date, max_order_value_year_to_date, "
-        "revenue_prev_month, revenue_mom_growth, order_count_7_days_earlier) would NOT be exported "
+        "3 metrics (revenue_year_to_date, revenue_month_to_date, max_order_value_year_to_date) "
+        "would NOT be exported "
         "(revenue_year_to_date: it is a running total (`grain_to_date: year`), and the dbt "
         "export does not carry it yet; "
         "revenue_month_to_date: it is a running total (`grain_to_date: month`), and the dbt "
         "export does not carry it yet; "
         "max_order_value_year_to_date: it is a running total (`grain_to_date: year`), and the "
-        "dbt export does not carry it yet; "
-        "revenue_prev_month: it reads an input at an earlier period (`offset`), and the dbt "
-        "export does not map it to `offset_window` yet; "
-        "revenue_mom_growth: it uses `revenue_prev_month`, which is not exported; "
-        "order_count_7_days_earlier: it reads an input at an earlier period (`offset`), and "
-        "the dbt export does not map it to `offset_window` yet); "
+        "dbt export does not carry it yet); "
         "the dbt model would not have them. Pass --allow-metric-loss to export anyway"
     )
 
 
 def test_dbt_export_round_trip(graph, tmp_path):
     exported, back = _dbt_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
-    # The importer reads the whole export; it reports only the rolling windows' conditions.
+    # The importer reads the whole export; it reports only the conditions of the rolling
+    # windows and of the inputs read at an earlier period.
     assert back.warnings == [
         f"metrics.{name}: rolling window `{days} days`: only windows in days, queried by day, "
         "are supported, and only days with data appear (MetricFlow uses a time spine)"
         for name, days in zip(ROLLING, (30, 7, 7), strict=True)
+    ] + [
+        f"metrics.{name}: `{ref}` with `offset_window: {offset}` is read `{offset}` earlier: "
+        "only periods with data appear, and filters apply to the facts before the shift "
+        "(MetricFlow joins a time spine and filters its periods after the shift)"
+        for name, ref, offset in (
+            ("revenue_prev_month", "revenue", "1 month"),
+            ("order_count_7_days_earlier", "order_count", "7 days"),
+        )
     ]
     doc = yaml.safe_load(exported.text)
     models = {m["name"]: m for m in doc["semantic_models"]}
@@ -2048,6 +2056,18 @@ def test_dbt_export_round_trip(graph, tmp_path):
     assert metrics["orders_per_buyer"]["type_params"] == {
         "expr": "(1e0 * order_count / NULLIF(buyers, 0))",
         "metrics": [{"name": "order_count"}, {"name": "buyers"}],
+    }
+    # Inputs read at an earlier period become `offset_window` (DEC-36).
+    assert metrics["revenue_prev_month"]["type_params"] == {
+        "expr": "revenue",
+        "metrics": [{"name": "revenue", "offset_window": "1 month"}],
+    }
+    assert metrics["order_count_7_days_earlier"]["type_params"]["metrics"] == [
+        {"name": "order_count", "offset_window": "7 days"}
+    ]
+    assert metrics["revenue_mom_growth"]["type_params"] == {
+        "expr": "(1e0 * (revenue - revenue_prev_month) / NULLIF(revenue_prev_month, 0))",
+        "metrics": [{"name": "revenue"}, {"name": "revenue_prev_month"}],
     }
 
     # Models, tables, owners, entities, dimensions and measures come back as they were (AVG
@@ -2085,6 +2105,9 @@ def test_dbt_export_round_trip(graph, tmp_path):
     want["completed_revenue"]["filter"] = "{orders.status} = 'completed'"
     want["orders_per_buyer"]["expr"] = "(1e0 * {order_count} / NULLIF({buyers}, 0))"
     want["items_per_order"]["expr"] = "(1e0 * {items_sold} / NULLIF({order_count}, 0))"
+    want["revenue_mom_growth"]["expr"] = (
+        "(1e0 * ({revenue} - {revenue_prev_month}) / NULLIF({revenue_prev_month}, 0))"
+    )
     assert metric_shape(back.project) == want
 
     # Every loss is a warning: policies, running totals, the schema, and what a later slice
@@ -2105,9 +2128,21 @@ def test_dbt_export_round_trip(graph, tmp_path):
         "the engine filters the facts first; queried by `customers.last_order_at`, the engine "
         "windows over that dimension instead, which MetricFlow does not"
     ) in joined
-    for name in ("revenue_prev_month", "order_count_7_days_earlier"):
-        assert f"metrics.{name}: it reads an input at an earlier period" in joined
-    assert "metrics.revenue_mom_growth: it uses `revenue_prev_month`" in joined
+    assert (
+        "metrics.revenue_prev_month: `revenue` read 1 month earlier is `offset_window: 1 month` "
+        "over MetricFlow's `metric_time`, which is `orders.ordered_at`; by that dimension (by "
+        "month) the numbers are the engine's on the periods both return. MetricFlow joins a time "
+        "spine, so it also returns periods without facts whose earlier period has some, and it "
+        "applies time filters after the shift, so the first period of a filtered range still "
+        "reads the period before it, where the engine filters the facts first and returns NULL; "
+        "at the grains the engine refuses, MetricFlow returns a value"
+    ) in exported.warnings
+    assert (
+        "metrics.order_count_7_days_earlier: `order_count` read 7 days earlier is "
+        "`offset_window: 7 days` over MetricFlow's `metric_time`, which is `orders.ordered_at`; "
+        "by that dimension (by day, by week in multiples of 7 days)"
+    ) in joined
+    assert "metrics.revenue_mom_growth" not in joined
     assert "import with `cosmos import dbt --schema public`" in joined
     for name in ("products", "order_items"):
         assert f"semantic_models.{name}: it has measures but no time dimension" in joined
@@ -2115,7 +2150,7 @@ def test_dbt_export_round_trip(graph, tmp_path):
         assert f"{key}: not exported to dbt yet" in joined
     assert "user_context: region" in joined
     assert "not America/New_York" in joined
-    assert len(exported.warnings) == 23
+    assert len(exported.warnings) == 22
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -2126,16 +2161,17 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     _, back = _dbt_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
     other = compile_project(back.project)
     cases = _cube_cases(graph.project, policies=False, lost=DBT_LOST)
-    assert {"A29", "A30", "A34"} <= {c.id for c in cases}
-    assert len(cases) == 28
+    # The rolling windows and the inputs read at an earlier period (DEC-36) among them.
+    assert {"A29", "A30", "A34", "A35", "A36", "A37"} <= {c.id for c in cases}
+    assert len(cases) == 31
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
     # With the original policies put back, the queries that read the user pass too.
     governed = compile_project(_with_policies(back.project, graph.project))
     cases = _cube_cases(graph.project, policies=True, lost=DBT_LOST)
-    assert {"R17", "R18", "A33", "A40", "A41"} <= {c.id for c in cases}
-    assert len(cases) == 47
+    assert {"R17", "R18", "A33", "A38", "A40", "A41"} <= {c.id for c in cases}
+    assert len(cases) == 51
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -2179,7 +2215,9 @@ def _dbt_window_metrics(project: Project) -> Project:
     `count`, `min` and `max` measures of two models."""
     data = _without_policies(_without_business(project))
     data["glossary"] = []
-    data["metrics"] = [m for m in data["metrics"] if m["name"] not in (*DBT_LOST, *ROLLING)]
+    data["metrics"] = [
+        m for m in data["metrics"] if m["name"] not in (*DBT_LOST, *OFFSETS, *ROLLING)
+    ]
     for days in (1, 3, 7, 30):
         for measure in (
             "revenue",
@@ -2355,7 +2393,7 @@ def test_dbt_export_states_each_reason(graph):
     with pytest.raises(MetricLossError) as exc:
         export_dbt(project)
     assert str(exc.value).startswith(
-        "22 metrics (revenue_year_to_date, revenue_month_to_date, max_order_value_year_to_date, "
+        "19 metrics (revenue_year_to_date, revenue_month_to_date, max_order_value_year_to_date, "
     )
     result = export_dbt(project, allow_metric_loss=True)
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in result.warnings}
@@ -2408,7 +2446,7 @@ def test_dbt_export_states_each_reason(graph):
             "returns as NULL where the engine returns 0; it is not exported to dbt"
         )
     lost = {k.split(".", 1)[1] for k, r in reasons.items() if r.endswith("not exported to dbt")}
-    assert len(lost) == 22
+    assert len(lost) == 19
     exported = {m["name"] for m in yaml.safe_load(result.text)["metrics"]}
     assert {*ROLLING, "revenue_7d"} <= exported
     assert not exported & lost
@@ -2440,8 +2478,8 @@ def test_cli_export_dbt(tmp_path):
     refused = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "--allow-policy-loss"])
     assert refused.exit_code == 1
     assert (
-        "6 metrics (revenue_year_to_date, revenue_month_to_date, max_order_value_year_to_date, "
-        "revenue_prev_month, revenue_mom_growth, order_count_7_days_earlier)" in refused.stderr
+        "3 metrics (revenue_year_to_date, revenue_month_to_date, max_order_value_year_to_date) "
+        "would NOT be exported" in refused.stderr
     )
     flags = ["--allow-policy-loss", "--allow-metric-loss"]
     result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), *flags])
@@ -2453,5 +2491,125 @@ def test_cli_export_dbt(tmp_path):
     out = tmp_path / "models" / "semantic_models.yml"
     result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "23 warnings" in result.stdout
-    assert len(import_model("dbt", out, schema="public").warnings) == len(ROLLING)
+    assert "22 warnings" in result.stdout
+    # The rolling windows' and the two offsets' conditions.
+    assert len(import_model("dbt", out, schema="public").warnings) == len(ROLLING) + 2
+
+
+DBT_OFFSETS = """
+semantic_models:
+  - name: orders
+    model: ref('orders')
+    defaults: {agg_time_dimension: ordered_at}
+    entities: [{name: order, type: primary, expr: order_id}]
+    dimensions:
+      - {name: ordered_at, type: time, type_params: {time_granularity: day}}
+      - {name: status, type: categorical}
+    measures:
+      - {name: revenue, agg: sum, expr: amount, create_metric: true}
+metrics:
+  - name: rev_2_weeks
+    type: derived
+    type_params: {expr: revenue, metrics: [{name: revenue, offset_window: 2 weeks}]}
+  - name: rev_prev_quarter
+    type: derived
+    type_params: {expr: r, metrics: [{name: revenue, offset_window: 1 quarter, alias: r}]}
+  - name: rev_prev_year
+    type: derived
+    type_params:
+      expr: revenue
+      metrics: [{name: revenue, offset_window: {count: 1, granularity: year}}]
+  - name: rev_3_months
+    type: derived
+    type_params: {expr: revenue, metrics: [{name: revenue, offset_window: 3 months}]}
+  - name: rev_yoy
+    type: derived
+    type_params:
+      expr: (revenue - last_year) / last_year
+      metrics:
+        - {name: revenue}
+        - {name: revenue, offset_window: 12 months, alias: last_year}
+  - name: done_prev_month
+    type: derived
+    type_params:
+      expr: done
+      metrics:
+        - name: revenue
+          offset_window: 1 month
+          alias: done
+          filter: "{{ Dimension('order__status') }} = 'completed'"
+  - name: rev_hour
+    type: derived
+    type_params: {expr: revenue, metrics: [{name: revenue, offset_window: 1 hour}]}
+  - name: rev_month_start
+    type: derived
+    type_params: {expr: revenue, metrics: [{name: revenue, offset_to_grain: month}]}
+"""
+
+
+def test_dbt_import_offset_window(graph, tmp_path, duckdb_connector):
+    """MetricFlow's `offset_window` units become the engine's days and months (DEC-36); an
+    input read both shifted and not becomes a metric of its own; `offset_to_grain` and units
+    without an equivalent are skipped with a warning."""
+    path = tmp_path / "offsets.yml"
+    path.write_text(DBT_OFFSETS, encoding="utf-8")
+    result = import_model("dbt", path, schema="public")
+    metrics = {m.name: m for m in result.project.metrics}
+    assert metrics["rev_2_weeks"].offsets() == {"revenue": "14 days"}
+    assert metrics["rev_prev_quarter"].expr == "{revenue}"
+    assert metrics["rev_prev_quarter"].offsets() == {"revenue": "3 months"}
+    assert metrics["rev_prev_year"].offsets() == {"revenue": "12 months"}
+    assert metrics["rev_3_months"].offsets() == {"revenue": "3 months"}
+    assert metrics["rev_yoy"].expr == "({revenue} - {rev_yoy__last_year}) / {rev_yoy__last_year}"
+    assert metrics["rev_yoy"].offsets() == {}
+    assert metrics["rev_yoy__last_year"].offsets() == {"revenue": "12 months"}
+    assert metrics["done_prev_month"].offsets() == {"done_prev_month__done": "1 month"}
+    assert metrics["done_prev_month__done"].filter == "{orders.status} = 'completed'"
+    assert "rev_hour" not in metrics and "rev_month_start" not in metrics
+    joined = "\n".join(result.warnings)
+    assert "metrics.rev_hour: `offset_window: 1 hour` is not supported" in joined
+    assert "metrics.rev_month_start: `offset_to_grain` is not supported; metric skipped" in joined
+    # Written in months, MetricFlow shifts each day by quarter and by year; in quarters or
+    # years it shifts the period, as the engine does.
+    assert (
+        "metrics.rev_3_months: `revenue` with `offset_window: 3 months` is read `3 months` "
+        "earlier: only periods with data appear, and filters apply to the facts before the "
+        "shift (MetricFlow joins a time spine and filters its periods after the shift); by "
+        "quarter, MetricFlow shifts each day before grouping, which differs at month ends, "
+        "while the engine shifts the whole period"
+    ) in result.warnings
+    assert "metrics.rev_yoy: `revenue` with `offset_window: 12 months`" in joined
+    assert "by quarter and by year, MetricFlow shifts each day" in joined
+    for name in ("rev_2_weeks", "rev_prev_quarter", "rev_prev_year", "done_prev_month"):
+        line = next(w for w in result.warnings if w.startswith(f"metrics.{name}:"))
+        assert "shifts each day" not in line, line
+    # The imported metrics return the engine's numbers for the same offsets.
+    other = compile_project(result.project)
+    native = graph.project.model_dump(mode="json")
+    native["metrics"] += [
+        {
+            "name": "rev_last_year",
+            "type": "derived",
+            "expr": "{revenue}",
+            "inputs": [{"metric": "revenue", "offset": "12 months"}],
+        },
+        {
+            "name": "rev_yoy",
+            "type": "derived",
+            "expr": "({revenue} - {rev_last_year}) / {rev_last_year}",
+        },
+        {
+            "name": "rev_2_weeks",
+            "type": "derived",
+            "expr": "{revenue}",
+            "inputs": [{"metric": "revenue", "offset": "14 days"}],
+        },
+    ]
+    full = compile_project(Project.model_validate(native))
+    for name, dims in (
+        ("rev_yoy", ["orders.ordered_at__month"]),
+        ("rev_yoy", ["orders.status", "orders.ordered_at__quarter"]),
+        ("rev_2_weeks", ["orders.ordered_at__week"]),
+    ):
+        query = QueryRequest(metrics=["revenue", name], dimensions=dims)
+        same(rows(full, duckdb_connector, query), rows(other, duckdb_connector, query))

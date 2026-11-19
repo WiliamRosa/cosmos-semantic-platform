@@ -9,6 +9,27 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- dbt export and import of offsets (DEC-36): `cosmos export dbt` writes a derived metric's
+  inputs read at an earlier period (`inputs: [{metric, offset}]`, DEC-18) as MetricFlow
+  derived-metric inputs with `offset_window`, so the example's `revenue_prev_month`,
+  `revenue_mom_growth` and `order_count_7_days_earlier` no longer need `--allow-metric-loss`.
+  Offsets in months are written in the largest unit they are a whole number of (`3 months` as
+  `1 quarter`, `12 months` as `1 year`): MetricFlow shifts the aggregated period only at a
+  grain no coarser than the window's unit, and at a coarser one shifts each day before
+  grouping, which clamps month ends. `cosmos import dbt` reads `offset_window` in days, weeks,
+  months, quarters and years (weeks as 7 days, quarters and years as 3 and 12 months), as a
+  string or as `{count, granularity}`; an input read both shifted and not
+  (`revenue - revenue_7d`) becomes a derived metric of its own, and a written `3 months` gets a
+  warning that MetricFlow differs by quarter. `offset_to_grain` and other units stay skipped. A
+  warning per metric says where MetricFlow's numbers are the engine's (by the model's
+  `agg_time_dimension`, at the grains the engine accepts) and where they differ: MetricFlow
+  joins a time spine, so it also returns periods without facts whose earlier period has some,
+  it applies `metric_time` filters after the shift, it returns values at grains the engine
+  refuses, and it never shifts another time dimension. The re-imported example answers 31
+  reference queries (51 with policies), A35, A36, A37 and A38 among them; every offset of the
+  DEC-18 test table returns the native numbers at every grain the engine accepts, with another
+  dimension and on a second time dimension, on DuckDB and every database configured in CI
+  ([interoperability](docs/interoperability.md#exporting-dbt)).
 - Filters on metric values, first slice (DEC-29): a request (`POST /v1/query`, `POST /v1/sql`,
   the MCP tool `query`, `cosmos query` and `cosmos sql` with the repeatable `--metric-filter`)
   takes `metric_filters` such as `{revenue} > 1000`, which keep only the rows of the result

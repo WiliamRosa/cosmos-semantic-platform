@@ -6,9 +6,11 @@ Only the YAML is read; the dbt project is never executed. ``ref('x')`` becomes t
 
 Export: the legacy spec, which MetricFlow still reads. One semantic model per model with
 entities, dimensions and measures (each measure also a metric, ``create_metric``), simple,
-ratio and derived metrics, and cumulative metrics with a rolling window in days (``window``
-in ``cumulative_type_params``); filters become ``{{ Dimension('e__d') }}``. Division in
-derived metrics and AVG are written with a ``1e0 *`` factor, as in the Cube export.
+ratio and derived metrics, cumulative metrics with a rolling window in days (``window``
+in ``cumulative_type_params``), and derived-metric inputs read at an earlier period as
+``offset_window`` (read back as ``inputs`` with an ``offset``); filters become
+``{{ Dimension('e__d') }}``. Division in derived metrics and AVG are written with a ``1e0 *``
+factor, as in the Cube export.
 ``import_dbt`` reads the export back with the same numbers in Cosmos. The export fails closed on
 row filters and sensitivity, and on metrics it cannot carry (running totals, filters on a
 time dimension, a business rule or ``$user``), unless the caller accepts the loss. Business rules,
@@ -30,11 +32,13 @@ from cosmos_semantic.expressions import REF_RE, USER_RE
 from cosmos_semantic.interchange import ExportResult, ImportResult, read_yaml_files
 from cosmos_semantic.interchange.cube import _plural, real_division, refuse_policy_loss
 from cosmos_semantic.spec import (
+    OFFSET_GRAINS,
     CumulativeMetric,
     DerivedMetric,
     Project,
     RatioMetric,
     SimpleMetric,
+    parse_offset,
     window_agg_refusal,
 )
 
@@ -290,27 +294,72 @@ class _Builder:
     # -- comuns ----------------------------------------------------------------
 
     def derived(self, name: str, expr: str, inputs: list, base: dict, where: str) -> None:
-        aliases = {}
+        # (alias in `expr`, referenced name, offset or None, the dbt `offset_window`)
+        entries: list[tuple[str, str, str | None, Any]] = []
         for item in inputs:
             ref = item if isinstance(item, str) else item.get("name")
-            if isinstance(item, dict) and (
-                item.get("offset_window") or item.get("offset_to_grain")
-            ):
-                self.warnings.append(f"{where}: `offset_window` is not supported; metric skipped")
+            spec = item if isinstance(item, dict) else {}
+            if spec.get("offset_to_grain"):
+                self.warnings.append(f"{where}: `offset_to_grain` is not supported; metric skipped")
                 return
-            if isinstance(item, dict) and item.get("filter"):
-                helper = f"{name}__{item.get('alias') or ref}"
+            window, offset = spec.get("offset_window"), None
+            if window:
+                offset, problem = _offset_from_dbt(window)
+                if problem:
+                    self.warnings.append(f"{where}: {problem}; metric skipped")
+                    return
+            alias = spec.get("alias") or ref
+            if spec.get("filter"):
+                helper = f"{name}__{alias}"
                 self.metrics.append(
-                    {"name": helper, "type": "simple", "measure": ref, "filter": item["filter"]}
+                    {"name": helper, "type": "simple", "measure": ref, "filter": spec["filter"]}
                 )
                 ref = helper
-            aliases[(item.get("alias") if isinstance(item, dict) else None) or ref] = ref
+            entries.append((alias, ref, offset, window))
+        aliases: dict[str, str] = {}
+        shifted: list[dict[str, str]] = []
+        for alias, ref, offset, window in entries:
+            if offset is not None:
+                self._offset_warning(where, ref, window, offset)
+                if sum(other == ref for _, other, _, _ in entries) > 1:
+                    # Cosmos reads a reference either shifted or not in one expression, so an
+                    # input read both ways (`revenue - revenue_7d`) gets a metric of its own.
+                    helper = f"{name}__{alias}"
+                    self.metrics.append(
+                        {
+                            "name": helper,
+                            "type": "derived",
+                            "expr": "{" + ref + "}",
+                            "inputs": [{"metric": ref, "offset": offset}],
+                        }
+                    )
+                    ref = helper
+                else:
+                    shifted.append({"metric": ref, "offset": offset})
+            aliases[alias] = ref
         names = sorted(aliases, key=len, reverse=True)
         pattern = re.compile(r"\b(" + "|".join(map(re.escape, names)) + r")\b") if names else None
         converted = (
             pattern.sub(lambda m: "{" + aliases[m.group(1)] + "}", expr) if pattern else expr
         )
-        self.metrics.append({"name": name, "type": "derived", "expr": converted, **base})
+        item: dict[str, Any] = {"name": name, "type": "derived", "expr": converted, **base}
+        if shifted:
+            item["inputs"] = shifted
+        self.metrics.append(item)
+
+    def _offset_warning(self, where: str, ref: str, window: Any, offset: str) -> None:
+        text = f"{where}: `{ref}` with `offset_window: {_window_text(window)}` is read `{offset}` "
+        text += (
+            "earlier: only periods with data appear, and filters apply to the facts before the "
+            "shift (MetricFlow joins a time spine and filters its periods after the shift)"
+        )
+        coarser = _day_level_grains(window)
+        if coarser:
+            text += (
+                f"; by {' and by '.join(coarser)}, MetricFlow shifts each day before grouping, "
+                "which differs at month ends, while the engine shifts the whole period"
+            )
+        self.warnings.append(text)
 
     def cumulative(self, name, measure, window, grain_to_date, base) -> None:
         item = {"name": name, "type": "cumulative", "measure": measure, **base}
@@ -429,6 +478,71 @@ def _and(a: str | None, b: str | None) -> str | None:
     if a and b:
         return f"({a}) AND ({b})"
     return a or b
+
+
+# MetricFlow's `offset_window` units as the engine's offsets (DEC-36): (unit, how many of it).
+_DBT_OFFSET_UNITS = {
+    "day": ("day", 1),
+    "week": ("day", 7),
+    "month": ("month", 1),
+    "quarter": ("month", 3),
+    "year": ("month", 12),
+}
+_DBT_WINDOW_RE = re.compile(r"\s*(\d+)\s+([A-Za-z_]+?)s?\s*")
+
+
+def _window_parts(window: Any) -> tuple[int, str] | None:
+    """``(count, granularity)`` of an ``offset_window``: the YAML's ``"1 month"`` or a parsed
+    manifest's ``{count: 1, granularity: month}``."""
+    if isinstance(window, dict):
+        try:
+            return int(window["count"]), str(window["granularity"]).lower()
+        except (KeyError, TypeError, ValueError):
+            return None
+    match = _DBT_WINDOW_RE.fullmatch(str(window))
+    return (int(match.group(1)), match.group(2).lower()) if match else None
+
+
+def _window_text(window: Any) -> str:
+    parts = _window_parts(window)
+    if parts is None:
+        return str(window)
+    count, unit = parts
+    return f"{count} {unit}" if count == 1 else f"{count} {unit}s"
+
+
+def _offset_from_dbt(window: Any) -> tuple[str | None, str | None]:
+    """The engine's offset for an ``offset_window``, or why there is none: weeks are read as 7
+    days, quarters and years as 3 and 12 months, which give the same period at the grains both
+    compute; other units (hours, custom granularities) have no equivalent."""
+    parts = _window_parts(window)
+    if parts is None or parts[0] <= 0 or parts[1] not in _DBT_OFFSET_UNITS:
+        return None, (
+            f"`offset_window: {window}` is not supported (only days, weeks, months, quarters "
+            "and years)"
+        )
+    count, unit = parts
+    base, size = _DBT_OFFSET_UNITS[unit]
+    amount = count * size
+    return (f"1 {base}" if amount == 1 else f"{amount} {base}s"), None
+
+
+def _day_level_grains(window: Any) -> list[str]:
+    """Grains the engine computes where MetricFlow shifts each day before grouping: those
+    coarser than the window's unit (MetricFlow joins after aggregation only at a grain no
+    coarser than it). Day-based shifts give the same rows either way; month-based ones clamp
+    month ends, so `3 months` by quarter is not the quarter before."""
+    parts = _window_parts(window)
+    if parts is None or parts[1] not in ("month", "quarter"):
+        return []
+    count, unit = parts
+    months = count * _DBT_OFFSET_UNITS[unit][1]
+    order = ("month", "quarter", "year")
+    return [
+        grain
+        for grain, size in OFFSET_GRAINS["month"].items()
+        if order.index(grain) > order.index(unit) and months % size == 0
+    ]
 
 
 # -- export -----------------------------------------------------------------------------------
@@ -684,11 +798,7 @@ class _DbtWriter:
         return {"type": "cumulative", "type_params": params}
 
     def _derived(self, metric) -> dict[str, Any]:
-        if metric.inputs:
-            raise _NotExported(
-                "it reads an input at an earlier period (`offset`), and the dbt export does "
-                "not map it to `offset_window` yet"
-            )
+        shifted = metric.offsets()
         refs: list[str] = []
 
         def mask(match):
@@ -703,6 +813,11 @@ class _DbtWriter:
                 "metric references metrics only"
             )
         names = [self._use(ref) for ref in refs]
+        windows = {
+            name: self._offset_window(metric.name, name, shifted[ref])
+            for ref, name in zip(refs, names, strict=True)
+            if ref in shifted
+        }
         if tree.find(exp.Div):
             # Division as the planner computes it: real, and null on a zero denominator.
             text = re.sub(
@@ -711,8 +826,63 @@ class _DbtWriter:
         else:
             it = iter(names)
             text = REF_RE.sub(lambda m: next(it), metric.expr)
-        params = {"expr": text, "metrics": [{"name": n} for n in dict.fromkeys(names)]}
-        return {"type": "derived", "type_params": params}
+        inputs = [
+            {"name": n, "offset_window": windows[n]} if n in windows else {"name": n}
+            for n in dict.fromkeys(names)
+        ]
+        return {"type": "derived", "type_params": {"expr": text, "metrics": inputs}}
+
+    def _offset_window(self, metric: str, name: str, offset: str) -> str:
+        """An input read at an earlier period as MetricFlow's ``offset_window``, in the largest
+        unit the offset is a whole number of (DEC-36). MetricFlow aggregates first and shifts the
+        period only at a grain no coarser than that unit; at a coarser one it shifts each day
+        and then groups, which clamps month ends (`3 months` by quarter would read 28 February
+        several times and never 31 January). Written as `1 quarter` or `1 year`, it shifts the
+        period at every grain the engine accepts, as the engine does."""
+        parsed = parse_offset(offset)
+        if parsed is None:  # validation refuses it first; kept for graphs compiled loosely
+            raise _NotExported(f"its offset `{offset}` is not in days or months")
+        amount, unit = parsed
+        count, dbt_unit = amount, unit
+        if unit == "month" and amount % 12 == 0:
+            count, dbt_unit = amount // 12, "year"
+        elif unit == "month" and amount % 3 == 0:
+            count, dbt_unit = amount // 3, "quarter"
+        window = f"{count} {dbt_unit}" if count == 1 else f"{count} {dbt_unit}s"
+        times = []
+        for model in sorted(self._leaves(name)):
+            spec = self.graph.models[model].spec
+            dims = [d.name for d in spec.dimensions if d.type == "time"]
+            if not dims:
+                raise _NotExported(
+                    f"it reads `{name}` {offset} earlier, and its model `{model}` has no time "
+                    "dimension for MetricFlow to shift over"
+                )
+            times.append((model, dims))
+        grains = [
+            f"by {g}" if n == 1 else f"by {g} in multiples of {n} {unit}s"
+            for g, n in OFFSET_GRAINS[unit].items()
+            if amount % n == 0
+        ]
+        agg_times = ", ".join(f"`{m}.{d[0]}`" for m, d in times)
+        others = ", ".join(f"`{m}.{t}`" for m, d in times for t in d[1:])
+        self.warnings.append(
+            f"metrics.{metric}: `{name}` read {offset} earlier is `offset_window: {window}` over "
+            f"MetricFlow's `metric_time`, which is {agg_times}; by that dimension "
+            f"({', '.join(grains)}) the numbers are the engine's on the periods both return. "
+            "MetricFlow joins a time spine, so it also returns periods without facts whose "
+            "earlier period has some, and it applies time filters after the shift, so the first "
+            "period of a filtered range still reads the period before it, where the engine "
+            "filters the facts first and returns NULL; at the grains the engine refuses, "
+            "MetricFlow returns a value"
+            + (
+                f"; queried by {others}, the engine shifts that dimension instead, which "
+                "MetricFlow does not"
+                if others
+                else ""
+            )
+        )
+        return window
 
     def _measures(self, name: str) -> set[str]:
         """The measures a metric aggregates, through nested ratio and derived metrics."""
