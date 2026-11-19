@@ -26,6 +26,14 @@ format or the API; such changes are listed under **Changed**.
   hand-written SQL's numbers, A29, A30, A33 and A34 among them, and windows of 1, 7 and 30
   days over measures of two cubes return the native numbers by day, by day and another
   dimension, and with a time filter. The planner and the SQL of every request are unchanged.
+- Freshness in member health (DEC-26, #66): `explain` (MCP and `GET /v1/explain/{name}`) and
+  the console's member view now return `last_reconciled_at` and `last_tests_run_at` (ISO
+  timestamps of the latest check run, null when never run), and the `reconciled` and
+  `reconciliation_failed` reasons carry the run's `at`. A new optional project setting,
+  `health: {max_age: 7 days}` (hours, days or weeks), makes a metric whose last reconciliation
+  matched but is older than that `attention`, with the reason `reconciliation_stale`. Without
+  the setting every state is as before. The console shows both timestamps on a member's page
+  ([member health](docs/architecture.md#member-health)).
 - Period-over-period metrics, first slice (DEC-18): a derived metric can read an input at an
   earlier period with `inputs: [{metric: revenue, offset: 1 month}]`, so `revenue_prev_month`
   and `revenue_mom_growth` (`({revenue} - {revenue_prev_month}) / {revenue_prev_month}`) are

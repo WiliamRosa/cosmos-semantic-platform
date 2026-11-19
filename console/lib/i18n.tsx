@@ -123,6 +123,8 @@ const en = {
   "member.recent": "Recent answers",
   "member.tests": "Rule tests",
   "member.processes": "Used by processes",
+  "member.lastReconciled": "Last reconciled",
+  "member.lastTestsRun": "Rule tests last run",
   "answers.title": "Audited answers",
   "answers.lead":
     "Every number an agent or app received, with the formula, rules, user context and fingerprints to reproduce it.",
@@ -179,6 +181,7 @@ const en = {
   "reason.never_reconciled": "Never compared with a legacy report",
   "reason.reconciliation_failed": "Diverges from “{title}” ({case})",
   "reason.reconciled": "Matches {count} legacy report(s)",
+  "reason.reconciliation_stale": "Last reconciled more than {max_age} ago",
   "reason.depends_on_failing": "Depends on {member}, which is failing",
   "cause.filter_difference": "Different filter",
   "cause.different_metric": "Different definition",
@@ -345,6 +348,8 @@ const pt: Record<Key, string> = {
   "member.recent": "Respostas recentes",
   "member.tests": "Testes da regra",
   "member.processes": "Usada pelos processos",
+  "member.lastReconciled": "Última reconciliação",
+  "member.lastTestsRun": "Testes de regra rodados em",
   "answers.title": "Respostas auditadas",
   "answers.lead":
     "Cada número que um agente ou aplicação recebeu, com a fórmula, as regras, o contexto do usuário e as impressões digitais para reproduzi-lo.",
@@ -401,6 +406,7 @@ const pt: Record<Key, string> = {
   "reason.never_reconciled": "Nunca comparada com um relatório legado",
   "reason.reconciliation_failed": "Diverge de “{title}” ({case})",
   "reason.reconciled": "Bate com {count} relatório(s) legado(s)",
+  "reason.reconciliation_stale": "Última reconciliação há mais de {max_age}",
   "reason.depends_on_failing": "Depende de {member}, que está com falha",
   "cause.filter_difference": "Filtro diferente",
   "cause.different_metric": "Definição diferente",
