@@ -21,6 +21,7 @@ from typing import Any
 import pyarrow as pa
 
 from cosmos_semantic.compiler import SemanticGraph
+from cosmos_semantic.expressions import REF_RE
 from cosmos_semantic.ontology import Glossary, rule_logic, run_rule_tests
 from cosmos_semantic.planner import CompiledQuery, Principal, QueryRequest
 from cosmos_semantic.spec import (
@@ -293,8 +294,10 @@ class EvidenceBuilder:
         }
 
     def _shifts(self, name: str, seen: frozenset[str] = frozenset()) -> list[dict[str, str]]:
-        """The inputs read at an earlier period under ``name`` (DEC-18), in definition order:
-        the metric that reads each, the input and the offset."""
+        """The inputs read at an earlier period under ``name`` (DEC-18), each with the metric
+        that reads it, the input and the offset: ``name``'s own shifts first, in ``expr``
+        order, then those of the metrics it references, depth-first in ``expr`` order, each
+        listed once."""
         g = self.graph
         if name in seen or name in g.measure_owner or name not in g.metrics:
             return []
@@ -305,8 +308,6 @@ class EvidenceBuilder:
         if isinstance(metric, RatioMetric):
             refs = [metric.numerator, metric.denominator]
         elif isinstance(metric, DerivedMetric):
-            from cosmos_semantic.expressions import REF_RE
-
             refs = list(dict.fromkeys(REF_RE.findall(metric.expr)))
             offsets = metric.offsets()
             own = [
@@ -345,8 +346,6 @@ class EvidenceBuilder:
         elif isinstance(metric, RatioMetric):
             refs = [metric.numerator, metric.denominator]
         elif isinstance(metric, DerivedMetric):
-            from cosmos_semantic.expressions import REF_RE
-
             refs = REF_RE.findall(metric.expr)
         out: set[str] = set()
         for ref in refs:
@@ -380,8 +379,6 @@ class EvidenceBuilder:
             where = f" WHERE {metric.filter}" if metric.filter else ""
             return f"({num}) / ({den}){where}"
         if isinstance(metric, DerivedMetric):
-            from cosmos_semantic.expressions import REF_RE
-
             offsets = metric.offsets()
 
             def part(match) -> str:

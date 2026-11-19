@@ -131,8 +131,8 @@ The `time` block of a metric (DEC-37) states its time semantics as fields, next 
 | `period` | For `grain_to_date`: `day`, `week`, `month`, `quarter` or `year`; null for a running total over all time |
 | `window`, `days` | For `window`: the window as written (`7 days`) and its number of days |
 | `shifts` | For `offset`: each input read at an earlier period, with the metric that reads it and the `offset` (`1 month`, `7 days`), through nested metrics too |
-| `time_dimension`, `query_grain` | The request's time dimension (`orders.ordered_at__month`) and its grain |
-| `filters_applied` | When the request's `filters` and the row filters restrict the rows: `before` the window or shift. A filter on the time dimension therefore also leaves out the earlier days a window or an offset would read. The field is there so that a later change to this order shows in the evidence |
+| `time_dimension`, `query_grain` | The request's time dimension, spelled as in the request (`orders.ordered_at__month`), and its grain; `query_grain` is null when the time dimension is requested without a grain |
+| `filters_applied` | When the filters on the rows (the request's `filters`, the row filters and a metric's own `filter`) restrict them: `before` the window or shift. A filter on the time dimension therefore also leaves out the earlier days a window or an offset would read. The field is there so that a later change to this order shows in the evidence. It does not cover `metric_filters`, which are refused with cumulative and offset metrics |
 
 The block adds fields only: the generated SQL, the numbers and the hashes are unchanged.
 

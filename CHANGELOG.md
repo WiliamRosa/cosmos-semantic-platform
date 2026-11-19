@@ -15,8 +15,9 @@ format or the API; such changes are listed under **Changed**.
   running total over all time; `window` with the `window` as written and its `days`; or
   `offset` with its `shifts`, each the metric that reads an input at an earlier period, the
   input and the offset, through nested metrics too), the request's `time_dimension` and its
-  `query_grain`, and `filters_applied`, which is `before` today: the request's filters and the
-  row filters restrict the rows before the window or shift. Fields only; no SQL, number or hash
+  `query_grain`, and `filters_applied`, which is `before` today: the request's filters, the
+  row filters and a metric's own filter restrict the rows before the window or shift (a test on
+  DuckDB checks the values, so a change to this order must update the field). Fields only; no SQL, number or hash
   changes ([architecture](docs/architecture.md#evidence-envelope)).
 - Filters on metric values, first slice (DEC-29): a request (`POST /v1/query`, `POST /v1/sql`,
   the MCP tool `query`, `cosmos query` and `cosmos sql` with the repeatable `--metric-filter`)
