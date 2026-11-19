@@ -9,6 +9,25 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- `cosmos export dbt` writes running totals (DEC-31): a cumulative metric with `grain_to_date`
+  over a `sum` or `count` measure becomes a MetricFlow `cumulative` metric with
+  `cumulative_type_params: {grain_to_date: <period>, period_agg: last}`, which
+  `cosmos import dbt` reads back as the same metric, so the example's `revenue_year_to_date` and
+  `revenue_month_to_date` no longer need `--allow-metric-loss`. `period_agg: last` reads a
+  coarser bucket on its last day (MetricFlow's default, `first`, reads its first day), so each
+  bucket covers the facts from the start of the period to the end of the bucket, the engine's
+  running total. A warning per metric says where MetricFlow's numbers are the engine's (by the
+  model's `agg_time_dimension`, at a grain the engine accepts, on the buckets with facts) and
+  where they differ: MetricFlow also returns buckets without facts and the grains the engine
+  refuses (coarser than the period, or a week under a longer one), its time constraint reads
+  the facts back to the start of the period while the engine filters them first, and it always
+  accumulates over `metric_time`. Running totals over `min` or `max` measures, without a period,
+  or over a model without a time dimension stay refused, each with its reason. The re-imported
+  example answers 30 reference queries (52 with policies), A08 and A09 among them, and refuses
+  A32 and A39 as the engine does; running totals for every period over `sum` and `count`
+  measures of two models return the native numbers at every grain the engine accepts, with
+  another dimension and with a time filter
+  ([interoperability](docs/interoperability.md#exporting-dbt)).
 - Filters on metric values, first slice (DEC-29): a request (`POST /v1/query`, `POST /v1/sql`,
   the MCP tool `query`, `cosmos query` and `cosmos sql` with the repeatable `--metric-filter`)
   takes `metric_filters` such as `{revenue} > 1000`, which keep only the rows of the result
