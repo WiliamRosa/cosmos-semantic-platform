@@ -290,7 +290,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function MemberBody({ m }: { m: Member }) {
-  const { t, label, lang } = useI18n();
+  const { t, label, lang, date } = useI18n();
   const d = m.detail as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   const kind = d.kind as string;
   const definition: string | undefined = d.text ?? d.definition ?? undefined;
@@ -313,6 +313,15 @@ function MemberBody({ m }: { m: Member }) {
           {m.health && <StateBadge state={m.health.state} />}
         </div>
         {m.health && <Reasons reasons={m.health.reasons} />}
+        {m.health && (m.health.last_reconciled_at || m.health.last_tests_run_at) && (
+          <p className="mt-1 text-xs text-slate-500">
+            {m.health.last_reconciled_at &&
+              `${t("member.lastReconciled")}: ${date(m.health.last_reconciled_at)}`}
+            {m.health.last_reconciled_at && m.health.last_tests_run_at && " · "}
+            {m.health.last_tests_run_at &&
+              `${t("member.lastTestsRun")}: ${date(m.health.last_tests_run_at)}`}
+          </p>
+        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

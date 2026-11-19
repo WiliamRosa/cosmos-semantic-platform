@@ -390,6 +390,40 @@ class Process(_Base):
     )
 
 
+_MAX_AGE_UNITS = {"hour": "hours", "day": "days", "week": "weeks"}
+
+
+def parse_max_age(text: str) -> dt.timedelta | None:
+    """The age in ``N hours``, ``N days`` or ``N weeks`` (singular too); None for anything
+    else."""
+    match = re.fullmatch(r"\s*(\d{1,4})\s+(hour|day|week)s?\s*", text or "", re.IGNORECASE)
+    if not match or int(match.group(1)) <= 0:
+        return None
+    return dt.timedelta(**{_MAX_AGE_UNITS[match.group(2).lower()]: int(match.group(1))})
+
+
+class HealthSettings(_Base):
+    """How member health is judged (``explain`` and the console)."""
+
+    max_age: str | None = Field(
+        None,
+        description=(
+            "How old the last reconciliation of a metric may be, such as `7 days`, before a "
+            "healthy metric needs attention (`reconciliation_stale`). Hours, days or weeks. "
+            "Default: no limit."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_max_age(self) -> HealthSettings:
+        if self.max_age is not None and parse_max_age(self.max_age) is None:
+            raise ValueError(
+                f"health.max_age `{self.max_age}` is not supported; use a whole number of "
+                "hours, days or weeks, such as `7 days`"
+            )
+        return self
+
+
 class Project(_Base):
     """One file (or the merged set of files) of a semantic model."""
 
@@ -400,6 +434,9 @@ class Project(_Base):
             'Business time zone, such as `America/New_York`. Defines what "today" means for '
             "rules and filters using CURRENT_DATE, identically on every data source. Default: UTC."
         ),
+    )
+    health: HealthSettings | None = Field(
+        None, description="How member health is judged, such as `max_age: 7 days`."
     )
     semantic_models: list[SemanticModel] = []
     metrics: list[Metric] = []

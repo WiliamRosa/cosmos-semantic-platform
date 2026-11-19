@@ -161,6 +161,14 @@ def test_check_runs_drive_health(setup, graph, duckdb_connector):
     assert catalog["metric:discount_rate"]["state"] == "unchecked"
     member = client.get("/v1/console/members/metric:completed_revenue", headers=ANALYST).json()
     assert member["health"]["state"] == "failing"
+    assert member["health"]["last_reconciled_at"] == run["at"]
+    assert member["health"]["last_tests_run_at"] == run["at"]
+    assert member["health"]["reasons"][0] == {
+        "code": "reconciliation_failed",
+        "case": "R1",
+        "title": "Finance revenue report",
+        "at": run["at"],
+    }
     assert member["reconciliations"][0]["id"] == "R1"
     assert member["formula"]
     history = client.get("/v1/console/runs", headers=ANALYST).json()
