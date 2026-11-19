@@ -12,12 +12,14 @@ become entities. DAX measures are translated when they map onto the Cosmos metri
 | ``CALCULATE(m, T[c] = "x", ...)`` with simple column filters | metric with ``filter`` |
 | ``TOTALYTD``, ``TOTALQTD``, ``TOTALMTD`` over a sum, count, min or max measure | cumulative metric |
 | ``CALCULATE(m, DATESINPERIOD(D[c], MAX(D[c]), -N, DAY))`` over such a measure | ``window: N days`` |
+| ``CALCULATE(m, SAMEPERIODLASTYEAR(D[c]))``, ``DATEADD(D[c], -N, unit)``, ``PARALLELPERIOD(D[c], -N, MONTH)`` | derived metric with ``inputs: [{metric, offset}]`` |
 | arithmetic over measures (``[A] - [B]``) | derived metric |
 
 Everything else (other iterators such as ``COUNTX``; ``SUMX``, ``AVERAGEX``, ``MINX`` or
 ``MAXX`` over another table, with a division, a function or ``RELATED``; ``TOTALYTD``,
 ``TOTALQTD`` or ``TOTALMTD`` over an average or a distinct count; ``DATESINPERIOD`` in
-other units or from another anchor, ``DATESBETWEEN``; ``FILTER``, ``ALL``,
+other units or from another anchor, ``DATESBETWEEN``; ``DATEADD`` forward, ``PARALLELPERIOD``
+by quarter or year, period shifts over the fact table's own date column; ``FILTER``, ``ALL``,
 variables, calculated columns and tables, calculation groups, row-level security roles) is
 reported as a warning; nothing is dropped silently. No DAX is ever executed.
 """
@@ -33,7 +35,7 @@ from typing import Any
 
 from cosmos_semantic.interchange import ImportResult
 from cosmos_semantic.interchange.cube import _table_from_sql
-from cosmos_semantic.spec import WINDOW_AGGS, Project, window_agg_refusal
+from cosmos_semantic.spec import OFFSET_GRAINS, WINDOW_AGGS, Project, window_agg_refusal
 
 _DATA_TYPES = {
     "string": "categorical",
@@ -59,6 +61,9 @@ _TO_DATE = {"TOTALYTD": "year", "TOTALQTD": "quarter", "TOTALMTD": "month"}
 # Iterators over the measure's own table: like SQL, AVERAGEX, MINX and MAXX skip BLANK rows,
 # and SUMX, AVERAGEX, MINX and MAXX over only BLANK rows are BLANK.
 _ITERATORS = {"SUMX": "sum", "AVERAGEX": "avg", "MINX": "min", "MAXX": "max"}
+# Period shifts read as an offset input (DEC-35): months per DAX unit; DAY stays in days.
+_SHIFTS = ("SAMEPERIODLASTYEAR", "DATEADD", "PARALLELPERIOD")
+_SHIFT_MONTHS = {"MONTH": 1, "QUARTER": 3, "YEAR": 12}
 _SQL_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -528,6 +533,8 @@ class _Translator:
         self.warnings: list[str] = []
         self.semantic_warned: set[str] = set()
         self.helpers = 0
+        # Cosmos metrics that read an input at an earlier period, directly or through others.
+        self.reads_earlier: set[str] = set()
         self._in_progress: set[str] = set()
 
     # Members -----------------------------------------------------------------------------
@@ -704,7 +711,8 @@ class _Translator:
             args = node[2]
             if len(args) == 3 and args[2] not in (("num", "0"), ("call", "BLANK", [])):
                 raise _Unsupported("DIVIDE with an alternate result")
-            return f"({self.arithmetic(args[0])}) / ({self.arithmetic(args[1])})"
+            num, den = (self.arithmetic(a) for a in args[:2])
+            return f"{_parenthesized(num)} / {_parenthesized(den)}"
         if kind == "neg":
             return f"-({self.arithmetic(node[1])})"
         if kind == "bin" and node[1] in ("+", "-", "*", "/"):
@@ -796,6 +804,10 @@ class _Translator:
                 raise _Unsupported("DIVIDE with an alternate result")
             if len(args) < 2:
                 raise _Unsupported("DIVIDE needs two arguments")
+            if not all(_is_operand(a) for a in args[:2]):
+                # DIVIDE([m] - [m PY], [m PY]): arithmetic over measures, divided safely.
+                self.derived(pbi_name, tree, name, meta)
+                return
             numerator = self.operand(args[0], f"{name}_numerator")
             denominator = self.operand(args[1], f"{name}_denominator")
             self.metric(
@@ -816,6 +828,13 @@ class _Translator:
         ):
             self.rolling_window(pbi_name, tree[2], name, meta)
             return
+        if (
+            kind == "call"
+            and tree[1] == "CALCULATE"
+            and any(a[0] == "call" and a[1] in _SHIFTS for a in tree[2][1:])
+        ):
+            self.period_shift(pbi_name, tree[2], name, meta)
+            return
         if kind == "call" and tree[1] == "CALCULATE":
             args = tree[2]
             if not args:
@@ -826,6 +845,8 @@ class _Translator:
                 self.metric(
                     pbi_name, {"name": name, "type": "derived", "expr": "{" + inner + "}", **meta}
                 )
+                if inner in self.reads_earlier:
+                    self.reads_earlier.add(self.done[pbi_name])
                 return
             if any(not (a[0] == "call" and a[1] == "KEEPFILTERS") for a in args[1:]):
                 self.warnings.append(
@@ -873,10 +894,166 @@ class _Translator:
                 },
             )
             return
-        expr = self.arithmetic(tree)
-        if expr.startswith("(") and expr.endswith(")"):
-            expr = expr[1:-1]
+        self.derived(pbi_name, tree, name, meta)
+
+    def derived(self, pbi_name: str, tree: tuple, name: str, meta: dict[str, Any]) -> None:
+        """Arithmetic over measures as a derived metric. Over a metric that reads an earlier
+        period, ``+`` and ``-`` get a warning: DAX counts a BLANK side as zero there."""
+        expr = _strip_parens(self.arithmetic(tree))
         self.metric(pbi_name, {"name": name, "type": "derived", "expr": expr, **meta})
+        earlier = sorted(set(re.findall(r"\{([^{}]+)\}", expr)) & self.reads_earlier)
+        if not earlier:
+            return
+        self.reads_earlier.add(self.done[pbi_name])
+        if _adds_or_subtracts(tree):
+            self.warnings.append(
+                f"measure `{pbi_name}`: adds or subtracts `{earlier[0]}`, which reads an earlier "
+                "period. In DAX a BLANK side of + or - counts as zero, while in Cosmos a NULL "
+                "side makes the result NULL: where the earlier period has no facts, "
+                "`[m] - [m PY]` is [m] in Power BI and NULL in Cosmos (a growth that divides by "
+                "the earlier period is BLANK and NULL alike)"
+            )
+
+    def measures_under(self, member: str, seen: set[str] | None = None) -> set[str]:
+        """The measures a member reads, refusing what an offset cannot shift."""
+        if self.is_measure(member):
+            return {member}
+        seen = set() if seen is None else seen
+        if member in seen:
+            return set()
+        seen.add(member)
+        spec = next((m for m in self.metrics if m["name"] == member), None)
+        if spec is None:
+            raise _Unsupported(f"`{member}` was not imported")
+        if spec["type"] == "cumulative":
+            raise _Unsupported(
+                f"a period shift of `{member}`, a cumulative metric; offsets of cumulative "
+                "metrics are not supported"
+            )
+        if spec.get("inputs") or member in self.reads_earlier:
+            raise _Unsupported(
+                f"a period shift of `{member}`, which already reads an earlier period; "
+                "offsets do not combine yet"
+            )
+        if spec["type"] == "simple":
+            refs = {spec["measure"]}
+        elif spec["type"] == "ratio":
+            refs = {spec["numerator"], spec["denominator"]}
+        else:
+            refs = set(re.findall(r"\{([^{}]+)\}", spec["expr"]))
+        out: set[str] = set()
+        for ref in refs:
+            out |= self.measures_under(ref, seen)
+        return out
+
+    def period_shift(self, pbi_name: str, args: list, name: str, meta: dict[str, Any]) -> None:
+        """``CALCULATE(m, SAMEPERIODLASTYEAR(D[c]))``, ``DATEADD(D[c], -N, unit)`` or
+        ``PARALLELPERIOD(D[c], -N, MONTH)`` as a derived metric reading ``m`` at an earlier
+        period (DEC-35). DAX moves the set of dates in context; Cosmos moves the start of the
+        query's period. On whole periods of a complete date table both read the whole earlier
+        period at the grains the planner accepts for the offset (by month, quarter or year
+        for months; by day or week for days): DAX extends a set that ends on a month's last
+        day to the end of the shifted month, and PARALLELPERIOD by month returns whole months.
+        Every other form stays a warning."""
+        if len(args) != 2:
+            raise _Unsupported("CALCULATE with a period shift and other filters")
+        func, fargs = args[1][1], args[1][2]
+        if func == "SAMEPERIODLASTYEAR":
+            if len(fargs) != 1:
+                raise _Unsupported("SAMEPERIODLASTYEAR takes a date column")
+            column, count, unit = fargs[0], 1, "YEAR"
+        else:
+            if len(fargs) != 3:
+                raise _Unsupported(f"{func} takes a date column, a count and a unit")
+            column, count_node, unit_node = fargs
+            unit = unit_node[1].upper() if unit_node[0] == "table" else ""
+            units = ("MONTH", "QUARTER", "YEAR") if func == "PARALLELPERIOD" else ("DAY",)
+            if unit not in (*units, *_SHIFT_MONTHS):
+                known = ", ".join(dict.fromkeys((*units, *_SHIFT_MONTHS)))
+                raise _Unsupported(f"{func} in a unit other than {known}")
+            if not (
+                count_node[0] == "neg" and count_node[1][0] == "num" and count_node[1][1].isdigit()
+            ):
+                raise _Unsupported(
+                    f"{func} with a count that is not a negative whole number; only shifts to "
+                    "an earlier period are translated"
+                )
+            count = int(count_node[1][1])
+            if count == 0:
+                raise _Unsupported(f"{func} by zero periods")
+            if func == "PARALLELPERIOD" and unit != "MONTH":
+                period = unit.lower()
+                raise _Unsupported(
+                    f"PARALLELPERIOD by {unit} returns the whole earlier {period}: by month, "
+                    f"Power BI shows the whole {period} where an offset would read one month. "
+                    f"By {period} it is DATEADD(..., -{count}, {unit}), which is imported"
+                )
+        if column[0] != "col":
+            raise _Unsupported(f"{func} over a table expression instead of a date column")
+        dates, info = self.column(column[1], column[2])
+        if info["spec"]["type"] != "time":
+            raise _Unsupported(f"{func} over `{column[1]}[{column[2]}]`, not a date column")
+        if unit == "DAY":
+            amount, offset_unit = count, "day"
+        else:
+            amount, offset_unit = count * _SHIFT_MONTHS[unit], "month"
+        offset = f"{amount} {offset_unit}" + ("" if amount == 1 else "s")
+        before = set(self.measure_names)
+        inner = self.operand(args[0], f"{name}_base")
+        try:
+            self.check_shift_path(func, column, dates, inner)
+        except _Unsupported:
+            if inner not in before:  # an inline aggregation: leave no helper measure behind
+                self.measure_names.discard(inner)
+                for table in self.tables.values():
+                    table.model["measures"] = [
+                        m for m in table.model.get("measures", []) if m["name"] != inner
+                    ]
+            raise
+        dims = dates.model.setdefault("dimensions", [])
+        if info["spec"] not in dims:
+            dims.append(info["spec"])
+        date = f"{dates.model['name']}.{info['dimension']}"
+        grains = [g for g, n in OFFSET_GRAINS[offset_unit].items() if amount % n == 0]
+        where = " or ".join(f"`{date}__{g}`" for g in grains)
+        clamp = (
+            "; by day the planner refuses it, and DAX would move each date and clamp it to "
+            "the month's end (29, 30 and 31 March a month back are all the last day of February)"
+            if offset_unit == "month"
+            else ""
+        )
+        if func == "PARALLELPERIOD":
+            partial = (
+                "a filter on the date that cuts a period still gives DAX the whole earlier "
+                "months, while Cosmos applies the filter to the earlier period's facts too"
+            )
+        else:
+            partial = (
+                "a filter on the date that cuts a period, or a date table that ends inside "
+                "one, gives DAX a partial earlier period (the same dates moved back), while "
+                "Cosmos applies the filter to the earlier period's facts too and otherwise "
+                "reads the whole earlier period"
+            )
+        self.warnings.append(
+            f"measure `{pbi_name}`: imported as `{inner}` read {offset} earlier; query it by "
+            f"{where} (or by the fact's own date column related to it), where it matches DAX "
+            f"on whole periods when `{dates.name}` holds every day of them{clamp}. It differs "
+            f"where DAX moves a set of dates: {partial}; grouping or filtering by other "
+            f"columns of `{dates.name}` (a weekday) gives different numbers, because Cosmos "
+            "reads the earlier period with the same value; and Power BI also shows periods "
+            "without facts whose earlier period has some, which Cosmos does not output"
+        )
+        self.metric(
+            pbi_name,
+            {
+                "name": name,
+                "type": "derived",
+                "expr": "{" + inner + "}",
+                "inputs": [{"metric": inner, "offset": offset}],
+                **meta,
+            },
+        )
+        self.reads_earlier.add(self.done[pbi_name])
 
     def rolling_window(self, pbi_name: str, args: list, name: str, meta: dict[str, Any]) -> None:
         """``CALCULATE(m, DATESINPERIOD(D[c], MAX(D[c]), -N, DAY))`` as a cumulative metric
@@ -954,6 +1131,30 @@ class _Translator:
             },
         )
 
+    def check_shift_path(self, func: str, column: tuple, dates: _Table, inner: str) -> None:
+        """Each measure under a period shift lives on a table one imported relationship away
+        from the date table, and never on the date table itself."""
+        for measure in sorted(self.measures_under(inner)):
+            owner = next(
+                t
+                for t in self.tables.values()
+                if any(m["name"] == measure for m in t.model.get("measures", []))
+            )
+            if owner is dates:
+                raise _Unsupported(
+                    f"{func} over `{column[1]}[{column[2]}]`, a column of the measure's own "
+                    "table: DAX moves only the dates in context that the column holds, so over "
+                    "a fact's own dates the earlier period keeps only the days with facts in "
+                    "the current one; use a date table"
+                )
+            keys = {e["name"] for e in dates.model.get("entities", []) if e["type"] != "foreign"}
+            foreign = {e["name"] for e in owner.model.get("entities", []) if e["type"] == "foreign"}
+            if not keys & foreign:
+                raise _Unsupported(
+                    f"{func} over `{column[1]}`, which `{owner.name}` does not reach through "
+                    "an imported relationship"
+                )
+
     def metric(self, pbi_name: str, spec: dict[str, Any]) -> None:
         while spec["name"] in self.measure_names or spec["name"] in {
             m["name"] for m in self.metrics
@@ -966,9 +1167,43 @@ class _Translator:
 _TRANSLATABLE = (
     set(_AGGS)
     | {"COUNTROWS", "DIVIDE", "CALCULATE", "KEEPFILTERS", "BLANK", "DATESINPERIOD"}
+    | set(_SHIFTS)
     | set(_ITERATORS)
     | set(_TO_DATE)
 )
+
+
+def _is_operand(node: tuple) -> bool:
+    """A measure reference or an inline aggregation, which a ratio metric takes as is."""
+    return node[0] == "mref" or (node[0] == "call" and (node[1] in _AGGS or node[1] == "COUNTROWS"))
+
+
+def _wrapped(expr: str) -> bool:
+    """Whether one pair of parentheses encloses the whole expression."""
+    if not (expr.startswith("(") and expr.endswith(")")):
+        return False
+    depth = 0
+    for i, char in enumerate(expr):
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if depth == 0 and i < len(expr) - 1:
+            return False
+    return True
+
+
+def _strip_parens(expr: str) -> str:
+    """``(a + b)`` -> ``a + b``, but ``(a) / (b)`` stays as it is."""
+    return expr[1:-1] if _wrapped(expr) else expr
+
+
+def _parenthesized(expr: str) -> str:
+    return expr if _wrapped(expr) else f"({expr})"
+
+
+def _adds_or_subtracts(node: tuple) -> bool:
+    if node[0] == "bin" and node[1] in ("+", "-"):
+        return True
+    children = node[2] if node[0] == "call" else node[1:]
+    return any(_adds_or_subtracts(c) for c in children if isinstance(c, tuple))
 
 
 def _safe_functions(expression: str) -> list[str]:
