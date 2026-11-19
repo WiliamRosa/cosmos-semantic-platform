@@ -26,6 +26,20 @@ format or the API; such changes are listed under **Changed**.
   hand-written SQL's numbers, A29, A30, A33 and A34 among them, and windows of 1, 7 and 30
   days over measures of two cubes return the native numbers by day, by day and another
   dimension, and with a time filter. The planner and the SQL of every request are unchanged.
+- Date range of a time dimension for agents (DEC-24): the MCP tool `dimension_values` and
+  `GET /v1/dimensions/{name}/values` now accept time dimensions and return
+  `{min, max, distinct_days}` instead of a list of values: the first and last day holding rows
+  of the dimension's model, as ISO dates, and how many distinct days do, so an agent knows
+  which dates hold data before answering "last month" or "since launch". Days are the model's
+  local days (its business `timezone`; model timestamps are local and never converted), the
+  same days as a `__day` grouping, whose path the planner reuses; rows without a time hold no
+  day. The caller's row filters apply, so a principal never learns the range of rows it cannot
+  see; with no visible rows the answer is `null`, `null` and 0. Personal and sensitive time
+  dimensions are refused, a grain (`ordered_at__month`) is refused, `limit` does not apply,
+  and the evidence (with the `timezone`) and the `dimension_values` audit event are the same as
+  for values. Tests compare with hand-written SQL on every database for DATE and TIMESTAMP
+  columns, with a row filter and with no visible rows. The SQL of every existing request is
+  unchanged.
 - Freshness in member health (DEC-26, #66): `explain` (MCP and `GET /v1/explain/{name}`) and
   the console's member view now return `last_reconciled_at` and `last_tests_run_at` (ISO
   timestamps of the latest check run, null when never run), and the `reconciled` and
