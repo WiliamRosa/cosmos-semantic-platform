@@ -59,6 +59,7 @@ Links inside images and PDF documents are not clickable on LinkedIn; put them in
 - **Image:** 1080×1350 (portrait) or 1200×627 (landscape), PNG.
 - **Document (carousel):** a PDF, one slide per page, 1080×1350. Multiple images in one post show as a grid, not a carousel.
 - **GIF:** LinkedIn plays GIFs up to 8 MB inline.
+- **Video:** MP4 (H.264 + AAC), 1280×720, uploaded natively, with its `.srt` attached as captions. Every video is made with [`video/`](video/README.md) and follows its rules: dark mode everywhere (GitHub, terminal, console), captions burned in, English narration, and only real command output. The default story runs from the GitHub repository and `pip install`, through the same metric on the databases in Docker, to the live demo console.
 
 ## Folder layout
 
@@ -67,6 +68,7 @@ marketing/linkedin/
   README.md        this playbook
   page.md          the page's copy (tagline, overview, specialties, button), the source of truth
   render.py        renders a pack's card.html to card.png
+  video/           the narrated demo video generator (dark mode, captions, narration)
   brand/           logo, banner and the HTML they are rendered from
   posts/
     2026-11-20-launch/
