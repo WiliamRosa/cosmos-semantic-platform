@@ -9,6 +9,16 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Structured time semantics in the evidence (DEC-37): each entry of `metrics` carries a `time`
+  block for cumulative and offset metrics (null for the others), so the time logic is no longer
+  only inside the `formula` text. It holds `kind` (`grain_to_date` with its `period`, null for a
+  running total over all time; `window` with the `window` as written and its `days`; or
+  `offset` with its `shifts`, each the metric that reads an input at an earlier period, the
+  input and the offset, through nested metrics too), the request's `time_dimension` and its
+  `query_grain`, and `filters_applied`, which is `before` today: the request's filters, the
+  row filters and a metric's own filter restrict the rows before the window or shift (a test on
+  DuckDB checks the values, so a change to this order must update the field). Fields only; no SQL, number or hash
+  changes ([architecture](docs/architecture.md#evidence-envelope)).
 - Filters on metric values, first slice (DEC-29): a request (`POST /v1/query`, `POST /v1/sql`,
   the MCP tool `query`, `cosmos query` and `cosmos sql` with the repeatable `--metric-filter`)
   takes `metric_filters` such as `{revenue} > 1000`, which keep only the rows of the result
