@@ -45,7 +45,7 @@ Phase 1 imports three formats and converts everything to the Cosmos format ([ADR
 
 | Format | What comes in | Limit |
 | --- | --- | --- |
-| dbt | `semantic_models` and `metrics`, in the latest and legacy specs | Reads the YAML without running the dbt project; `Dimension('entity__dim')` filters become `{model.dim}`; `percentile`, `offset_window` and conversion metrics become warnings |
+| dbt | `semantic_models` and `metrics`, in the latest and legacy specs | Reads the YAML without running the dbt project; `Dimension('entity__dim')` filters become `{model.dim}`; `percentile`, `offset_window` and conversion metrics become warnings; a cumulative metric over an `avg` or `count_distinct` measure (to-date, running total or window), which Cosmos cannot accumulate from per-period values, is skipped with a warning, with the ratio and derived metrics that use it (DEC-32) |
 | Ossie | The whole document, including `custom_extensions`; `ai_context.synonyms` becomes glossary entries | Only the `OSSIE_SQL_2026` dialect has guaranteed semantics; composite keys become warnings |
 | Cube | Static YAML: cubes, dimensions, measures, joins and segments | JavaScript models and YAML with Jinja or Python templates produce a warning and are not imported |
 
@@ -63,7 +63,7 @@ Cube is the most adopted open source semantic layer, so importing from it is the
 | Measures `count`, `count_distinct`, `sum`, `avg`, `min`, `max` | Measure of the same type | Direct |
 | `number` measure referencing other measures | Derived metric | Requires reading the SQL expression |
 | `segments` | Business rule | Comes in with owner and effective date pending; validation warns until they are set |
-| `rolling_window` and multi-stage measures | Cumulative metric: `to_date` as `grain_to_date`, `trailing: N day` with `offset: end` as `window: N days` | Warning and `custom_extensions`; a trailing window in days with `offset: start` or `leading` (it does not end on the row's day), or over an `avg` or `count_distinct` measure (Cosmos cannot combine those from daily values), is skipped with its measure, with a warning |
+| `rolling_window` and multi-stage measures | Cumulative metric: `to_date` as `grain_to_date`, `trailing: N day` with `offset: end` as `window: N days` | Warning and `custom_extensions`; a trailing window in days with `offset: start` or `leading` (it does not end on the row's day), or over an `avg` or `count_distinct` measure (Cosmos cannot combine those from daily values), is skipped with its measure, with a warning; so is a `to_date` window (or any other) over an `avg` or `count_distinct` measure (DEC-32). The `number` measures that use a skipped measure are skipped too, each with a warning naming what it depends on |
 | `pre_aggregations` and `views` | No MVP equivalent | Kept in `custom_extensions` |
 | `access_policy` with one policy for `role: "*"`, `row_level` filters (`equals`, `gt`, `gte`, `lt`, `lte`, `and`/`or`) and `member_level` excludes | `row_filters` (`{ securityContext.x }` becomes `$user.x`, declared in `user_context`) and `sensitivity` (from the dimension's `meta.sensitivity`) | Direct for the shape `cosmos export cube` writes; any other policy fails closed (below) |
 | Access control in `cube.js` | `row_filters` and `sensitivity` | Manual: it is JavaScript code; the report lists the rules to recreate |
