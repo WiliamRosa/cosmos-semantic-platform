@@ -3,6 +3,7 @@ returns the same numbers as the native one on every available database."""
 
 from __future__ import annotations
 
+import calendar as cal
 import datetime as dt
 import json
 import math
@@ -14,6 +15,7 @@ import yaml
 
 from cosmos_semantic import demo_data
 from cosmos_semantic.compiler import compile_project
+from cosmos_semantic.errors import QueryError
 from cosmos_semantic.interchange import dump_project, import_model
 from cosmos_semantic.interchange.powerbi import parse_dax, physical_table
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
@@ -927,3 +929,520 @@ def test_datesinperiod_matches_hand_written_sql_with_empty_days(source, request,
     finally:
         connector.run_script(f"DROP TABLE {sales}")
         connector.run_script(f"DROP TABLE {schema}.powerbi_window_calendar")
+
+
+# -- period shifts as offset inputs (DEC-35) ------------------------------------------------
+
+
+def _shift_bim(directory: Path, measures: dict[str, str], related: bool = True) -> Path:
+    """`Sales` (a date, an amount, a buyer, and the period numbers the hand-written SQL uses)
+    and a `Calendar` date table (`cal_day`) related to it, or left unrelated."""
+
+    def table(name: str, physical: str, columns, extra: dict[str, str]):
+        return {
+            "name": name,
+            "columns": [{"name": c, "dataType": t, "sourceColumn": c} for c, t in columns],
+            "partitions": [
+                {"name": name, "source": {"type": "query", "query": f"SELECT * FROM {physical}"}}
+            ],
+            "measures": [{"name": k, "expression": v} for k, v in extra.items()],
+        }
+
+    sales = [("sold_on", "dateTime"), ("amount", "double"), ("buyer", "string")]
+    sales += [(c, "int64") for c in PERIOD_NUMBERS]
+    base = {
+        "Amount": "SUM(Sales[amount])",
+        "Lines": "COUNTROWS(Sales)",
+        "Amount YTD": "TOTALYTD([Amount], 'Calendar'[cal_day])",
+        "Average": "DIVIDE([Amount], [Lines])",
+    }
+    relationship = {
+        "fromTable": "Sales",
+        "fromColumn": "sold_on",
+        "toTable": "Calendar",
+        "toColumn": "cal_day",
+    }
+    model = {
+        "model": {
+            "tables": [
+                table("Sales", "public.powerbi_shift_sales", sales, {**base, **measures}),
+                table("Calendar", "public.powerbi_shift_calendar", [("cal_day", "dateTime")], {}),
+            ],
+            "relationships": [relationship] if related else [],
+        }
+    }
+    path = directory / "m.bim"
+    path.write_text(json.dumps(model), encoding="utf-8")
+    return path
+
+
+PERIOD_NUMBERS = ("day_no", "week_no", "month_no", "quarter_no", "year_no")
+DAY = "'Calendar'[cal_day]"
+
+
+def test_period_shifts_import_as_offset_inputs(tmp_path):
+    path = _shift_bim(
+        tmp_path,
+        {
+            "Amount PY": f"CALCULATE([Amount], SAMEPERIODLASTYEAR({DAY}))",
+            "Amount PM": f"CALCULATE([Amount], DATEADD({DAY}, -1, MONTH))",
+            "Amount 2Q": "CALCULATE([Amount], DATEADD(Calendar[cal_day], -2, quarter))",
+            "Amount LY": f"CALCULATE([Amount], DATEADD({DAY}, -1, YEAR))",
+            "Lines PW": f"CALCULATE(COUNTROWS(Sales), DATEADD({DAY}, -7, DAY))",
+            "Amount PP": f"CALCULATE(SUM(Sales[amount]), PARALLELPERIOD({DAY}, -3, MONTH))",
+            "Average PM": f"CALCULATE([Average], DATEADD({DAY}, -1, MONTH))",
+            "YoY": "DIVIDE([Amount] - [Amount PY], [Amount PY])",
+            "YoY Delta": "[Amount] - [Amount PY]",
+            "PY Again": "CALCULATE([Amount PY])",
+            "PY Share": "DIVIDE([Amount PY], [Amount])",
+        },
+    )
+    graph, warnings = imported("powerbi", path)
+    metrics = {m.name: m for m in graph.project.metrics}
+    shifts = {
+        "amount_py": ("amount", "12 months"),
+        "amount_pm": ("amount", "1 month"),
+        "amount_2q": ("amount", "6 months"),
+        "amount_ly": ("amount", "12 months"),
+        "lines_pw": ("lines_pw_base", "7 days"),
+        "amount_pp": ("amount_pp_base", "3 months"),
+        "average_pm": ("average", "1 month"),
+    }
+    for name, (inner, offset) in shifts.items():
+        metric = metrics[name]
+        assert metric.type == "derived" and metric.expr == "{" + inner + "}", name
+        assert [(i.metric, i.offset) for i in metric.inputs] == [(inner, offset)], name
+    assert metrics["yoy"].expr == "({amount} - {amount_py}) / ({amount_py})"
+    assert metrics["yoy"].inputs == [] and metrics["py_again"].expr == "{amount_py}"
+    assert (metrics["py_share"].numerator, metrics["py_share"].denominator) == (
+        "amount_py",
+        "amount",
+    )
+    joined = "\n".join(warnings)
+    assert "not imported" not in joined
+    # One warning per period shift, naming the grains to query it by and the differences.
+    assert (
+        "`Amount PY`: imported as `amount` read 12 months earlier; query it by "
+        "`calendar.cal_day__month` or `calendar.cal_day__quarter` or `calendar.cal_day__year`"
+    ) in joined
+    assert (
+        "`Amount PM`: imported as `amount` read 1 month earlier; query it by "
+        "`calendar.cal_day__month` (or by the fact's own"
+    ) in joined
+    assert (
+        "read 7 days earlier; query it by `calendar.cal_day__day` or `calendar.cal_day__week`"
+    ) in joined
+    assert "29, 30 and 31 March a month back are all the last day of February" in joined
+    assert joined.count("gives DAX a partial earlier period") == 6
+    assert "`Amount PP`: imported as `amount_pp_base` read 3 months earlier" in joined
+    assert "still gives DAX the whole earlier months" in joined
+    # Adding or subtracting an offset metric: DAX counts BLANK as zero there.
+    assert "`YoY`: adds or subtracts `amount_py`" in joined
+    assert "`YoY Delta`: adds or subtracts `amount_py`" in joined
+    assert "`PY Share`: adds" not in joined
+    request = QueryRequest(metrics=["amount", "yoy"], dimensions=["calendar.cal_day__year"])
+    assert "OFFSET_12_MONTH" in Planner(graph, "duckdb").plan(request).sql.upper()
+
+
+def test_divide_inside_arithmetic_keeps_its_grouping(tmp_path, duckdb_connector):
+    """`[A] / DIVIDE([B], [C])` is a / (b / c), not (a / b) / c."""
+    path = _shift_bim(
+        tmp_path,
+        {
+            "Nested": "[Amount] / DIVIDE([Lines], [Amount])",
+            "Left": "DIVIDE([Amount], [Lines]) / [Lines]",
+        },
+    )
+    graph, _ = imported("powerbi", path)
+    metrics = {m.name: m for m in graph.project.metrics}
+    assert metrics["nested"].expr == "{amount} / (({lines}) / ({amount}))"
+    assert metrics["left"].expr == "(({amount}) / ({lines})) / {lines}"
+    # Amount 4 over 2 lines: 4 / (2 / 4) = 8, where (4 / 2) / 4 would be 0.5.
+    schema = pa.schema([("amount", pa.float64())])
+    table = pa.table([[3.0, 1.0]], schema=schema)
+    demo_data.load(duckdb_connector, {"powerbi_shift_sales": table})
+    try:
+        sql = Planner(graph, "duckdb").plan(QueryRequest(metrics=["nested", "left"])).sql
+        assert list(duckdb_connector.execute(sql).to_pylist()[0].values()) == [8.0, 1.0]
+    finally:
+        duckdb_connector.run_script("DROP TABLE public.powerbi_shift_sales")
+
+
+def test_divide_with_an_alternate_result_imports_with_a_warning(tmp_path):
+    path = _shift_bim(
+        tmp_path,
+        {
+            "Zero": "DIVIDE([Amount], [Lines], 0)",
+            "Minus One": "DIVIDE([Amount] - [Lines], [Lines], -1)",
+            "Inside": "[Amount] + DIVIDE([Amount], [Lines], 0) + DIVIDE([Lines], [Amount], 1)",
+            "Blank": "DIVIDE([Amount], [Lines], BLANK())",
+            "Lost": "DIVIDE([Amount], [Missing], 0)",
+        },
+    )
+    graph, warnings = imported("powerbi", path)
+    metrics = {m.name: m for m in graph.project.metrics}
+    assert metrics["zero"].type == "ratio"
+    assert metrics["minus_one"].expr == "({amount} - {lines}) / ({lines})"
+    assert {"inside", "blank"} <= set(metrics) and "lost" not in metrics
+    joined = "\n".join(warnings)
+    for name in ("Zero", "Minus One", "Inside"):
+        message = f"measure `{name}`: DIVIDE with an alternate result; DAX returns the alternate"
+        assert joined.count(message) == 1, name
+    assert "Cosmos returns NULL there" in joined
+    assert "`Blank`: DIVIDE" not in joined and "`Lost`: DIVIDE" not in joined
+
+
+def test_blank_as_zero_warning_follows_the_shifted_operand(tmp_path):
+    path = _shift_bim(
+        tmp_path,
+        {
+            "PY": f"CALCULATE([Amount], SAMEPERIODLASTYEAR({DAY}))",
+            "Share": "DIVIDE([PY], [Amount])",
+            "Share Copy": "CALCULATE([Share])",
+            "Share A": 'CALCULATE([Share], KEEPFILTERS(Sales[buyer] = "a"))',
+            "Share Minus": "[Share] - 1",
+            "Copy Plus": "[Share Copy] + 1",
+            "A Plus": "[Share A] + 1",
+            "Over PY": "DIVIDE([Amount] - [Lines], [PY])",
+            "Minus Ratio": "[Amount] - DIVIDE([Amount], [PY])",
+        },
+    )
+    graph, warnings = imported("powerbi", path)
+    assert {"share", "share_a", "share_minus", "over_py"} <= {m.name for m in graph.project.metrics}
+    joined = "\n".join(warnings)
+    assert "`Share Minus`: adds or subtracts `share`" in joined
+    assert "`Copy Plus`: adds or subtracts `share_copy`" in joined
+    assert "`A Plus`: adds or subtracts `share_a`" in joined
+    assert "`Minus Ratio`: adds or subtracts `py`" in joined
+    # The shifted metric only divides here, outside the subtraction: no BLANK-as-zero warning.
+    assert "`Over PY`: adds" not in joined
+    assert "`Share`: adds" not in joined
+
+
+@pytest.mark.parametrize(
+    ("dax", "reason"),
+    [
+        (f"CALCULATE([Amount], DATEADD({DAY}, 1, YEAR))", "not a negative whole number"),
+        (f"CALCULATE([Amount], DATEADD({DAY}, -1.5, MONTH))", "not a negative whole number"),
+        (f"CALCULATE([Amount], DATEADD({DAY}, -0, MONTH))", "by zero periods"),
+        (f"CALCULATE([Amount], DATEADD({DAY}, -1, WEEK))", "in a unit other than DAY, MONTH"),
+        (f"CALCULATE([Amount], PARALLELPERIOD({DAY}, -1, DAY))", "other than MONTH, QUARTER"),
+        (
+            f"CALCULATE([Amount], PARALLELPERIOD({DAY}, -1, YEAR))",
+            "PARALLELPERIOD by YEAR returns the whole earlier year",
+        ),
+        (
+            f"CALCULATE([Amount], PARALLELPERIOD({DAY}, -2, QUARTER))",
+            "By quarter it is DATEADD(..., -2, QUARTER)",
+        ),
+        (
+            f'CALCULATE([Amount], SAMEPERIODLASTYEAR({DAY}), Sales[buyer] = "a")',
+            "a period shift and other filters",
+        ),
+        ("CALCULATE([Amount], SAMEPERIODLASTYEAR(Sales[buyer]))", "not a date column"),
+        (
+            "CALCULATE([Amount], SAMEPERIODLASTYEAR(Sales[sold_on]))",
+            "a column of the measure's own table",
+        ),
+        (
+            "CALCULATE(SUM(Sales[amount]), SAMEPERIODLASTYEAR(Sales[sold_on]))",
+            "a column of the measure's own table",
+        ),
+        (
+            f"CALCULATE([Amount YTD], SAMEPERIODLASTYEAR({DAY}))",
+            "`amount_ytd`, a cumulative metric",
+        ),
+        (
+            f"CALCULATE([Amount], DATEADD(DATESYTD({DAY}), -1, YEAR))",
+            "over a table expression instead of a date column",
+        ),
+    ],
+)
+def test_other_period_shifts_stay_warnings(tmp_path, dax, reason):
+    graph, warnings = imported("powerbi", _shift_bim(tmp_path, {"Shifted": dax}))
+    # Not imported, so the imported model still passes validation, with no helper left.
+    assert "shifted" not in {m.name for m in graph.project.metrics}
+    sales = next(m for m in graph.project.semantic_models if m.name == "sales")
+    assert {m.name for m in sales.measures} == {"amount", "lines"}
+    joined = "\n".join(warnings)
+    assert "measure `Shifted` not imported" in joined
+    assert reason in joined
+
+
+def test_period_shift_of_an_offset_metric_or_over_an_unrelated_table_is_a_warning(tmp_path):
+    measures = {
+        "PY": f"CALCULATE([Amount], SAMEPERIODLASTYEAR({DAY}))",
+        "PY PY": f"CALCULATE([PY], SAMEPERIODLASTYEAR({DAY}))",
+        "Growth": "DIVIDE([Amount] - [PY], [PY])",
+        "Growth PM": f"CALCULATE([Growth], DATEADD({DAY}, -1, MONTH))",
+        "Sum PY": f"CALCULATE(SUM(Sales[amount]), SAMEPERIODLASTYEAR({DAY}))",
+    }
+    graph, warnings = imported("powerbi", _shift_bim(tmp_path, measures))
+    names = {m.name for m in graph.project.metrics}
+    assert {"py", "growth", "sum_py"} <= names and not {"py_py", "growth_pm"} & names
+    joined = "\n".join(warnings)
+    assert "`PY PY` not imported" in joined and "already reads an earlier period" in joined
+    assert "`Growth PM` not imported" in joined
+    graph, warnings = imported("powerbi", _shift_bim(tmp_path, measures, related=False))
+    assert not {"py", "growth", "sum_py"} & {m.name for m in graph.project.metrics}
+    sales = next(m for m in graph.project.semantic_models if m.name == "sales")
+    assert {m.name for m in sales.measures} == {"amount", "lines"}
+    assert "`Sales` does not reach through an imported relationship" in "\n".join(warnings)
+
+
+# (date, amount, buyer): month ends of months of different lengths (31 March and 30 April a
+# month back, 29 February 2024 a year back from February 2025), a year change, months
+# without facts (April 2025, so May reads none a month back), and a fact without a date.
+SHIFT_ROWS = [
+    (dt.date(2023, 2, 15), 4.0, "a"),
+    (dt.date(2023, 3, 31), 6.0, "b"),
+    (dt.date(2024, 1, 31), 10.0, "a"),
+    (dt.date(2024, 2, 29), 6.0, "b"),
+    (dt.date(2024, 3, 31), 8.0, "a"),
+    (dt.date(2024, 4, 30), 5.0, "a"),
+    (dt.date(2024, 12, 31), 2.0, "b"),
+    (dt.date(2025, 1, 1), 20.0, "a"),
+    (dt.date(2025, 1, 8), 3.0, "a"),
+    (dt.date(2025, 2, 28), 7.0, "a"),
+    (dt.date(2025, 3, 15), 9.0, "b"),
+    (dt.date(2025, 3, 31), 1.0, "a"),
+    (dt.date(2025, 5, 10), 3.0, "a"),
+    (None, 100.0, "a"),
+]
+SHIFT_CALENDAR = [dt.date(2023, 1, 1) + dt.timedelta(days=i) for i in range(1096)]
+# metric: (DAX, aggregate, how far back in months or days, that unit, PARALLELPERIOD or not).
+# The hand-written SQL reads the facts whose period number is that many periods lower.
+SHIFT_MEASURES = {
+    "amount_py": (f"CALCULATE([Amount], SAMEPERIODLASTYEAR({DAY}))", "sum", 12, "MONTH", False),
+    "amount_pm": (f"CALCULATE([Amount], DATEADD({DAY}, -1, MONTH))", "sum", 1, "MONTH", False),
+    "amount_pq": (f"CALCULATE([Amount], DATEADD({DAY}, -1, QUARTER))", "sum", 3, "MONTH", False),
+    "amount_pp": (
+        f"CALCULATE(SUM(Sales[amount]), PARALLELPERIOD({DAY}, -1, MONTH))",
+        "sum",
+        1,
+        "MONTH",
+        True,
+    ),
+    "lines_pd": (f"CALCULATE(COUNTROWS(Sales), DATEADD({DAY}, -1, DAY))", "count", 1, "DAY", False),
+    "amount_pw": (f"CALCULATE([Amount], DATEADD({DAY}, -7, DAY))", "sum", 7, "DAY", False),
+}
+SHIFT_GROWTH = {"yoy": "DIVIDE([Amount] - [Amount PY], [Amount PY])"}
+
+
+def _add_months(day: dt.date, months: int) -> dt.date:
+    year, month = divmod(day.month - 1 + months, 12)
+    year += day.year
+    return dt.date(year, month + 1, min(day.day, cal.monthrange(year, month + 1)[1]))
+
+
+def _month_end(day: dt.date) -> bool:
+    return day.day == cal.monthrange(day.year, day.month)[1]
+
+
+def _dax_shift(dates: set[dt.date], back: int, unit: str, parallel: bool) -> set[dt.date]:
+    """A model of DAX's DATEADD and PARALLELPERIOD over a complete date table, written from
+    their documentation: each date moves back, a month shift clamps the day to the month's
+    end, and a date on a month's last day takes the rest of the shifted month with it;
+    PARALLELPERIOD then widens the result to whole months."""
+    if unit == "DAY":
+        return {d - dt.timedelta(days=back) for d in dates}
+    out = set()
+    for day in dates:
+        moved = _add_months(day, -back)
+        out.add(moved)
+        while _month_end(day) and not _month_end(moved):
+            moved += dt.timedelta(days=1)
+            out.add(moved)
+    if parallel and out:
+        first, last = min(out).replace(day=1), max(out)
+        last = last.replace(day=cal.monthrange(last.year, last.month)[1])
+        out = {first + dt.timedelta(days=i) for i in range((last - first).days + 1)}
+    return out
+
+
+def _period(day: dt.date, grain: str) -> int:
+    return {
+        "day": day.toordinal(),
+        "week": (day.toordinal() - 1) // 7,  # 1 January of year 1 was a Monday: ISO weeks
+        "month": day.year * 12 + day.month - 1,
+        "quarter": day.year * 4 + (day.month - 1) // 3,
+        "year": day.year,
+    }[grain]
+
+
+def _dax(metric: str, grain: str, keep=lambda day: True, buyer: str | None = None) -> dict:
+    """The DAX value of a period-shift measure for every period of `grain` that has facts,
+    after the date filter `keep` (a slicer: it limits the dates in context, then the shift
+    replaces it) and an optional buyer."""
+    _, agg, back, unit, parallel = SHIFT_MEASURES[metric]
+    rows = [r for r in SHIFT_ROWS if buyer is None or r[2] == buyer]
+    out = {}
+    for period in sorted({_period(r[0], grain) for r in rows if r[0] and keep(r[0])}):
+        dates = {d for d in SHIFT_CALENDAR if _period(d, grain) == period and keep(d)}
+        shifted = _dax_shift(dates, back, unit, parallel)
+        values = [r[1] for r in rows if r[0] in shifted]
+        out[period] = (sum(values) if agg == "sum" else len(values)) if values else None
+    return out
+
+
+def test_dax_model_of_month_ends():
+    """The cases the documented differences rest on: by day, a month back clamps 29 to
+    31 March to the end of February; whole months map to whole months."""
+    for day in (29, 30, 31):
+        assert _dax_shift({dt.date(2024, 3, day)}, 1, "MONTH", False) == {dt.date(2024, 2, 29)}
+    april = {dt.date(2024, 4, d) for d in range(1, 31)}
+    assert _dax_shift(april, 1, "MONTH", False) == {dt.date(2024, 3, d) for d in range(1, 32)}
+    february = {dt.date(2025, 2, d) for d in range(1, 29)}
+    assert dt.date(2024, 2, 29) in _dax_shift(february, 12, "MONTH", False)
+    assert _dax_shift({dt.date(2025, 3, 20)}, 1, "MONTH", True) == {
+        dt.date(2025, 2, d) for d in range(1, 29)
+    }
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_period_shifts_match_hand_written_sql_and_dax(source, request, tmp_path):
+    connector = request.getfixturevalue(source)
+    dates = [r[0] for r in SHIFT_ROWS]
+    numbers = {
+        f"{grain}_no": [None if d is None else _period(d, grain) for d in dates]
+        for grain in ("day", "week", "month", "quarter", "year")
+    }
+    demo_data.load(
+        connector,
+        {
+            "powerbi_shift_sales": pa.table(
+                [dates, [r[1] for r in SHIFT_ROWS], [r[2] for r in SHIFT_ROWS]]
+                + [numbers[c] for c in PERIOD_NUMBERS],
+                schema=pa.schema(
+                    [("sold_on", pa.date32()), ("amount", pa.float64()), ("buyer", pa.string())]
+                    + [(c, pa.int64()) for c in PERIOD_NUMBERS]
+                ),
+            ),
+            "powerbi_shift_calendar": pa.table(
+                [SHIFT_CALENDAR], schema=pa.schema([("cal_day", pa.date32())])
+            ),
+        },
+    )
+    schema = connector.config.schema_map.get("public", "public")
+    sales = f"{schema}.powerbi_shift_sales"
+    try:
+        measures = {
+            {"amount_py": "Amount PY"}.get(name, name): dax
+            for name, (dax, *_) in SHIFT_MEASURES.items()
+        }
+        other, warnings = imported("powerbi", _shift_bim(tmp_path, {**measures, **SHIFT_GROWTH}))
+        assert not [w for w in warnings if "not imported" in w]
+        planner = Planner(other, connector.dialect, connector.config.schema_map)
+
+        def cosmos(metrics: list[str], grain: str, by_buyer=False, filters=()) -> dict:
+            dimensions = [f"calendar.cal_day__{grain}"] + (["sales.buyer"] if by_buyer else [])
+            sql = planner.plan(
+                QueryRequest(metrics=metrics, dimensions=dimensions, filters=list(filters))
+            ).sql
+            out = {}
+            for raw in connector.execute(sql).to_pylist():
+                row = {k.lower(): v for k, v in raw.items()}
+                day = row[f"calendar__cal_day__{grain}"]
+                period = (
+                    None if day is None else _period(dt.date.fromisoformat(str(day)[:10]), grain)
+                )
+                key = (period, row["sales__buyer"]) if by_buyer else period
+                out[key] = {m: _number(row[m]) for m in metrics}
+            return out
+
+        def hand(metric: str, grain: str) -> dict:
+            _, agg, back, _, _ = SHIFT_MEASURES[metric]
+            column = f"{grain}_no"
+            shift = back // {"quarter": 3, "year": 12, "week": 7}.get(grain, 1)
+            value = "SUM(p.amount)" if agg == "sum" else "NULLIF(COUNT(p.amount), 0)"
+            sql = (
+                f"SELECT c.k, {value} AS v FROM (SELECT DISTINCT {column} AS k FROM {sales} "
+                f"WHERE {column} IS NOT NULL) c LEFT JOIN {sales} p ON p.{column} = c.k - {shift} "
+                "GROUP BY c.k"
+            )
+            return {
+                int(r[0]): _number(r[1])
+                for r in (list(x.values()) for x in connector.execute(sql).to_pylist())
+            }
+
+        grains = {
+            "month": ["amount_py", "amount_pm", "amount_pq", "amount_pp"],
+            "quarter": ["amount_py", "amount_pq"],
+            "year": ["amount_py"],
+            "day": ["lines_pd", "amount_pw"],
+            "week": ["amount_pw"],
+        }
+        for grain, metrics in grains.items():
+            got = cosmos(metrics, grain)
+            # The fact without a date: a null period whose earlier period is NULL.
+            assert got.pop(None) == dict.fromkeys(metrics), grain
+            for metric in metrics:
+                expected = hand(metric, grain)
+                assert expected == _dax(metric, grain), (metric, grain)
+                assert {k: v[metric] for k, v in got.items()} == expected, (metric, grain)
+        # Hand-checked anchors: February 2025 reads 29 February 2024, May 2025 reads an April
+        # without facts, and 30 April 2024 reads all of March, its 31st included.
+        month = cosmos(["amount_py", "amount_pm"], "month")
+        assert month[_period(dt.date(2025, 2, 1), "month")] == {"amount_py": 6.0, "amount_pm": 23.0}
+        assert month[_period(dt.date(2025, 5, 1), "month")]["amount_pm"] is None
+        assert month[_period(dt.date(2024, 4, 1), "month")]["amount_pm"] == 8.0
+        # The growth over the shifted metric, by year: NULL where the year before has no facts.
+        year = cosmos(["amount", "amount_py", "yoy"], "year")
+        assert year[2024] == {"amount": 31.0, "amount_py": 10.0, "yoy": 2.1}
+        assert year[2023] == {"amount": 10.0, "amount_py": None, "yoy": None}
+        # Each buyer is shifted on its own, in DAX as in Cosmos.
+        by_buyer = cosmos(["amount_py", "amount_pm"], "month", by_buyer=True)
+        by_buyer.pop((None, "a"))
+        for buyer in ("a", "b"):
+            for metric in ("amount_py", "amount_pm"):
+                mine = {k[0]: v[metric] for k, v in by_buyer.items() if k[1] == buyer}
+                assert mine == _dax(metric, "month", buyer=buyer), (metric, buyer)
+
+        # Documented differences. A filter that cuts a period: DAX moves the dates left in
+        # context (15 to 31 March 2025 read 15 to 28 February), PARALLELPERIOD takes the whole
+        # earlier month, and Cosmos filters the earlier period's facts too.
+        since = dt.date(2025, 3, 15)
+        cut = cosmos(
+            ["amount", "amount_pm", "amount_pp", "amount_py"],
+            "month",
+            filters=[f"{{calendar.cal_day}} >= DATE '{since.isoformat()}'"],
+        )
+        march = _period(since, "month")
+        after = lambda day: day >= since  # noqa: E731
+        assert _dax("amount_pm", "month", after)[march] == 7.0
+        assert _dax("amount_pp", "month", after)[march] == 7.0
+        assert _dax("amount_py", "month", after)[march] == 8.0
+        assert cut[march] == {
+            "amount": 10.0,
+            "amount_pm": None,
+            "amount_pp": None,
+            "amount_py": None,
+        }
+        # A filter of whole periods (the year 2025) cuts nothing in DAX, whose January still
+        # reads December 2024; in Cosmos the first period's earlier period is filtered out.
+        year_2025 = cosmos(
+            ["amount_pm", "amount_py"],
+            "month",
+            filters=["{calendar.cal_day} >= DATE '2025-01-01'"],
+        )
+        january = _period(dt.date(2025, 1, 1), "month")
+        in_2025 = lambda day: day.year == 2025  # noqa: E731
+        assert _dax("amount_pm", "month", in_2025)[january] == 2.0
+        assert _dax("amount_py", "month", in_2025)[january] == 10.0
+        assert year_2025[january] == {"amount_pm": None, "amount_py": None}
+        # February reads a January inside the filter, so the month offset agrees again; the
+        # year offset reads February 2024, which the filter removes in Cosmos only.
+        assert year_2025[january + 1] == {"amount_pm": 23.0, "amount_py": None}
+        assert _dax("amount_pm", "month", in_2025)[january + 1] == 23.0
+        assert _dax("amount_py", "month", in_2025)[january + 1] == 6.0
+        # Periods without facts: Power BI shows April 2025, whose March has facts; Cosmos
+        # outputs only the periods with facts.
+        assert _period(dt.date(2025, 4, 1), "month") not in cosmos(["amount_pm"], "month")
+        # By day, a month back is refused instead of clamping month ends.
+        with pytest.raises(QueryError, match="cannot be applied by day"):
+            cosmos(["amount_pm"], "day")
+        with pytest.raises(QueryError, match="cannot be applied by month"):
+            cosmos(["amount_pw"], "month")
+    finally:
+        connector.run_script(f"DROP TABLE {sales}")
+        connector.run_script(f"DROP TABLE {schema}.powerbi_shift_calendar")

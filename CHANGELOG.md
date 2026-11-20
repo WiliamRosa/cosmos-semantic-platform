@@ -9,6 +9,27 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- `cosmos import powerbi` reads period-over-period measures as offset inputs (DEC-35):
+  `CALCULATE([m], SAMEPERIODLASTYEAR('Date'[Date]))`, `DATEADD('Date'[Date], -N, DAY | MONTH |
+  QUARTER | YEAR)` and `PARALLELPERIOD('Date'[Date], -N, MONTH)` become a derived metric with
+  `inputs: [{metric, offset}]` (`N days`, `N months`, `3N months`, `12N months`), and growth
+  measures built on them, such as `DIVIDE([m] - [m PY], [m PY])`, come along as derived
+  metrics. The date column must belong to an imported date table that the measure's table
+  reaches through one imported relationship. Each imported measure gets one warning that names
+  the time dimensions to query it by and the differences from DAX, which moves a set of dates
+  where Cosmos moves the period start: a date filter that cuts a period, or a date table that
+  ends inside one, gives DAX a partial earlier period while Cosmos filters the earlier period's
+  facts too; other columns of the date table (a weekday) give different numbers; Power BI also
+  shows periods without facts; and by day, where DAX clamps month ends, a month offset is
+  refused. Adding or subtracting a shifted measure, or a ratio over one, gets a warning too (DAX
+  counts BLANK as zero in `+` and `-`). `DIVIDE` with an alternate result other than `BLANK()`
+  (`DIVIDE(a, b, 0)`) is imported with a warning that Cosmos returns NULL where DAX returns the
+  alternate result, and `[A] / DIVIDE([B], [C])` now imports as a / (b / c). `PARALLELPERIOD` by quarter or year (the whole earlier quarter or year, even
+  by month), forward shifts, other `CALCULATE` filters, the fact's own date column, shifts of a
+  running total or of another shifted measure, and other units stay warnings. An equivalence
+  test checks them against hand-written SQL and a model of DAX by day, week, month, quarter,
+  year and by month and buyer, on DuckDB and every database configured in CI.
+
 - Structured time semantics in the evidence (DEC-37): each entry of `metrics` carries a `time`
   block for cumulative and offset metrics (null for the others), so the time logic is no longer
   only inside the `formula` text. It holds `kind` (`grain_to_date` with its `period`, null for a
