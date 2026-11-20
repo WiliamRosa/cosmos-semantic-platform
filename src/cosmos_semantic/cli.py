@@ -623,9 +623,18 @@ def _print_reconciliation(report: dict) -> None:
     typer.echo(f"  governed {report['cosmos']['formula']}  (as of {report['cosmos']['as_of']})")
     if report["legacy"].get("formula"):
         typer.echo(f"  other    {report['legacy']['formula']}")
-    for example in report["examples"][:5]:
+    tol = report["tolerance"]
+    typer.echo(
+        f"  tolerance abs {tol['abs_tolerance']:g}, rel {tol['rel_tolerance']:g} ({tol['source']})"
+        + (f", {rows['within_tolerance']} rows within it" if rows["within_tolerance"] else "")
+    )
+    shown = [("example", e) for e in report["examples"][:5]]
+    shown += [("within", e) for e in report["tolerated"][:5]]
+    for label, example in shown:
+        diff = example["difference"]
         typer.echo(
-            f"  example  {example['key']}: governed {example['cosmos']} / legacy {example['legacy']}"
+            f"  {label:8} {example['key']}: governed {example['cosmos']} / "
+            f"legacy {example['legacy']}" + (f" (difference {diff:+g})" if diff is not None else "")
         )
     for cause in report["causes"]:
         typer.secho(f"  cause    [{cause['code']}] {cause['summary']}", fg=typer.colors.CYAN)

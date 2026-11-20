@@ -9,6 +9,16 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- A metric can declare its reconciliation tolerance (DEC-39):
+  `reconciliation: {abs_tolerance: 0.01, rel_tolerance: 0.001}`. `cosmos reconcile`, the
+  reconciliation cases of `cosmos check` and member health use it in place of the fixed default
+  (equal up to float noise), so a legacy report rounded to cents or thousands can agree. The
+  reconcile report states the `tolerance` that applied (`source: metric` or `default`), counts
+  and lists the rows that agree only within it (`rows.within_tolerance`, `tolerated`), and shows
+  the `difference` on each example row; check runs record the tolerance per case, health reasons
+  carry it when it is the metric's own, and query evidence lists it under the metric. Each
+  tolerance must be a non-negative, finite number, and unknown keys are refused. Without the
+  field nothing changes: same results, same model hash, same SQL and evidence.
 - A social media agent for the project's LinkedIn page ([ADR 0014](docs/decisions/0014-social-media-agent.md)):
   on weekday eves it opens one pull request labelled `social` with the next business day's post, its
   visual and the source of every claim, under `marketing/linkedin/` (playbook, page copy, brand assets).
