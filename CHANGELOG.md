@@ -9,6 +9,23 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- `cosmos export dbt` and `cosmos import dbt` carry offsets as MetricFlow's `offset_window`
+  (DEC-36). The export writes a derived metric's `inputs: [{metric, offset}]` as the input's
+  `offset_window` in the largest unit that holds the offset (`7 days` as `1 week`, `3 months` as
+  `1 quarter`, `12 months` as `1 year`), so at every grain the engine accepts MetricFlow shifts
+  whole periods, as the engine does, instead of each day; each exported offset is a warning
+  naming `metric_time` and where MetricFlow differs (it joins a time spine, so it also returns
+  periods without facts, returns grains the engine refuses, and applies `metric_time` filters
+  after the shift, while the engine filters the facts first). The import reads `offset_window`
+  in days, weeks, months, quarters and years as offsets in days or months, turns an aliased
+  input read both shifted and unshifted into a helper metric `<metric>__<alias>`, and warns
+  where the numbers differ, including a month or quarter window at a coarser grain. Still
+  skipped with a warning: `offset_to_grain`, other units, a zero window, and offsets over a
+  cumulative metric or a metric with offsets of its own. Offsets over a model without a time
+  dimension are not exported. The re-imported example answers the offset reference queries
+  (A35 to A38) with the hand-written SQL's numbers, and offsets of 1, 7 and 14 days and 1, 3
+  and 12 months over two models return the native numbers at every grain, on DuckDB and every
+  database configured in CI.
 - A social media agent for the project's LinkedIn page ([ADR 0014](docs/decisions/0014-social-media-agent.md)):
   on weekday eves it opens one pull request labelled `social` with the next business day's post, its
   visual and the source of every claim, under `marketing/linkedin/` (playbook, page copy, brand assets).
