@@ -14,6 +14,7 @@ Rules for every Claude Code session and every agent in this repository: interact
 ## Agent runs
 
 - **Schedule (São Paulo time, every day):** the execute run at 18:00 opens the day's pull requests; the daily report at 20:00 is an issue labelled `daily`, with the weekly review added on Fridays. The maintainer answers the daily in a comment (`DEC-<n> approve|reject|later`).
+- **Social (ADR 0014):** on weekday eves at 19:00 the social media agent opens one pull request labelled `social` with the next business day's LinkedIn post, touching only `marketing/linkedin/`. Merging it is the maintainer's approval, and the maintainer publishes it. It does not count toward the pull request budget.
 - **Identity first.** Before any GitHub or Git action, `gh api user --jq .login` must print `cosmosagentsteam-lab`; otherwise stop and report the login found. A token kept in the environment is not a fallback: the cloud proxy replaces it with the Claude GitHub App's.
 - **REST only.** GraphQL is not available to cloud routines, so `gh pr`, `gh issue` and Discussions do not work there. Use `gh api` with the REST endpoints.
 - **Budget:** at most 3 agent pull requests a day, unless the maintainer decides otherwise in a daily.

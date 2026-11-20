@@ -9,6 +9,10 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- A social media agent for the project's LinkedIn page ([ADR 0014](docs/decisions/0014-social-media-agent.md)):
+  on weekday eves it opens one pull request labelled `social` with the next business day's post, its
+  visual and the source of every claim, under `marketing/linkedin/` (playbook, page copy, brand assets).
+  Merging is the maintainer's approval, and the maintainer publishes; no agent posts.
 - `cosmos import powerbi` reads period-over-period measures as offset inputs (DEC-35):
   `CALCULATE([m], SAMEPERIODLASTYEAR('Date'[Date]))`, `DATEADD('Date'[Date], -N, DAY | MONTH |
   QUARTER | YEAR)` and `PARALLELPERIOD('Date'[Date], -N, MONTH)` become a derived metric with
