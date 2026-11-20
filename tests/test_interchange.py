@@ -855,7 +855,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 63
+    assert len(REFERENCE) == 68
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1220,7 +1220,7 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     # A08 (year-to-date by month), A09 (month-to-date by status and day) and the rolling
     # windows A29, A30 (by status, from 45 days ago) and A34 (a minimum) among them.
     assert {"A08", "A09", "A29", "A30", "A34"} <= {c.id for c in cases}
-    assert len(cases) == 30
+    assert len(cases) == 34
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1231,7 +1231,7 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     # A32 (month-to-date by quarter) and A39 (year-to-date by week) are refused by the
     # re-imported model too; A33 is the 30-day window of customers by segment.
     assert {"R17", "R18", "A08", "A09", "A32", "A33", "A39", "A40", "A41"} <= {c.id for c in cases}
-    assert len(cases) == 52
+    assert len(cases) == 57
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1708,7 +1708,7 @@ def _cube_trailing_metrics(project: Project) -> Project:
 def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
     """Every rolling window in days the export writes as a `trailing` window returns the native
     numbers after the round trip, by day, by day and another dimension,
-    and with a filter on the time dimension that cuts the first windows; other grains are
+    and with a filter on the time dimension that starts the range; other grains are
     refused on both sides."""
     connector = request.getfixturevalue(source)
     project = _cube_trailing_metrics(graph.project)
@@ -1744,7 +1744,8 @@ def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
                 for dims, filters in (
                     ([f"{model}.{time}__day"], []),
                     ([extra, f"{model}.{time}__day"], []),
-                    # Both sides filter rows first: the first windows of the range are cut.
+                    # A filter on the time dimension: both sides fill the first windows of
+                    # the range from the days before it (DEC-34).
                     ([f"{model}.{time}__day"], [f"{{{model}.{time}}} >= {since}"]),
                 ):
                     query = QueryRequest(metrics=[name], dimensions=dims, filters=filters)
@@ -2269,11 +2270,10 @@ def test_dbt_export_round_trip(graph, tmp_path):
         "metrics.revenue_rolling_7_days: MetricFlow windows over `metric_time`, which is "
         "`orders.ordered_at`; by that dimension at day grain the numbers are the engine's on the "
         "days with facts. MetricFlow also returns days without facts inside a window and coarser "
-        "grains (the engine refuses them), and a time constraint does not cut its window, while "
-        "the engine filters the facts first"
+        "grains (the engine refuses them)"
     ) in exported.warnings
     assert (
-        "the engine filters the facts first; queried by `customers.last_order_at`, the engine "
+        "(the engine refuses them); queried by `customers.last_order_at`, the engine "
         "windows over that dimension instead, which MetricFlow does not"
     ) in joined
     for name in ("revenue_prev_month", "order_count_7_days_earlier"):
@@ -2298,7 +2298,7 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     cases = _cube_cases(graph.project, policies=False, lost=DBT_LOST)
     assert {"A29", "A30", "A34"} <= {c.id for c in cases}
-    assert len(cases) == 28
+    assert len(cases) == 32
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -2306,7 +2306,7 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     governed = compile_project(_with_policies(back.project, graph.project))
     cases = _cube_cases(graph.project, policies=True, lost=DBT_LOST)
     assert {"R17", "R18", "A33", "A40", "A41"} <= {c.id for c in cases}
-    assert len(cases) == 47
+    assert len(cases) == 52
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"

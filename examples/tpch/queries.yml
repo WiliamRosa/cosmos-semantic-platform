@@ -157,9 +157,10 @@ cases:
         - "{orders.ordered_at} >= DATE '1995-01-01'"
         - "{orders.ordered_at} < DATE '1997-01-01'"
     # The value on day D sums the lines of the orders of the same segment dated from D - 6 days
-    # to D; the engine joins its daily aggregate to itself on that date range. The filter applies
-    # to the facts first, so the first days of 1995 have fewer days behind them, and it keeps the
-    # result (5 segments x 731 days) under the 10,000-row limit at every scale factor.
+    # to D; the engine joins its daily aggregate to itself on that date range. The date filter
+    # chooses the output days, and each day's window still reads the 6 days before it (DEC-34), so
+    # the first days of 1995 sum lines from late December 1994. The filter keeps the result
+    # (5 segments x 731 days) under the 10,000-row limit at every scale factor.
     sql: |
       WITH f AS (
         SELECT c.c_mktsegment AS segment, o.o_orderdate AS ordered_at,
@@ -167,11 +168,14 @@ cases:
         FROM lineitem l
         JOIN orders o ON o.o_orderkey = l.l_orderkey
         JOIN customer c ON c.c_custkey = o.o_custkey
-        WHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1997-01-01'
+        WHERE o.o_orderdate >= DATE '1994-12-26' AND o.o_orderdate < DATE '1997-01-01'
       )
       SELECT d.segment AS customer__segment, d.dd AS orders__ordered_at__day,
              SUM(f.amount) AS revenue_rolling_7_days
-      FROM (SELECT DISTINCT segment, DATE_TRUNC('day', ordered_at) AS dd FROM f) d
+      FROM (
+        SELECT DISTINCT segment, DATE_TRUNC('day', ordered_at) AS dd
+        FROM f WHERE ordered_at >= DATE '1995-01-01'
+      ) d
       JOIN f
         ON f.segment = d.segment
         AND f.ordered_at >= d.dd - INTERVAL '6' DAY AND f.ordered_at < d.dd + INTERVAL '1' DAY

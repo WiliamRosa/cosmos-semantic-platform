@@ -1173,8 +1173,7 @@ class _Translator:
             "dimensions give different numbers. Grouping or filtering by other columns of "
             f"`{dates.name}` also gives different numbers: the DAX filter on "
             f"`{column[1]}[{column[2]}]` removes those filters, while Cosmos keeps one window "
-            "per value. Power BI also shows days without facts and coarser periods, and a date "
-            "slicer does not cut its window, while Cosmos filters the facts first"
+            "per value. Power BI also shows days without facts and coarser periods"
         )
         self.metric(
             pbi_name,

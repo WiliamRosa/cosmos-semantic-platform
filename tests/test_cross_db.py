@@ -2,8 +2,9 @@
 
 Generates random requests (fixed seed) combining metrics, dimensions, grains, business rules
 and users, and requires DuckDB, Postgres and SQL Server to return exactly the same result.
-Rolling-window metrics, valid only at day grain, get draws of their own so every run has them;
-so do metrics that read an input at an earlier period, valid only at the grains it fits.
+Rolling-window metrics, valid only at day grain, get draws of their own so every run has them,
+also with a filter on their time dimension (DEC-34); so do metrics that read an input at an
+earlier period, valid only at the grains it fits.
 Also checks that a refused request is refused on every data source.
 """
 
@@ -171,6 +172,57 @@ def _rolling_requests(graph, count: int, seed: int):
     return produced
 
 
+# Filters on a rolling window's time dimension (DEC-34), written for the drawn dimension `{t}`:
+# shapes the planner splits (ranges, BETWEEN, IN, a coarser grain, OR) and one it cannot (NOT).
+DATE_FILTERS = [
+    "{{{t}}} >= CURRENT_DATE - INTERVAL '60' DAY",
+    "{{{t}}} BETWEEN CURRENT_DATE - INTERVAL '120' DAY AND CURRENT_DATE - INTERVAL '90' DAY",
+    "{{{t}__day}} IN (CURRENT_DATE - INTERVAL '10' DAY, CURRENT_DATE - INTERVAL '33' DAY)",
+    "{{{t}__month}} >= CURRENT_DATE - INTERVAL '75' DAY",
+    "{{{t}}} < CURRENT_DATE - INTERVAL '300' DAY OR {{{t}__day}} >= CURRENT_DATE - INTERVAL '20' DAY",
+    "NOT ({{{t}}} < CURRENT_DATE - INTERVAL '30' DAY)",
+]
+
+
+def _rolling_date_filter_requests(graph, count: int, seed: int):
+    """Rolling-window requests with a filter on the window's time dimension and up to one
+    other filter (DEC-34). Its own generator, as for rolling windows."""
+    rng = random.Random(seed)
+    rolling = sorted(
+        name
+        for name, metric in graph.metrics.items()
+        if isinstance(metric, CumulativeMetric) and metric.window_days()
+    )
+    days = sorted(
+        f"{m}.{d}"
+        for m, node in graph.models.items()
+        for d, spec in node.dimensions.items()
+        if spec.type == "time" and not spec.sensitivity
+    )
+    produced, attempts = [], 0
+    while len(produced) < count and attempts < count * 50:
+        attempts += 1
+        time = rng.choice(days)
+        request = QueryRequest(
+            metrics=[rng.choice(rolling)],
+            dimensions=[f"{time}__day"],
+            filters=[
+                rng.choice(DATE_FILTERS).format(t=time),
+                *rng.sample(FILTERS, rng.choice([0, 1])),
+            ],
+        )
+        principal = Principal(
+            user={"region": rng.choice(REGIONS)}, channel=rng.choice(["api", "mcp"])
+        )
+        try:
+            for dialect in DIALECTS:
+                Planner(graph, dialect).plan(request, principal)
+        except CosmosError:
+            continue
+        produced.append((request, principal))
+    return produced
+
+
 def _offset_grains(graph, name: str) -> list[str]:
     """The grains every offset under ``name`` fits (empty when it reads no offset)."""
     offsets = [
@@ -280,6 +332,7 @@ def _metric_filter_requests(graph, count: int, seed: int):
 
 REQUESTS_PER_RUN = 80
 ROLLING_PER_RUN = 12
+ROLLING_DATE_FILTER_PER_RUN = 8
 OFFSET_PER_RUN = 12
 METRIC_FILTER_PER_RUN = 8
 
@@ -314,6 +367,17 @@ def test_rolling_draws_are_deterministic_and_cover_every_rolling_metric(graph):
         assert sum(d.endswith("__day") for d in request.dimensions) == 1
 
 
+def test_rolling_date_filter_draws_are_deterministic_and_split(graph):
+    first = _rolling_date_filter_requests(graph, ROLLING_DATE_FILTER_PER_RUN, seed=2026)
+    assert len(first) == ROLLING_DATE_FILTER_PER_RUN
+    assert first == _rolling_date_filter_requests(graph, ROLLING_DATE_FILTER_PER_RUN, seed=2026)
+    lookback = [
+        "lookback" in Planner(graph, "duckdb").plan(request, principal).sql
+        for request, principal in first
+    ]
+    assert any(lookback)
+
+
 def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     failures = []
     requests = _requests(graph, REQUESTS_PER_RUN, seed=2026)
@@ -321,6 +385,9 @@ def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     rolling = _rolling_requests(graph, ROLLING_PER_RUN, seed=2026)
     assert len(rolling) == ROLLING_PER_RUN
     requests += rolling
+    dated = _rolling_date_filter_requests(graph, ROLLING_DATE_FILTER_PER_RUN, seed=2026)
+    assert len(dated) == ROLLING_DATE_FILTER_PER_RUN
+    requests += dated
     shifted = _offset_requests(graph, OFFSET_PER_RUN, seed=2026)
     assert len(shifted) == OFFSET_PER_RUN
     requests += shifted
