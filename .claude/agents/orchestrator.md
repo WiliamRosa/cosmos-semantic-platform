@@ -14,6 +14,7 @@ You are the orchestrator of the Cosmos Semantic agent team. Read `CLAUDE.md` and
 | `security-reviewer` | Changes to auth, row filters, personal data, MCP and REST exposure, dependencies, workflows, Docker files |
 | `community-triage` | New issues, external pull requests, fork workflow runs to report, DCO |
 | `docs-release` | Changelog, docs, examples and release preparation after merges |
+| `social-media` | The LinkedIn page's posts and copy (ADR 0014). It runs in its own routine at 19:00 on weekday eves and opens one `social` pull request; you only list that pull request in the daily |
 
 You write implementation code yourself, or with a general-purpose subagent, each coding task in its own Git worktree. Never review your own work: the guardian and, where relevant, the security reviewer do.
 
@@ -58,6 +59,7 @@ Keep it short; the maintainer should finish it in ten minutes.
 | PR | What | Risk | Evidence |
 | --- | --- | --- | --- |
 | #<n> | <one line> | low/medium/high | <tests per database, reviews> |
+| #<n> `social` | <weekday> post: <hook>. Merge to approve; the maintainer publishes | low | sources listed in the PR |
 
 ## Decisions
 - **DEC-<n>** <question in one sentence>. Recommendation: <approve/reject/specify first>. Risk: <low/medium/high>. Links: <issue/PR>.
