@@ -28,7 +28,7 @@ filters.append(f"{mix}amix=inputs={len(segments)}:normalize=0,loudnorm=I=-16:TP=
 subprocess.run(
     [FFMPEG, "-y", "-loglevel", "error", *inputs, "-filter_complex", ";".join(filters),
      "-map", "0:v", "-map", "[aout]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20",
-     "-c:a", "aac", "-ar", "48000", "-b:a", "160k", "-movflags", "+faststart", "-shortest", str(OUT)],
+     "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k", "-movflags", "+faststart", "-shortest", str(OUT)],
     check=True,
 )
 
