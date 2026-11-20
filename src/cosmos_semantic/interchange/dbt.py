@@ -989,7 +989,8 @@ def _dbt_offset_window(offset: str) -> str:
     """A Cosmos offset as MetricFlow's ``offset_window``, in the largest unit that holds it a
     whole number of times (``12 months`` is ``1 year``, ``14 days`` is ``2 weeks``). MetricFlow
     shifts the aggregated periods when the query's grain is not coarser than that unit, and
-    every grain the engine accepts for the offset is not, so both move the period start."""
+    every grain the engine accepts for the offset is not, so both move the period start. This
+    is MetricFlow 0.210 and later; earlier versions shift each day before aggregating."""
     amount, unit = parse_offset(offset)
     for name in ("year", "quarter", "month", "week", "day"):
         size, base = _DBT_UNIT_SIZE[name]
