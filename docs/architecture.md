@@ -147,7 +147,7 @@ The result hash is the same on DuckDB, Postgres and SQL Server for the same requ
 - **Metric versus SQL** (`--sql legacy.sql`): the legacy query returns the request's dimensions and one value column, matched by name or by position.
 - **Model versus model** (`--other-model path`): the same request on another semantic model, such as an imported dbt or Cube model.
 
-The report gives matched and differing rows, keys found on one side only, totals with the difference in percent, examples, the governed formula and `as_of`. When the numbers differ, the engine runs **probes**: variants of the governed query, each reproducing a classic mistake. A probe that matches the other side on every row is reported as a likely cause:
+The report gives matched and differing rows, keys found on one side only, totals with the difference in percent, examples with the difference on each row, the governed formula and `as_of`, and the `tolerance` that decided which rows agree: the default (equal up to float noise) or the one the metric declares, such as `reconciliation: {abs_tolerance: 0.01}` for a report rounded to cents ([reconciliation tolerance](semantic-model.md#reconciliation-tolerance)). Rows that agree only within a declared tolerance are counted in `rows.within_tolerance` and listed in `tolerated`. When the numbers differ, the engine runs **probes**: variants of the governed query, each reproducing a classic mistake. A probe that matches the other side on every row is reported as a likely cause:
 
 | Cause | What the legacy definition does |
 | --- | --- |
@@ -261,8 +261,8 @@ Every inference goes into the report (`--report report.json`); the draft is a st
 | `rule_tests_pass` | `healthy` | `total` |
 | `no_tests` | `unchecked` | |
 | `never_reconciled` | `unchecked` | |
-| `reconciliation_failed` | `failing` | `case`, `title`, `at` (when that check run ran) |
-| `reconciled` | `healthy` | `count`, `at` |
+| `reconciliation_failed` | `failing` | `case`, `title`, `at` (when that check run ran), and `tolerance` when the metric declares one |
+| `reconciled` | `healthy` | `count`, `at`, and `tolerance` when the metric declares one |
 | `reconciliation_stale` | `attention` | `at`, `max_age`: the metric matched, but longer ago than the project's `health.max_age` |
 | `depends_on_failing` | `attention` | `member` |
 | `runs_log_unreadable` | `unchecked` | |

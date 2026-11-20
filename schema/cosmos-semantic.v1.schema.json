@@ -276,6 +276,18 @@
           "description": "Team responsible for the definition.",
           "title": "Owner"
         },
+        "reconciliation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReconciliationSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tolerance for reconciliation and check runs, such as `{abs_tolerance: 0.01, rel_tolerance: 0.001}`: a legacy value agrees when it is within either one. Default: equal up to float noise."
+        },
         "type": {
           "const": "cumulative",
           "title": "Type",
@@ -416,6 +428,18 @@
           "default": null,
           "description": "Team responsible for the definition.",
           "title": "Owner"
+        },
+        "reconciliation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReconciliationSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tolerance for reconciliation and check runs, such as `{abs_tolerance: 0.01, rel_tolerance: 0.001}`: a legacy value agrees when it is within either one. Default: equal up to float noise."
         },
         "type": {
           "const": "derived",
@@ -772,6 +796,18 @@
           "description": "Team responsible for the definition.",
           "title": "Owner"
         },
+        "reconciliation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReconciliationSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tolerance for reconciliation and check runs, such as `{abs_tolerance: 0.01, rel_tolerance: 0.001}`: a legacy value agrees when it is within either one. Default: equal up to float noise."
+        },
         "type": {
           "const": "ratio",
           "title": "Type",
@@ -809,6 +845,42 @@
         "denominator"
       ],
       "title": "RatioMetric",
+      "type": "object"
+    },
+    "ReconciliationSettings": {
+      "additionalProperties": false,
+      "description": "How close a legacy number must be to the governed one to agree (DEC-39).",
+      "properties": {
+        "abs_tolerance": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Largest absolute difference that still agrees, such as `0.01` for a report rounded to cents. Default: 1e-06.",
+          "title": "Abs Tolerance"
+        },
+        "rel_tolerance": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Largest difference relative to the larger of the two values that still agrees, such as `0.001` for 0.1%. Default: 1e-09.",
+          "title": "Rel Tolerance"
+        }
+      },
+      "title": "ReconciliationSettings",
       "type": "object"
     },
     "RowFilter": {
@@ -1102,6 +1174,18 @@
           "default": null,
           "description": "Team responsible for the definition.",
           "title": "Owner"
+        },
+        "reconciliation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReconciliationSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tolerance for reconciliation and check runs, such as `{abs_tolerance: 0.01, rel_tolerance: 0.001}`: a legacy value agrees when it is within either one. Default: equal up to float noise."
         },
         "type": {
           "const": "simple",

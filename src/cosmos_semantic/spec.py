@@ -10,7 +10,7 @@ import datetime as dt
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 FORMAT_VERSION = 1
 
@@ -71,11 +71,68 @@ class SemanticModel(_Base):
     row_filters: list[RowFilter] = []
 
 
+# The tolerance reconciliation uses when a metric declares none (DEC-39): equal up to float
+# noise. Kept here so the spec, the reconciler and the docs state the same default.
+DEFAULT_ABS_TOLERANCE = 1e-6
+DEFAULT_REL_TOLERANCE = 1e-9
+
+Tolerance = Annotated[float, Field(ge=0, allow_inf_nan=False, strict=True)]
+
+
+class ReconciliationSettings(_Base):
+    """How close a legacy number must be to the governed one to agree (DEC-39)."""
+
+    abs_tolerance: Tolerance | None = Field(
+        None,
+        description=(
+            "Largest absolute difference that still agrees, such as `0.01` for a report "
+            f"rounded to cents. Default: {DEFAULT_ABS_TOLERANCE:g}."
+        ),
+    )
+    rel_tolerance: Tolerance | None = Field(
+        None,
+        description=(
+            "Largest difference relative to the larger of the two values that still agrees, "
+            f"such as `0.001` for 0.1%. Default: {DEFAULT_REL_TOLERANCE:g}."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> ReconciliationSettings:
+        if self.abs_tolerance is None and self.rel_tolerance is None:
+            raise ValueError("`reconciliation` needs `abs_tolerance`, `rel_tolerance` or both")
+        return self
+
+    def tolerances(self) -> tuple[float, float]:
+        """``(abs, rel)``, with the default for the one left out."""
+        return (
+            DEFAULT_ABS_TOLERANCE if self.abs_tolerance is None else self.abs_tolerance,
+            DEFAULT_REL_TOLERANCE if self.rel_tolerance is None else self.rel_tolerance,
+        )
+
+
 class _MetricBase(_Base):
     name: Name
     description: str | None = None
     label: str | None = None
     owner: str | None = Field(None, description="Team responsible for the definition.")
+    reconciliation: ReconciliationSettings | None = Field(
+        None,
+        description=(
+            "Tolerance for reconciliation and check runs, such as "
+            "`{abs_tolerance: 0.01, rel_tolerance: 0.001}`: a legacy value agrees when it is "
+            "within either one. Default: equal up to float noise."
+        ),
+    )
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_reconciliation(self, handler) -> dict[str, Any]:
+        # Without a declared tolerance the dump (and so the model hash) stays as it was
+        # before DEC-39, so evidence and replay of existing models do not change.
+        data = handler(self)
+        if self.reconciliation is None and isinstance(data, dict):
+            data.pop("reconciliation", None)
+        return data
 
 
 class SimpleMetric(_MetricBase):

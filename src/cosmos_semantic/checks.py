@@ -4,7 +4,8 @@
 each governed metric with the legacy SQL a team already uses. Each run appends one record to
 a JSONL log (``COSMOS_RUNS_LOG``), so the console can show health over time instead of only
 the last terminal output. Schedule it in CI or cron; it reads the data source and never
-writes to it.
+writes to it. A case compares values within the tolerance its metric declares
+(``reconciliation``, DEC-39), and each record states the tolerance that applied.
 """
 
 from __future__ import annotations
@@ -64,6 +65,9 @@ def run_checks(
                     )[::-1],
                     rows=report.get("rows"),
                     totals=report.get("totals"),
+                    # Which tolerance decided pass or fail: the metric's own (DEC-39) or the
+                    # default.
+                    tolerance=report.get("tolerance"),
                     expected=case.expect.model_dump() if case.expect else None,
                 )
             except CosmosError as exc:

@@ -13,6 +13,10 @@ reproducing a classic mistake. A probe that matches the other side on every row 
 a likely cause. Probes are evidence, not proof: two different causes can produce the same
 numbers, and every cause that fits is listed.
 
+Two values agree when they are equal up to float noise, or within the tolerance the metric
+declares (``reconciliation: {abs_tolerance, rel_tolerance}``, DEC-39): a finance report
+rounded to cents or thousands can then agree. The report states which tolerance applied.
+
 Running arbitrary SQL can read data that row filters hide, so SQL reconciliation is an
 operator tool (CLI), not an API or MCP feature.
 """
@@ -35,15 +39,51 @@ from cosmos_semantic.evidence import EvidenceBuilder, _canonical, sql_hash
 from cosmos_semantic.expressions import REF_RE, remap_sql
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
 from cosmos_semantic.reference import server_today
-from cosmos_semantic.spec import Dimension, Measure, SimpleMetric
+from cosmos_semantic.spec import (
+    DEFAULT_ABS_TOLERANCE,
+    DEFAULT_REL_TOLERANCE,
+    Dimension,
+    Measure,
+    SimpleMetric,
+)
 
-ABS_TOL = 1e-6
-REL_TOL = 1e-9
+ABS_TOL = DEFAULT_ABS_TOLERANCE
+REL_TOL = DEFAULT_REL_TOLERANCE
 MAX_CATEGORY_VALUES = 8
 TIME_SHIFTS_HOURS = (1, 2, 3, 4, 5, -1, -2, -3, -4, -5)
 PROBE_PREFIX = "probe__"
 
 Rows = dict[tuple, Any]
+
+
+@dataclass(frozen=True)
+class Tolerance:
+    """How close two values must be to agree; ``source`` is ``metric`` when the metric
+    declares it, ``default`` otherwise."""
+
+    abs_tolerance: float = ABS_TOL
+    rel_tolerance: float = REL_TOL
+    source: Literal["metric", "default"] = "default"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "abs_tolerance": self.abs_tolerance,
+            "rel_tolerance": self.rel_tolerance,
+            "source": self.source,
+        }
+
+
+DEFAULT_TOLERANCE = Tolerance()
+
+
+def metric_tolerance(graph: SemanticGraph, name: str) -> Tolerance:
+    """The tolerance a metric declares, or the default (always the default for a measure)."""
+    metric = graph.metrics.get(name) if name not in graph.measure_owner else None
+    settings = getattr(metric, "reconciliation", None)
+    if settings is None:
+        return DEFAULT_TOLERANCE
+    abs_tol, rel_tol = settings.tolerances()
+    return Tolerance(abs_tol, rel_tol, "metric")
 
 
 @dataclass
@@ -67,15 +107,21 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
-def _same(a: Any, b: Any) -> bool:
+def _same(a: Any, b: Any, tol: Tolerance = DEFAULT_TOLERANCE) -> bool:
     x, y = _number(a), _number(b)
     if x is None or y is None:
         return _canonical(a) == _canonical(b)
-    return math.isclose(x, y, rel_tol=REL_TOL, abs_tol=ABS_TOL)
+    return math.isclose(x, y, rel_tol=tol.rel_tolerance, abs_tol=tol.abs_tolerance)
 
 
-def rows_match(a: Rows, b: Rows) -> bool:
-    return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+def _difference(cosmos: Any, legacy: Any) -> float | None:
+    """legacy - governed, as the totals report it; None when either side is not a number."""
+    x, y = _number(cosmos), _number(legacy)
+    return None if x is None or y is None else y - x
+
+
+def rows_match(a: Rows, b: Rows, tol: Tolerance = DEFAULT_TOLERANCE) -> bool:
+    return a.keys() == b.keys() and all(_same(a[k], b[k], tol) for k in a)
 
 
 def to_rows(records: list[dict[str, Any]], dims: int) -> Rows:
@@ -171,10 +217,21 @@ class Reconciler:
 
     # -- comparison --------------------------------------------------------------
 
+    def tolerance(self, request: QueryRequest) -> Tolerance:
+        return metric_tolerance(self.graph, request.metrics[0])
+
     def _compare(self, request, cosmos: Rows, legacy: Rows, compiled) -> dict[str, Any]:
+        tol = self.tolerance(request)
         matched, differing = [], []
         for key in sorted(set(cosmos) & set(legacy), key=str):
-            (matched if _same(cosmos[key], legacy[key]) else differing).append(key)
+            (matched if _same(cosmos[key], legacy[key], tol) else differing).append(key)
+        # Rows that agree only thanks to a declared tolerance: shown, so a reader sees how far
+        # apart they are. Empty under the default tolerance.
+        tolerated = [k for k in matched if not _same(cosmos[k], legacy[k])]
+
+        def example(key: tuple, c: Any, v: Any) -> dict[str, Any]:
+            return {"key": list(key), "cosmos": c, "legacy": v, "difference": _difference(c, v)}
+
         only_cosmos = sorted(set(cosmos) - set(legacy), key=str)
         only_legacy = sorted(set(legacy) - set(cosmos), key=str)
         status = "match" if not (differing or only_cosmos or only_legacy) else "divergent"
@@ -190,18 +247,19 @@ class Reconciler:
                 "differing": len(differing),
                 "only_in_cosmos": len(only_cosmos),
                 "only_in_legacy": len(only_legacy),
+                "within_tolerance": len(tolerated),
             },
+            "tolerance": tol.as_dict(),
             "totals": {
                 "cosmos": total_c,
                 "legacy": total_l,
                 "difference": total_l - total_c,
                 "difference_pct": (total_l - total_c) / total_c * 100 if total_c else None,
             },
-            "examples": [
-                {"key": list(k), "cosmos": cosmos[k], "legacy": legacy[k]} for k in differing[:5]
-            ]
-            + [{"key": list(k), "cosmos": cosmos[k], "legacy": None} for k in only_cosmos[:3]]
-            + [{"key": list(k), "cosmos": None, "legacy": legacy[k]} for k in only_legacy[:3]],
+            "examples": [example(k, cosmos[k], legacy[k]) for k in differing[:5]]
+            + [example(k, cosmos[k], None) for k in only_cosmos[:3]]
+            + [example(k, None, legacy[k]) for k in only_legacy[:3]],
+            "tolerated": [example(k, cosmos[k], legacy[k]) for k in tolerated[:5]],
             "cosmos": {
                 "formula": self.evidence.formula(name),
                 "sql_hash": sql_hash(compiled.sql),
@@ -272,7 +330,8 @@ class Reconciler:
             return []
         if not all(any(v is None for v in key) for key in only_cosmos):
             return []
-        if not all(_same(cosmos[k], legacy[k]) for k in legacy):
+        tol = self.tolerance(request)
+        if not all(_same(cosmos[k], legacy[k], tol) for k in legacy):
             return []
         dims = [
             request.dimensions[i]
@@ -310,7 +369,7 @@ class Reconciler:
         causes = []
         for candidate in compatible:
             rows, _ = self._run(request.model_copy(update={"metrics": [candidate]}))
-            if rows_match(rows, legacy):
+            if rows_match(rows, legacy, self.tolerance(request)):
                 causes.append(
                     Cause(
                         "different_metric",
@@ -367,7 +426,7 @@ class Reconciler:
                     for v in subset:
                         for key, value in by_value[v].items():
                             combined[key] = (combined.get(key) or 0) + (_number(value) or 0)
-                    if rows_match(combined, legacy):
+                    if rows_match(combined, legacy, self.tolerance(request)):
                         included = [str(v) for v in subset]
                         if len(subset) == len(values):
                             # Every category included means "no filter", which is only news
@@ -521,7 +580,7 @@ class Reconciler:
                 rows, _ = self._run(probe_request, probe_graph)
             except CosmosError:
                 continue
-            if rows_match(rows, legacy):
+            if rows_match(rows, legacy, self.tolerance(request)):
                 causes.append(cause)
         return causes
 
