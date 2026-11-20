@@ -1083,3 +1083,43 @@ cases:
         JOIN f
           ON f.ordered_at >= DATEADD(day, -6, d.dd) AND f.ordered_at < DATEADD(day, 1, d.dd)
         GROUP BY d.dd
+
+  # An upper bound inside a day on the timestamp column (12:00, 22 days ago): that day is kept
+  # (it has orders before noon) and its window still holds its orders after noon. The lower
+  # bound is at midnight. `CAST(... AS DATETIME)` keeps the hour arithmetic valid in SQL
+  # Server, where a DATE takes no hours.
+  - id: A48
+    category: tempo
+    phase: 3
+    title: Rolling 7-day revenue and minimum up to noon of a day, with that day's window whole
+    request:
+      metrics: [revenue_rolling_7_days, smallest_order_rolling_7_days]
+      dimensions: [orders.ordered_at__day]
+      filters:
+        - "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '40' DAY"
+        - "{orders.ordered_at} <= CAST(CURRENT_DATE AS DATETIME) - INTERVAL '516' HOUR"
+    sql: |
+      WITH f AS (
+        SELECT ordered_at FROM public.orders
+        WHERE ordered_at >= CURRENT_DATE - INTERVAL '40' DAY
+          AND ordered_at <= CAST(CURRENT_DATE AS TIMESTAMP) - INTERVAL '516' HOUR
+      )
+      SELECT d.dd AS orders__ordered_at__day, SUM(o.amount) AS revenue_rolling_7_days,
+             MIN(o.amount) AS smallest_order_rolling_7_days
+      FROM (SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM f) d
+      JOIN public.orders o
+        ON o.ordered_at >= d.dd - INTERVAL '6' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.dd
+    sql_by_dialect:
+      tsql: |
+        WITH f AS (
+          SELECT ordered_at FROM public.orders
+          WHERE ordered_at >= DATEADD(day, -40, CAST(GETDATE() AS DATE))
+            AND ordered_at <= DATEADD(hour, -516, CAST(CAST(GETDATE() AS DATE) AS DATETIME2))
+        )
+        SELECT d.dd AS orders__ordered_at__day, SUM(o.amount) AS revenue_rolling_7_days,
+               MIN(o.amount) AS smallest_order_rolling_7_days
+        FROM (SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM f) d
+        JOIN public.orders o
+          ON o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.dd

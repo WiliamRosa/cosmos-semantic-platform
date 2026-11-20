@@ -187,10 +187,88 @@ def test_lower_bounds_read_back_n_days_on_the_column_and_n_minus_one_at_a_grain(
         "DATE_TRUNC('DAY', orders.ordered_at + INTERVAL '6 DAY') >= CAST('2026-01-10' AS DATE)"
         in sql(f"{{{DAY}}} >= DATE '2026-01-10'")
     )
-    # Upper bounds are kept as written; a 1-day window at a grain reads nothing earlier.
+    # Upper bounds on the column are read one day earlier, so a bound inside the last day does
+    # not cut that day's later facts out of its window; at a grain they stay as written.
     upper = sql("{orders.ordered_at} < DATE '2026-01-10'")
-    assert "orders.ordered_at < CAST('2026-01-10' AS DATE)" in upper
-    assert "INTERVAL '7 DAY'" not in upper.split("orders_agg_lookback_7_days AS")[1]
+    lookback = upper.split("orders_agg_lookback_7_days AS")[1]
+    assert "orders.ordered_at + INTERVAL '-1 DAY' < CAST('2026-01-10' AS DATE)" in lookback
+    assert "INTERVAL '7 DAY'" not in lookback
+    upper = sql(f"{{{DAY}}} <= DATE '2026-01-10'")
+    lookback = upper.split("orders_agg_lookback_7_days AS")[1]
+    assert "DATE_TRUNC('DAY', orders.ordered_at) <= CAST('2026-01-10' AS DATE)" in lookback
+
+
+# A timestamp bound inside a day on the column itself: the day is kept (it has facts on the
+# bound's side), and its window still holds all of its facts, also those on the other side.
+def _noon(day: dt.date) -> str:
+    return f"TIMESTAMP '{day.isoformat()} 12:00:00'"
+
+
+def _brute_force(connector, days: list[dt.date]) -> dict[dt.date, tuple]:
+    """Full 7-day windows by brute force over the raw orders, for the given days."""
+    out = {}
+    for day in days:
+        start, end = day - dt.timedelta(days=6), day + dt.timedelta(days=1)
+        row = connector.execute(
+            "SELECT SUM(amount) AS s, MIN(amount) AS m FROM public.orders "
+            f"WHERE ordered_at >= DATE '{start}' AND ordered_at < DATE '{end}'"
+        ).to_pylist()[0]
+        out[day] = (row["s"], row["m"])
+    return out
+
+
+def _days_with(connector, condition: str) -> list[dt.date]:
+    rows = connector.execute(
+        f"SELECT DISTINCT CAST(ordered_at AS DATE) AS d FROM public.orders WHERE {condition}"
+    ).to_pylist()
+    return sorted(r["d"] for r in rows)
+
+
+def _split_days(connector, count: int) -> list[dt.date]:
+    """Days with orders both before and after noon."""
+    rows = connector.execute(
+        "SELECT CAST(ordered_at AS DATE) AS d FROM public.orders "
+        f"WHERE ordered_at >= DATE '{X}' GROUP BY CAST(ordered_at AS DATE) "
+        "HAVING MIN(EXTRACT(HOUR FROM ordered_at)) < 12 AND MAX(EXTRACT(HOUR FROM ordered_at)) >= 12"
+    ).to_pylist()
+    days = sorted(r["d"] for r in rows)
+    assert len(days) >= count
+    return days[:count]
+
+
+def test_a_bound_inside_a_day_keeps_that_days_whole_window(graph, duckdb_connector):
+    first, last = _split_days(duckdb_connector, 2)
+    rng = f"{{orders.ordered_at}} >= {_noon(first)} AND {{orders.ordered_at}} <= {_noon(last)}"
+    between = f"{{orders.ordered_at}} BETWEEN {_noon(first)} AND {_noon(last)}"
+    for text in (rng, between):
+        _, rows = _query(graph, duckdb_connector, [text])
+        lo, hi = f"TIMESTAMP '{first} 12:00:00'", f"TIMESTAMP '{last} 12:00:00'"
+        days = _days_with(duckdb_connector, f"ordered_at >= {lo} AND ordered_at <= {hi}")
+        assert first in days and last in days
+        expected = _brute_force(duckdb_connector, days)
+        assert rows.keys() == expected.keys()
+        for day, values in rows.items():
+            assert values == pytest.approx(expected[day]), (text, day)
+
+
+def test_equality_and_in_with_a_timestamp_on_the_column(graph, duckdb_connector):
+    stamps = duckdb_connector.execute(
+        "SELECT ordered_at FROM public.orders "
+        f"WHERE ordered_at >= DATE '{X}' ORDER BY ordered_at LIMIT 3"
+    ).to_pylist()
+    values = [r["ordered_at"] for r in stamps]
+    literal = [f"TIMESTAMP '{v.isoformat(sep=' ')}'" for v in values]
+    for text in (
+        f"{{orders.ordered_at}} = {literal[0]}",
+        f"{{orders.ordered_at}} IN ({', '.join(literal)})",
+    ):
+        compiled, rows = _query(graph, duckdb_connector, [text])
+        assert "orders_agg_lookback_7_days" in compiled.sql
+        picked = values[:1] if " = " in text else values
+        expected = _brute_force(duckdb_connector, sorted({v.date() for v in picked}))
+        assert rows.keys() == expected.keys()
+        for day, row in rows.items():
+            assert row == pytest.approx(expected[day]), (text, day)
 
 
 def test_windows_of_the_same_length_share_their_facts(graph):

@@ -934,8 +934,9 @@ class Planner:
         values without references, joined by ``AND`` and ``OR`` (``AND`` only with conditions
         on other members), is widened: each lower bound is read N - 1 days later (N for the
         column itself, whose time of day the bound may cut), so the facts reach back far enough
-        to fill the window of every day the filter keeps. Upper bounds stay as written: no
-        window reads facts after its day. Any other filter on the time dimension (``NOT``, a
+        to fill the window of every day the filter keeps. Upper bounds stay as written at a
+        whole-day grain; on the column itself they are read one day earlier, so a bound inside
+        the last day does not cut that day's later facts out of its window. Any other filter on the time dimension (``NOT``, a
         function of it, ``<>``, an hour grain) still restricts the facts before the window, as
         before DEC-34. Filters on other members are unchanged."""
         if not filters:
@@ -1088,7 +1089,13 @@ def _widen(template: Template, hits: dict[int, DimensionRef], days: int) -> Temp
     a day D kept by the filter and a fact on day P in [D - (N - 1), D], a bound ``g(t) >= X``
     held on D (``g`` the truncation to the reference's grain, or none) holds for
     ``g(P + N - 1 days)``, since ``g`` is monotonic and gives the same value for every moment of
-    a day; on the column itself, a moment of D is before P + N days, hence the extra day."""
+    a day; on the column itself, a moment of D is before P + N days, hence the extra day.
+
+    Upper bounds need nothing later, but the window of D reads all of D: on the column itself
+    a bound ``t <= Y`` held by a moment of D may still cut D's later facts, so it is read one
+    day earlier (``t - 1 day <= Y``), which every moment of D meets. At a whole-day grain a
+    bound holds for the whole day, so it stays as written. Each bound is widened on its own, so
+    ``OR`` of ranges and ``IN`` lists (an ``OR`` of equalities) stay supersets too."""
     refs = list(template.refs)
 
     def time_ref(node: exp.Expression) -> bool:
@@ -1102,18 +1109,29 @@ def _widen(template: Template, hits: dict[int, DimensionRef], days: int) -> Temp
         # Request filters reach columns only through references (check_request_expression).
         return not any(True for _ in node.find_all(exp.Column))
 
-    def later(node: exp.Expression) -> exp.Expression:
+    def moved(node: exp.Expression, shift: int) -> exp.Expression:
         index = ref_index(node)
         assert index is not None
-        shift = days if hits[index].grain is None else days - 1
         if shift == 0:
             return node.copy()
         refs.append(f"{template.refs[index]}{_SHIFT}{shift}")
         return ref_placeholder(len(refs) - 1)
 
+    def column(node: exp.Expression) -> bool:
+        index = ref_index(node)
+        return index is not None and hits[index].grain is None
+
+    def later(node: exp.Expression) -> exp.Expression:
+        """For a lower bound: N days later on the column, N - 1 at a whole-day grain."""
+        return moved(node, days if column(node) else days - 1)
+
+    def earlier(node: exp.Expression) -> exp.Expression:
+        """For an upper bound: one day earlier on the column, as written at a grain."""
+        return moved(node, -1 if column(node) else 0)
+
     def equal(ref: exp.Expression, value: exp.Expression) -> exp.Expression:
         return exp.And(
-            this=exp.LTE(this=ref.copy(), expression=value.copy()),
+            this=exp.LTE(this=earlier(ref), expression=value.copy()),
             expression=exp.GTE(this=later(ref), expression=value.copy()),
         )
 
@@ -1129,7 +1147,7 @@ def _widen(template: Template, hits: dict[int, DimensionRef], days: int) -> Temp
                 return exp.Paren(this=equal(ref, value))
             if op in (exp.GT, exp.GTE):
                 return op(this=later(ref), expression=value.copy())
-            return op(this=ref.copy(), expression=value.copy())
+            return op(this=earlier(ref), expression=value.copy())
         if isinstance(node, exp.Between):
             low, high = node.args.get("low"), node.args.get("high")
             if node.args.get("symmetric") or not time_ref(node.this):
@@ -1139,7 +1157,7 @@ def _widen(template: Template, hits: dict[int, DimensionRef], days: int) -> Temp
             return exp.Paren(
                 this=exp.And(
                     this=exp.GTE(this=later(node.this), expression=low.copy()),
-                    expression=exp.LTE(this=node.this.copy(), expression=high.copy()),
+                    expression=exp.LTE(this=earlier(node.this), expression=high.copy()),
                 )
             )
         if isinstance(node, exp.In):

@@ -208,15 +208,18 @@ format or the API; such changes are listed under **Changed**.
   at day grain or coarser), joined by `AND` and `OR`: the window reads its facts from a second
   daily aggregate, `<model>_agg_lookback_<N>_days`, whose lower bounds are moved back with each
   dialect's date addition (N days on the column, N − 1 at a grain), while the request's filters
-  still choose the days. Other shapes (`NOT`, `<>`, `NOT IN`, functions of the time dimension,
+  still choose the days; on the column itself an upper bound is read one day earlier, so a
+  bound inside a day (`<= ... 12:00`) keeps that day's later facts in its window. Other shapes (`NOT`, `<>`, `NOT IN`, functions of the time dimension,
   the hour grain, `OR` with another member) keep today's behaviour and are documented. The SQL
   of every request without a filter on a rolling window's time dimension is unchanged (a test
   pins its `sql_hash` on every dialect). The evidence's `time.filters_applied` is `time_after`
-  for rolling windows, or `before` when an unsplit filter cuts them; the Power BI and dbt
+  for rolling windows, or `before` when an unsplit filter cuts them: a new value, which
+  unfiltered rolling-window queries now carry too (they had `before`); the Power BI and dbt
   export warnings no longer list date filters among the differences. Reference cases A44 (a
   `BETWEEN` range with a status filter), A45 (a date column, a 30-day window and a row filter),
-  A46 (an `IN` list of days, a `min` window) and A47 (a `NOT` filter that still cuts) have
-  hand-written SQL, and the randomized cross-database test draws 8 date-filtered window
+  A46 (an `IN` list of days, a `min` window), A47 (a `NOT` filter that still cuts) and A48 (an
+  upper bound at noon of a day with orders after it) have hand-written SQL; on Oracle,
+  `CAST(... AS DATETIME)` in a request filter now becomes `TIMESTAMP`, and the randomized cross-database test draws 8 date-filtered window
   requests. Running totals (`grain_to_date`) and offsets still filter first; they are the next
   slices ([semantic model](docs/semantic-model.md#rolling-windows)).
 - Rolling windows close the gaps of the #57 review (DEC-22). `cosmos validate`, `cosmos check`
