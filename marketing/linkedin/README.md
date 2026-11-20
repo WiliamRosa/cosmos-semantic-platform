@@ -69,10 +69,12 @@ marketing/linkedin/
   render.py        renders a pack's card.html to card.png
   brand/           logo, banner and the HTML they are rendered from
   posts/
-    2026-11-23-launch/
+    2026-11-20-launch/
       post.md      the text to paste, sources, publish notes
       card.html    (optional) the visual's source
       card.png     (optional) the rendered visual
+
+A pack whose `## Publish` section starts with **Published:** is on the page. Published packs are the page's history: read them before writing, so a new post neither repeats an angle nor reuses a visual from the last two weeks.
 ```
 
 ## Hashtags
