@@ -9,6 +9,14 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- A query explorer in the console (DEC-41), the read-only first slice of the phase-4 playground:
+  pick a metric, dimensions, a time dimension and grain, filters (a dimension, an operator and a
+  value; never SQL) and business rules, then run it or only show its SQL. It shows the result
+  table, the generated SQL and the evidence envelope: rules, row filters and user context,
+  fingerprints and caveats, with a link to the audited answer. It calls `POST /v1/query` and
+  `POST /v1/sql` with the console's credential, so the same row filters apply and every run is
+  audited like any API query. It is in the sidebar and in `Ctrl+K`, in English and Portuguese;
+  the public demo explains that it needs `cosmos serve`.
 - A social media agent for the project's LinkedIn page ([ADR 0014](docs/decisions/0014-social-media-agent.md)):
   on weekday eves it opens one pull request labelled `social` with the next business day's post, its
   visual and the source of every claim, under `marketing/linkedin/` (playbook, page copy, brand assets).
