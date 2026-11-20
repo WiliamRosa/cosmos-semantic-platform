@@ -699,8 +699,7 @@ class _DbtWriter:
             f"metrics.{metric.name}: MetricFlow windows over `metric_time`, which is "
             f"`{owner}.{times[0]}`; by that dimension at day grain the numbers are the engine's on "
             "the days with facts. MetricFlow also returns days without facts inside a window and "
-            "coarser grains (the engine refuses them), and a time constraint does not cut its "
-            "window, while the engine filters the facts first"
+            "coarser grains (the engine refuses them)"
             + (
                 f"; queried by {others}, the engine windows over that dimension instead, which "
                 "MetricFlow does not"

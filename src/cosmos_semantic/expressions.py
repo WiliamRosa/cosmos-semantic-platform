@@ -52,6 +52,18 @@ def parse_template(text: str, dialect: str, *, error: type[Exception] = ModelErr
     return Template(text=text, tree=portable(tree), refs=refs, user_fields=users)
 
 
+def ref_index(node: exp.Expression) -> int | None:
+    """The index in ``Template.refs`` of a ``{member}`` placeholder, None for any other node."""
+    if isinstance(node, exp.Column) and not node.table and node.name.startswith(_REF_PREFIX):
+        return int(node.name[len(_REF_PREFIX) :])
+    return None
+
+
+def ref_placeholder(index: int) -> exp.Column:
+    """The placeholder of ``Template.refs[index]``, for a tree built from a template."""
+    return exp.column(f"{_REF_PREFIX}{index}")
+
+
 def portable(tree: exp.Expression) -> exp.Expression:
     """``date ± INTERVAL 'n' UNIT`` becomes a date addition, which SQLGlot translates to every
     dialect (SQL Server has no INTERVAL)."""
