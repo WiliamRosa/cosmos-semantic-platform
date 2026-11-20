@@ -33,6 +33,7 @@ a warning.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +123,8 @@ def import_cube(
     rules: list[dict[str, Any]] = []
     user_context: dict[str, dict[str, Any]] = {}
     lost: dict[str, list[str]] = {}  # cube -> why its access_policy is not imported in full
+    skipped: set[str] = set()  # measures not imported, so metrics over them are skipped too
+    metric_where: dict[str, str] = {}
 
     for cube in cubes:
         name = cube["name"]
@@ -188,7 +191,9 @@ def import_cube(
             continue
         model = models[name]
         for measure in cube.get("measures") or []:
-            _measure(name, model, measure, col_to_dim[name], metrics, warnings)
+            metric_where[measure["name"]] = f"cubes.{name}.measures.{measure['name']}"
+            if not _measure(name, model, measure, col_to_dim[name], metrics, warnings):
+                skipped.add(measure["name"])
         for segment in cube.get("segments") or []:
             rule = _segment(name, segment, col_to_dim[name], models[name], warnings)
             if rule:
@@ -196,6 +201,7 @@ def import_cube(
         for join in cube.get("joins") or []:
             _join(name, join, models, pk, warnings)
 
+    metrics = skip_dependents(metrics, skipped, warnings, lambda m: metric_where.get(m, m))
     if lost and not allow_policy_loss:
         reasons = "; ".join(f"cubes.{c}: {', and '.join(r)}" for c, r in lost.items())
         raise PolicyLossError(
@@ -222,6 +228,42 @@ def import_cube(
         }
     )
     return ImportResult(project, warnings)
+
+
+def _metric_refs(metric: dict[str, Any]) -> list[str]:
+    """The measures and metrics a metric (as an import writes it) uses."""
+    if metric.get("type") == "ratio":
+        return [metric.get("numerator"), metric.get("denominator")]
+    if metric.get("type") == "derived":
+        return REF_RE.findall(metric.get("expr", ""))
+    return [metric.get("measure")]
+
+
+def skip_dependents(
+    metrics: list[dict[str, Any]],
+    skipped: set[str],
+    warnings: list[str],
+    where: Callable[[str], str],
+) -> list[dict[str, Any]]:
+    """The metrics without those that use a skipped member, directly or through another
+    skipped metric; each one dropped is a warning naming what it depends on. Left in, they
+    would make the imported model fail validation."""
+    skipped = set(skipped)
+    kept = list(metrics)
+    changed = True
+    while changed:
+        changed = False
+        for metric in list(kept):
+            missing = [ref for ref in _metric_refs(metric) if ref in skipped]
+            if missing:
+                kept.remove(metric)
+                skipped.add(metric["name"])
+                changed = True
+                warnings.append(
+                    f"{where(metric['name'])}: depends on `{missing[0]}`, which was not "
+                    "imported; skipped"
+                )
+    return kept
 
 
 def _table_from_sql(sql: str) -> str | None:
@@ -265,7 +307,8 @@ def _trailing_days(window: dict[str, Any]) -> int | None:
     return int(match.group(1)) if match and int(match.group(1)) > 0 else None
 
 
-def _measure(cube, model, measure, dims, metrics, warnings) -> None:
+def _measure(cube, model, measure, dims, metrics, warnings) -> bool:
+    """Adds the measure (and its metric) to the model; False when it is skipped."""
     name, kind = measure["name"], measure.get("type", "count")
     where = f"cubes.{cube}.measures.{name}"
     sql = measure.get("sql")
@@ -273,13 +316,13 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> None:
         refs = _MEMBER_REF.findall(str(sql or ""))
         if not refs:
             warnings.append(f"{where}: `number` measure without measure references; skipped")
-            return
+            return False
         expr = _MEMBER_REF.sub(lambda m: "{" + (m.group(2) or m.group(1)) + "}", str(sql))
         metrics.append({"name": name, "type": "derived", "expr": _strip_cube(expr)})
-        return
+        return True
     if kind not in _AGG:
         warnings.append(f"{where}: type `{kind}` is not supported; skipped")
-        return
+        return False
     window = measure.get("rolling_window")
     days = _trailing_days(window) if window else None
     if days and (window.get("offset", "end") != "end" or "leading" in window):
@@ -287,13 +330,25 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> None:
             f"{where}: a trailing window in days with `offset: start` or `leading` does not "
             "end on the row's day, as Cosmos windows do; measure skipped"
         )
-        return
-    if days and _AGG[kind] not in WINDOW_AGGS:
-        warnings.append(
-            f"{where}: a trailing window over a measure of type `{kind}` cannot be combined from daily "
-            "values in Cosmos (use sum, count, min or max); measure skipped"
-        )
-        return
+        return False
+    if window and _AGG[kind] not in WINDOW_AGGS:
+        # Cosmos accumulates per-period values, which only sums, counts, minima and maxima
+        # allow (DEC-21), so model validation refuses any running total or window over this
+        # measure (spec.cumulative_agg_problem, spec.window_agg_refusal). Importing it would
+        # make the model fail validation (DEC-32).
+        if window.get("type") == "to_date":
+            warnings.append(
+                f"{where}: a to-date window over a measure of type `{kind}` cannot be "
+                "accumulated from per-period values in Cosmos (use sum, count, min or max); an "
+                "average or a distinct count to date must be computed over the whole period; "
+                "measure skipped"
+            )
+        else:
+            warnings.append(
+                f"{where}: a trailing window over a measure of type `{kind}` cannot be combined "
+                "from daily values in Cosmos (use sum, count, min or max); measure skipped"
+            )
+        return False
     if kind == "count_distinct_approx":
         warnings.append(f"{where}: count_distinct_approx imported as an exact count")
     filters = [f["sql"] for f in measure.get("filters") or [] if f.get("sql")]
@@ -326,6 +381,7 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> None:
     elif filters:
         flt = " AND ".join(f"({_cube_filter(f, dims)})" for f in filters)
         metrics.append({"name": name, "type": "simple", "measure": base_name, "filter": flt})
+    return True
 
 
 def _segment(cube, segment, dims, model, warnings) -> dict | None:

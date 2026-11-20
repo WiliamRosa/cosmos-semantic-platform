@@ -1826,6 +1826,177 @@ def test_cube_import_trailing_windows(tmp_path, window, kind, metric, warning):
         assert [w for w in result.warnings if warning in w], result.warnings
 
 
+# A running total of an average or a distinct count cannot be accumulated from per-period
+# values, so model validation refuses it (DEC-21). The Cube and dbt imports skip it with a
+# warning naming it, with the metrics that use it, so the imported model validates (DEC-32).
+
+
+@pytest.mark.parametrize("kind", ["avg", "count_distinct"])
+def test_cube_import_skips_to_date_over_avg_or_distinct_count(tmp_path, kind):
+    doc = {
+        "cubes": [
+            {
+                "name": "orders",
+                "sql_table": "public.orders",
+                "dimensions": [
+                    {"name": "order_id", "sql": "{CUBE}.order_id", "type": "string"},
+                    {"name": "ordered_at", "sql": "{CUBE}.ordered_at", "type": "time"},
+                ],
+                "measures": [
+                    {"name": "revenue", "type": "sum", "sql": "{CUBE}.amount"},
+                    {
+                        "name": "revenue_ytd",
+                        "type": "sum",
+                        "sql": "{CUBE}.amount",
+                        "rolling_window": {"type": "to_date", "granularity": "year"},
+                    },
+                    {
+                        "name": "value_mtd",
+                        "type": kind,
+                        "sql": "{CUBE}.amount",
+                        "rolling_window": {"type": "to_date", "granularity": "month"},
+                    },
+                    # Use the skipped measure, directly and through another metric.
+                    {"name": "value_share", "type": "number", "sql": "{value_mtd} / {revenue}"},
+                    {"name": "value_share_pct", "type": "number", "sql": "100 * {value_share}"},
+                ],
+            }
+        ]
+    }
+    path = tmp_path / "model.yml"
+    path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    graph, warnings = imported("cube", path)  # dumps, reloads and validates the model
+    assert set(graph.metrics) == {"revenue_ytd"}
+    assert graph.metrics["revenue_ytd"].grain_to_date == "year"
+    measures = {x.name for m in graph.project.semantic_models for x in m.measures}
+    assert measures == {"revenue", "revenue_ytd__base"}  # no `value_mtd__base` left behind
+    where = "cubes.orders.measures"
+    assert warnings == [
+        f"{where}.value_mtd: a to-date window over a measure of type `{kind}` cannot be "
+        "accumulated from per-period values in Cosmos (use sum, count, min or max); an average "
+        "or a distinct count to date must be computed over the whole period; measure skipped",
+        f"{where}.value_share: depends on `value_mtd`, which was not imported; skipped",
+        f"{where}.value_share_pct: depends on `value_share`, which was not imported; skipped",
+    ]
+    runner = CliRunner()
+    out = tmp_path / "imported.yml"
+    assert runner.invoke(app, ["import", "cube", str(path), "-o", str(out)]).exit_code == 0
+    validated = runner.invoke(app, ["validate", "-m", str(out)])
+    assert validated.exit_code == 0, validated.output
+
+
+@pytest.mark.parametrize("spec", ["legacy", "latest"])
+@pytest.mark.parametrize("agg", ["average", "count_distinct"])
+def test_dbt_import_skips_to_date_over_avg_or_distinct_count(tmp_path, spec, agg):
+    if spec == "legacy":
+        doc = {
+            "semantic_models": [
+                {
+                    "name": "orders",
+                    "model": "ref('orders')",
+                    "entities": [{"name": "order", "type": "primary", "expr": "order_id"}],
+                    "dimensions": [
+                        {"name": "ordered_at", "type": "time"},
+                        {"name": "status", "type": "categorical"},
+                    ],
+                    "measures": [
+                        {"name": "revenue", "agg": "sum", "expr": "amount"},
+                        {"name": "value", "agg": agg, "expr": "amount"},
+                    ],
+                }
+            ],
+            "metrics": [
+                {
+                    "name": "revenue_ytd",
+                    "type": "cumulative",
+                    "type_params": {"measure": "revenue", "grain_to_date": "year"},
+                },
+                {
+                    "name": "value_mtd",
+                    "type": "cumulative",
+                    "type_params": {"measure": "value", "grain_to_date": "month"},
+                },
+                {
+                    "name": "value_share",
+                    "type": "ratio",
+                    "type_params": {"numerator": "value_mtd", "denominator": "revenue_ytd"},
+                },
+                {
+                    "name": "value_share_pct",
+                    "type": "derived",
+                    "type_params": {
+                        "expr": "100 * share",
+                        "metrics": [{"name": "value_share", "alias": "share"}],
+                    },
+                },
+            ],
+        }
+    else:
+        doc = {
+            "models": [
+                {
+                    "name": "orders",
+                    "semantic_model": True,
+                    "columns": [
+                        {"name": "order_id", "entity": {"type": "primary", "name": "order"}},
+                        {"name": "ordered_at", "dimension": {"type": "time"}},
+                    ],
+                    "metrics": [
+                        {"name": "revenue", "type": "simple", "agg": "sum", "expr": "amount"},
+                        {"name": "value", "type": "simple", "agg": agg, "expr": "amount"},
+                        {
+                            "name": "revenue_ytd",
+                            "type": "cumulative",
+                            "input_metric": "revenue",
+                            "grain_to_date": "year",
+                        },
+                        {
+                            "name": "value_mtd",
+                            "type": "cumulative",
+                            "input_metric": "value",
+                            "grain_to_date": "month",
+                        },
+                        {
+                            "name": "value_share",
+                            "type": "ratio",
+                            "numerator": "value_mtd",
+                            "denominator": "revenue_ytd",
+                        },
+                        {
+                            "name": "value_share_pct",
+                            "type": "derived",
+                            "expr": "100 * value_share",
+                            "input_metrics": ["value_share"],
+                        },
+                    ],
+                }
+            ]
+        }
+    path = tmp_path / "dbt" / "models.yml"
+    path.parent.mkdir()
+    path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    graph, warnings = imported("dbt", path.parent, schema="public")
+    assert set(graph.metrics) == {"revenue_ytd"}
+    assert graph.metrics["revenue_ytd"].grain_to_date == "year"
+    assert "value" in graph.measure_owner  # the measure itself is kept
+    cosmos_agg = "avg" if agg == "average" else agg
+    assert warnings == [
+        "metrics.value_mtd: over measure `value`: a month-to-date over a "
+        f"`{cosmos_agg}` measure is not supported; it cannot be accumulated from per-period "
+        "values (use a sum, count, min or max measure); metric skipped",
+        "metrics.value_share: depends on `value_mtd`, which was not imported; skipped",
+        "metrics.value_share_pct: depends on `value_share`, which was not imported; skipped",
+    ]
+    runner = CliRunner()
+    out = tmp_path / "imported.yml"
+    imported_cli = runner.invoke(
+        app, ["import", "dbt", str(path.parent), "-o", str(out), "--schema", "public"]
+    )
+    assert imported_cli.exit_code == 0, imported_cli.output
+    validated = runner.invoke(app, ["validate", "-m", str(out)])
+    assert validated.exit_code == 0, validated.output
+
+
 def test_cube_export_states_each_reason(graph):
     data = _without_policies(_without_business(graph.project))
     data["metrics"] += [

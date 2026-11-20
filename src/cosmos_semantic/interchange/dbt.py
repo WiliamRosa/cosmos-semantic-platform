@@ -28,13 +28,19 @@ from sqlglot import exp
 from cosmos_semantic.errors import QueryError
 from cosmos_semantic.expressions import REF_RE, USER_RE
 from cosmos_semantic.interchange import ExportResult, ImportResult, read_yaml_files
-from cosmos_semantic.interchange.cube import _plural, real_division, refuse_policy_loss
+from cosmos_semantic.interchange.cube import (
+    _plural,
+    real_division,
+    refuse_policy_loss,
+    skip_dependents,
+)
 from cosmos_semantic.spec import (
     CumulativeMetric,
     DerivedMetric,
     Project,
     RatioMetric,
     SimpleMetric,
+    cumulative_agg_problem,
     window_agg_refusal,
 )
 
@@ -324,6 +330,28 @@ class _Builder:
             )
         self.metrics.append(item)
 
+    def skip_invalid_cumulative(self) -> None:
+        """Drops the cumulative metrics model validation refuses: a running total, to-date or
+        not, or a rolling window over a measure whose per-period values do not combine (`avg`,
+        `count_distinct`), and the metrics that use them, each with a warning (DEC-32). The
+        condition is the validator's own (``cumulative_agg_problem``, ``window_agg_refusal``)."""
+        aggs = {m["name"]: m["agg"] for model in self.models for m in model.get("measures", [])}
+        skipped: set[str] = set()
+        for metric in self.metrics:
+            if metric["type"] != "cumulative" or metric["measure"] not in aggs:
+                continue
+            agg = aggs[metric["measure"]]
+            spec = CumulativeMetric.model_validate(metric)
+            problem = window_agg_refusal(agg) if spec.window else cumulative_agg_problem(spec, agg)
+            if problem:
+                self.warnings.append(
+                    f"metrics.{metric['name']}: over measure `{metric['measure']}`: {problem}; "
+                    "metric skipped"
+                )
+                skipped.add(metric["name"])
+        kept = [m for m in self.metrics if m["name"] not in skipped]
+        self.metrics = skip_dependents(kept, skipped, self.warnings, lambda m: f"metrics.{m}")
+
     # -- filtros Jinja do MetricFlow -----------------------------------------
 
     def convert_filters(self) -> None:
@@ -381,6 +409,7 @@ def import_dbt(path: str | Path, *, schema: str | None = None) -> ImportResult:
             else:
                 builder.top_metric(metric)
     builder.convert_filters()
+    builder.skip_invalid_cumulative()
     if not builder.models:
         builder.warnings.append("no semantic model found")
     if not schema:
