@@ -4,7 +4,8 @@ A read-only web console for the people who decide whether to trust the numbers (
 - the model's health and how it is governed;
 - the business processes as graphs;
 - the catalog in business words;
-- every audited answer.
+- every audited answer;
+- a query explorer to ask a governed metric and see its evidence.
 
 It is available in English and in Brazilian Portuguese.
 
@@ -46,6 +47,7 @@ With a DuckDB file as the data source, run `cosmos check` while `cosmos serve` i
 | Processes | What does this process depend on, and who owns each part? A graph from source systems to metrics and rules, colored by health |
 | Catalog | What does this metric or rule mean? Definition, formula, versions, reconciliations, what depends on it, recent answers |
 | Answers | Where did this number come from? Formula, rules, user context, SQL and fingerprints, with a button to reproduce it |
+| Query explorer | What does this metric say by these dimensions, and why? A result table, the generated SQL and the evidence envelope |
 | Checks | What did each check run find? Rule tests and reconciliations with the likely cause of each divergence |
 | Usage and cost | Who asks what, and at what estimated cost? Admins only |
 
@@ -70,6 +72,29 @@ Health always uses the same four states:
 | Not verified | Nothing verifies it yet |
 
 A metric's page also says when it was last reconciled and when the rule tests last ran. With `health.max_age` in the model (for example `7 days`), a metric whose last reconciliation is older than that needs attention ([member health](architecture.md#member-health)).
+
+## Query explorer
+
+The query explorer (`/console/explore/`) asks a governed metric by dimensions, a time grain and filters. It is the read-only first slice of the phase-4 playground (DEC-41).
+
+| Field | What it sends |
+| --- | --- |
+| Metric | One metric or measure from `GET /v1/members`; `?metric=revenue` in the address preselects it |
+| Time dimension and grain | `orders.ordered_at__month`, ordered by period |
+| Dimensions | Any other dimension |
+| Filters | A dimension, an operator and a value, sent as `{model.dimension} op value`. Text values are quoted and suggested from `GET /v1/dimensions/{name}/values`; dates and numbers are checked before sending |
+| Business rules | Predicate rules to keep only the rows where they hold (`{rule.active_customer}`) |
+| Row limit | `limit`, 100 by default |
+
+**Run** calls `POST /v1/query`. It shows:
+- the result table;
+- the evidence: query id, reference date, formula, the rules applied and their tests, the user context and row filters, the model, SQL and result fingerprints, and the caveats;
+- the generated SQL;
+- a link to the audited answer.
+
+**Show SQL** calls `POST /v1/sql` and shows the SQL without running it.
+
+The explorer sends a structured request, never SQL. It uses the console's credential, so the same row filters apply as for any API client, and every run, and every refusal, is recorded in the audit log under the `api` channel. A refused request shows the server's reason. The public demo has no server, so the page explains that it needs `cosmos serve`.
 
 ## Public demo
 
