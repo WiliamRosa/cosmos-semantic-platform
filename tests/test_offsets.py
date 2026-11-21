@@ -1,22 +1,28 @@
 """Inputs of derived metrics read at an earlier period (DEC-18): the exact numbers on a small
 table built for the hard cases (a month without facts, December to January, month ends, a
-null period), on every database available, and the refusals at validation and query time."""
+null period), on every database available, and the refusals at validation and query time.
+An input with an alias is read both shifted and unshifted in one expression (DEC-44)."""
 
 from __future__ import annotations
 
 import datetime as dt
 import decimal
+import json
+import os
+import re
+from pathlib import Path
 
 import pyarrow as pa
 import pytest
 import sqlglot
 import yaml
+from pydantic import ValidationError
 
 from cosmos_semantic import demo_data
 from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.connectors import ensure_read_only
 from cosmos_semantic.errors import ModelError, QueryError
-from cosmos_semantic.planner import Planner, QueryRequest
+from cosmos_semantic.planner import Planner, Principal, QueryRequest
 from cosmos_semantic.spec import Project, offset_grain_problem, parse_offset
 
 MODEL = """
@@ -121,8 +127,8 @@ def _norm(value):
     return value
 
 
-def _run(connector, metrics, dimensions):
-    compiled = Planner(_graph(), connector.dialect, connector.config.schema_map).plan(
+def _run(connector, metrics, dimensions, text: str = MODEL):
+    compiled = Planner(_graph(text), connector.dialect, connector.config.schema_map).plan(
         QueryRequest(metrics=metrics, dimensions=dimensions)
     )
     columns = [c.name for c in compiled.columns]
@@ -342,7 +348,10 @@ def test_validation_refuses_what_the_slice_does_not_cover():
     assert "offset `2 weeks` is not supported" in errors["in_weeks"][0]
     assert "offset `0 months` is not supported" in errors["zero"][0]
     assert errors["unreferenced"] == ["input `lines` is not referenced in `expr`"]
-    assert "`amount` is listed more than once in `inputs`" in errors["twice"]
+    assert errors["twice"] == [
+        "`amount` is listed more than once in `inputs`; to read it at several periods, give "
+        "each input of it an `alias` and read it in `expr` by that name"
+    ]
     assert "uses the cumulative metric `amount_running`" in errors["running_shifted"][0]
     assert "which has offsets of its own" in errors["shifted_twice"][0]
     # The planner refuses them too, for graphs compiled without `strict`.
@@ -374,3 +383,343 @@ def test_sql_for_every_dialect(dialect, shifted):
     ensure_read_only(compiled.sql, dialect)
     assert "sales_agg_offset_1_month" in compiled.sql
     assert shifted in compiled.sql
+
+
+# -- The same input read shifted and unshifted, through an alias (DEC-44) ----------------------
+ALIASED = (
+    MODEL
+    + """
+  - name: amount_growth_inline
+    type: derived
+    expr: "({amount} - {amount_before}) / {amount_before}"
+    inputs: [{metric: amount, offset: 1 month, alias: amount_before}]
+  - name: month_minus_quarter_before
+    type: derived
+    expr: "COALESCE({amount_m1}, 0) - COALESCE({amount_m3}, 0)"
+    inputs:
+      - {metric: amount, offset: 1 month, alias: amount_m1}
+      - {metric: amount, offset: 3 months, alias: amount_m3}
+  - name: avg_amount_change
+    type: derived
+    expr: "{avg_amount} / {avg_amount_before}"
+    inputs: [{metric: avg_amount, offset: 1 month, alias: avg_amount_before}]
+  - name: lines_vs_week_before
+    type: derived
+    expr: "{lines} - {lines_week_before}"
+    inputs: [{metric: lines, offset: 7 days, alias: lines_week_before}]
+"""
+)
+
+
+def test_alias_reads_the_same_input_shifted_and_unshifted(source):
+    """One metric gives the growth that needed a helper metric before: the same numbers as
+    `amount_growth`, over `amount_prev_month`, across the empty February and the year change,
+    and per kind."""
+    rows = _run(source, ["amount", "amount_growth", "amount_growth_inline"], [MONTH], ALIASED)
+    assert rows == [
+        ("2024-11-01", 5.0, None, None),
+        ("2024-12-01", 10.0, 1.0, 1.0),
+        ("2025-01-01", 30.0, 2.0, 2.0),
+        ("2025-03-01", 40.0, None, None),
+        ("2025-04-01", 50.0, 0.25, 0.25),
+        (None, 100.0, None, None),
+    ]
+    assert _run(source, ["amount_growth_inline"], ["sales.kind", MONTH], ALIASED) == [
+        ("a", "2024-11-01", None),
+        ("a", "2024-12-01", 1.0),
+        ("a", "2025-01-01", 1.3),
+        ("a", "2025-03-01", None),
+        ("a", "2025-04-01", 0.25),
+        ("a", None, None),
+        ("b", "2025-01-01", None),
+    ]
+
+
+def test_two_aliases_of_one_input_at_two_offsets(source):
+    """Two aliases of `amount`, 1 and 3 months earlier, in one expression: each is the value
+    of the helper metric with the same offset."""
+    metrics = ["amount_prev_month", "amount_prev_quarter", "month_minus_quarter_before"]
+    assert _run(source, metrics, [MONTH], ALIASED) == [
+        ("2024-11-01", None, None, 0),
+        ("2024-12-01", 5.0, None, 5.0),
+        ("2025-01-01", 10.0, None, 10.0),
+        ("2025-03-01", None, 10.0, -10.0),
+        ("2025-04-01", 40.0, 30.0, 10.0),
+        (None, None, None, 0),
+    ]
+
+
+def test_aliases_of_a_ratio_and_of_a_count_by_day(source):
+    assert _run(source, ["avg_amount", "avg_amount_change"], [MONTH], ALIASED) == [
+        ("2024-11-01", 5.0, None),
+        ("2024-12-01", 10.0, 2.0),
+        ("2025-01-01", 10.0, 1.0),
+        ("2025-03-01", 40.0, None),
+        ("2025-04-01", 50.0, 1.25),
+        (None, 100.0, None),
+    ]
+    # A day whose day a week before has no facts gets NULL, not the day's own count.
+    assert _run(source, ["lines", "lines_vs_week_before"], ["sales.sold_at__day"], ALIASED) == [
+        ("2024-11-15", 1, None),
+        ("2024-12-31", 1, None),
+        ("2025-01-01", 1, None),
+        ("2025-01-08", 1, 0),
+        ("2025-01-31", 1, None),
+        ("2025-03-31", 1, None),
+        ("2025-04-30", 1, None),
+        (None, 1, None),
+    ]
+
+
+@pytest.mark.parametrize("dialect", ["duckdb", "postgres", "tsql", "mysql", "oracle"])
+def test_alias_sql_reads_one_cte_per_offset(dialect):
+    """The unshifted and the shifted read of `amount` come from the model's CTE and from its
+    CTE at that offset, as with a helper metric; two offsets give two CTEs."""
+    graph = _graph(ALIASED)
+    inline = Planner(graph, dialect).plan(
+        QueryRequest(metrics=["amount_growth_inline"], dimensions=[MONTH])
+    )
+    helper = Planner(graph, dialect).plan(
+        QueryRequest(metrics=["amount_growth"], dimensions=[MONTH])
+    )
+    ctes = re.compile(r"\b(sales_agg\w*) AS \(")
+    assert ctes.findall(inline.sql) == ctes.findall(helper.sql)
+    assert ctes.findall(inline.sql) == ["sales_agg", "sales_agg_offset_1_month"]
+    both = Planner(graph, dialect).plan(
+        QueryRequest(metrics=["month_minus_quarter_before"], dimensions=[MONTH])
+    )
+    assert ctes.findall(both.sql) == ["sales_agg_offset_1_month", "sales_agg_offset_3_month"]
+
+
+def test_alias_query_refusals():
+    """The request checks name the metric an alias reads."""
+    graph = _graph(ALIASED)
+    with pytest.raises(QueryError, match="`amount_growth_inline` reads `amount` earlier"):
+        Planner(graph, "duckdb").plan(
+            QueryRequest(metrics=["amount_growth_inline"], dimensions=["sales.sold_at__day"])
+        )
+    with pytest.raises(QueryError, match=r"`amount_growth_inline` reads `amount` 1 month"):
+        Planner(graph, "duckdb").plan(
+            QueryRequest(metrics=["amount_growth_inline"], dimensions=["sales.kind"])
+        )
+
+
+def test_alias_in_evidence_formula_and_catalog():
+    """The evidence names the alias of each shifted read (DEC-37, DEC-44); the formula and the
+    catalog expand it to the metric it reads."""
+    from cosmos_semantic.catalog import _metric_text
+    from cosmos_semantic.evidence import EvidenceBuilder
+
+    graph = _graph(ALIASED)
+    builder = EvidenceBuilder(graph)
+    request = QueryRequest(metrics=["amount_growth_inline"], dimensions=[MONTH])
+    assert builder.time("amount_growth_inline", request)["shifts"] == [
+        {
+            "metric": "amount_growth_inline",
+            "input": "amount",
+            "offset": "1 month",
+            "alias": "amount_before",
+        }
+    ]
+    shifts = builder.time("month_minus_quarter_before", request)["shifts"]
+    assert [(s["alias"], s["offset"]) for s in shifts] == [
+        ("amount_m1", "1 month"),
+        ("amount_m3", "3 months"),
+    ]
+    # Without an alias the entry is as it was.
+    assert builder.time("amount_prev_month", request)["shifts"] == [
+        {"metric": "amount_prev_month", "input": "amount", "offset": "1 month"}
+    ]
+    assert builder.formula("amount_growth_inline") == (
+        "((SUM(sales.amount)) - (SUM(sales.amount)) 1 month earlier) / "
+        "(SUM(sales.amount)) 1 month earlier"
+    )
+    assert _metric_text(graph.metrics["amount_growth_inline"]).endswith(
+        ", with `amount` read 1 month earlier as `amount_before`"
+    )
+
+
+BAD_ALIASES = (
+    MODEL
+    + """
+  - name: alias_is_a_metric
+    type: derived
+    expr: "{amount} - {avg_amount}"
+    inputs: [{metric: amount, offset: 1 month, alias: avg_amount}]
+  - name: alias_is_its_input
+    type: derived
+    expr: "{amount}"
+    inputs: [{metric: amount, offset: 1 month, alias: amount}]
+  - name: alias_twice
+    type: derived
+    expr: "{a1}"
+    inputs:
+      - {metric: amount, offset: 1 month, alias: a1}
+      - {metric: lines, offset: 1 month, alias: a1}
+  - name: alias_unused
+    type: derived
+    expr: "{amount}"
+    inputs: [{metric: amount, offset: 1 month, alias: amount_before}]
+  - name: alias_of_nothing
+    type: derived
+    expr: "{missing_before}"
+    inputs: [{metric: missing, offset: 1 month, alias: missing_before}]
+  - name: alias_bad_offset
+    type: derived
+    expr: "{amount} - {amount_before}"
+    inputs: [{metric: amount, offset: 2 weeks, alias: amount_before}]
+  - name: alias_of_a_running_total
+    type: derived
+    expr: "{running_before}"
+    inputs: [{metric: amount_running, offset: 1 month, alias: running_before}]
+"""
+)
+
+
+def test_alias_validation():
+    graph = _graph(BAD_ALIASES, strict=False)
+    errors = {}
+    for issue in graph.issues:
+        if issue.severity == "error":
+            errors.setdefault(issue.location.split(".")[1], []).append(issue.message)
+    assert errors == {
+        "alias_is_a_metric": [
+            "alias `avg_amount` is already the name of a measure or metric; choose another, so "
+            "`{avg_amount}` in `expr` reads one thing"
+        ],
+        "alias_is_its_input": [
+            "alias `amount` is already the name of a measure or metric; choose another, so "
+            "`{amount}` in `expr` reads one thing"
+        ],
+        "alias_twice": ["`a1` names more than one input; use another `alias`"],
+        "alias_unused": ["alias `amount_before` (input `amount`) is not referenced in `expr`"],
+        "alias_of_nothing": ["reference `missing` is neither a measure nor a metric"],
+        "alias_bad_offset": [
+            "offset `2 weeks` is not supported; use a whole number of days or months, such as "
+            "`7 days` or `1 month`"
+        ],
+        "alias_of_a_running_total": [
+            "`amount_running` is read with an offset, and it uses the cumulative metric "
+            "`amount_running`; offsets of cumulative metrics are not supported"
+        ],
+    }
+    with pytest.raises(ModelError, match="alias `avg_amount` is already the name"):
+        _graph(BAD_ALIASES)
+    # The planner refuses what it cannot shift, for graphs compiled without `strict`.
+    with pytest.raises(QueryError, match="uses the cumulative metric `amount_running`"):
+        Planner(graph, "duckdb").plan(
+            QueryRequest(metrics=["alias_of_a_running_total"], dimensions=[MONTH])
+        )
+
+
+@pytest.mark.parametrize("alias", ["Revenue_Prev", "revenue-prev", "1st", "a" * 65, ""])
+def test_alias_must_be_a_name(alias):
+    data = yaml.safe_load(MODEL)
+    data["metrics"].append(
+        {
+            "name": "bad",
+            "type": "derived",
+            "expr": "{amount}",
+            "inputs": [{"metric": "amount", "offset": "1 month", "alias": alias}],
+        }
+    )
+    with pytest.raises(ValidationError, match="alias"):
+        Project.model_validate(data)
+
+
+def test_no_alias_keeps_the_model_hash():
+    """An input without an alias dumps as before DEC-44, so the hash of an existing model, and
+    the evidence and replays that record it, do not change."""
+    dumped = _graph().project.model_dump(mode="json")
+    inputs = [i for m in dumped["metrics"] for i in m.get("inputs", [])]
+    assert inputs and all(set(i) == {"metric", "offset"} for i in inputs)
+    aliased = _graph(ALIASED).project.model_dump(mode="json")
+    growth = next(m for m in aliased["metrics"] if m["name"] == "amount_growth_inline")
+    assert growth["inputs"] == [{"metric": "amount", "offset": "1 month", "alias": "amount_before"}]
+
+
+# -- The SQL of existing offset requests does not change (DEC-44) ------------------------------
+# sha256 of the SQL each dialect gets for the requests below (or the refusal), as recorded on
+# main before DEC-44. A planner change that alters them on purpose rewrites the file with
+# `COSMOS_UPDATE_PINNED_SQL=1 uv run pytest tests/test_offsets.py -k pinned`.
+PINNED = Path(__file__).parent / "fixtures" / "offset_sql_hashes.json"
+PIN_DIALECTS = (
+    "duckdb",
+    "postgres",
+    "tsql",
+    "mysql",
+    "oracle",
+    "databricks",
+    "snowflake",
+    "bigquery",
+)
+PIN_AS_OF = dt.date(2026, 11, 21)
+
+
+def _pinned_requests() -> dict[str, tuple]:
+    from cosmos_semantic.loader import load_project
+    from cosmos_semantic.reference import load_cases
+
+    from .conftest import EXAMPLE, ROOT
+
+    example = compile_project(load_project(EXAMPLE))
+    out: dict[str, tuple] = {}
+    for case in load_cases(ROOT / "reference" / "queries_advanced.yml"):
+        if case.id in ("A35", "A36", "A37", "A38"):
+            request = case.request.model_copy(update={"as_of": PIN_AS_OF})
+            principal = Principal(user=case.user, channel=case.channel)
+            out[f"reference/queries_advanced.yml:{case.id}"] = (example, request, principal)
+    shifted = {
+        "ecommerce": (
+            example,
+            ["revenue_prev_month", "revenue_mom_growth", "order_count_7_days_earlier"],
+            ["orders.ordered_at"],
+        ),
+        "offsets": (
+            _graph(),
+            [
+                "amount_prev_month",
+                "amount_growth",
+                "amount_prev_quarter",
+                "amount_prev_year",
+                "amount_week_before",
+                "lines_day_before",
+                "avg_amount_prev_month",
+            ],
+            ["sales.sold_at", "sales.shipped_at"],
+        ),
+    }
+    for name, (graph, metrics, times) in shifted.items():
+        for metric in metrics:
+            for time in times:
+                for grain in ("day", "week", "month", "quarter", "year"):
+                    dim = f"{time}__{grain}"
+                    request = QueryRequest(metrics=[metric], dimensions=[dim], as_of=PIN_AS_OF)
+                    out[f"{name}:{metric}:{dim}"] = (graph, request, Principal())
+    return out
+
+
+def _pinned_hashes() -> dict[str, str]:
+    from cosmos_semantic.errors import CosmosError
+    from cosmos_semantic.evidence import sql_hash
+
+    hashes = {}
+    for key, (graph, request, principal) in _pinned_requests().items():
+        for dialect in PIN_DIALECTS:
+            try:
+                sql = Planner(graph, dialect).plan(request, principal).sql
+            except CosmosError as exc:
+                hashes[f"{key}|{dialect}"] = f"refused: {exc}"
+            else:
+                hashes[f"{key}|{dialect}"] = sql_hash(sql)
+    return hashes
+
+
+def test_pinned_sql_of_existing_offset_requests():
+    hashes = _pinned_hashes()
+    if os.environ.get("COSMOS_UPDATE_PINNED_SQL"):
+        PINNED.write_text(json.dumps(hashes, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    pinned = json.loads(PINNED.read_text(encoding="utf-8"))
+    assert sum(not v.startswith("refused") for v in pinned.values()) >= 100
+    changed = sorted(k for k in pinned if hashes.get(k) != pinned[k])
+    assert not changed, f"{len(changed)} request-dialect pairs changed, such as {changed[:3]}"

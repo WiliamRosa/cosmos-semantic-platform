@@ -261,7 +261,10 @@ def _metric_text(metric) -> str:
     if isinstance(metric, RatioMetric):
         return f"`{metric.numerator}` divided by `{metric.denominator}`"
     if isinstance(metric, DerivedMetric):
-        shifted = "".join(f", with `{i.metric}` read {i.offset} earlier" for i in metric.inputs)
+        shifted = "".join(
+            f", with `{i.metric}` read {i.offset} earlier" + (f" as `{i.alias}`" if i.alias else "")
+            for i in metric.inputs
+        )
         return f"the expression {metric.expr}{shifted}"
     if isinstance(metric, CumulativeMetric):
         if metric.grain_to_date:

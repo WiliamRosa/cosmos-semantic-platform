@@ -21,6 +21,7 @@ from cosmos_semantic.spec import (
     SemanticModel,
     SimpleMetric,
     cumulative_agg_problem,
+    input_problems,
     offset_problem,
     window_agg_refusal,
 )
@@ -368,7 +369,8 @@ def metric_refs(metric: Metric) -> list[str]:
     if isinstance(metric, RatioMetric):
         return [metric.numerator, metric.denominator]
     if isinstance(metric, DerivedMetric):
-        return REF_RE.findall(metric.expr)
+        # An input's alias stands for the metric it reads (DEC-44).
+        return [metric.target(ref) for ref in REF_RE.findall(metric.expr)]
     return []
 
 
@@ -395,11 +397,10 @@ def _check_offsets(g: SemanticGraph, err) -> None:
             continue
         loc = f"metrics.{metric.name}"
         refs = set(REF_RE.findall(metric.expr))
-        for name in _dup([i.metric for i in metric.inputs]):
-            err(loc, f"`{name}` is listed more than once in `inputs`")
+        for problem in input_problems(metric, refs, set(g.metrics) | set(g.measure_owner)):
+            err(loc, problem)
         for item in metric.inputs:
-            if item.metric not in refs:
-                err(loc, f"input `{item.metric}` is not referenced in `expr`")
+            if item.ref not in refs:
                 continue
             problem = offset_problem(item.offset)
             if problem:

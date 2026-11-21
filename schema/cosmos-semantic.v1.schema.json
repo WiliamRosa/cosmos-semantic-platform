@@ -453,7 +453,7 @@
         },
         "inputs": {
           "default": [],
-          "description": "References of `expr` read at an earlier period, each with its `offset`; the others are read at the same period. Queries need exactly one time dimension.",
+          "description": "References of `expr` read at an earlier period, each with its `offset`; the others are read at the same period. Queries need exactly one time dimension. Give an input an `alias` to read the same metric both shifted and unshifted.",
           "items": {
             "$ref": "#/$defs/OffsetInput"
           },
@@ -680,6 +680,21 @@
           "description": "How far back, such as `1 month` or `7 days`: the value for a period is the input's value for the period that starts that much earlier, at the query's time grain. Only days and months, for now.",
           "title": "Offset",
           "type": "string"
+        },
+        "alias": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "pattern": "^[a-z_][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Name `expr` uses for this shifted read, as `{alias}`, so the expression can also read `metric` at the same period, such as `revenue_prev` for `revenue` read `1 month` earlier (DEC-44). Without it, every `{metric}` in `expr` is shifted.",
+          "title": "Alias"
         }
       },
       "required": [

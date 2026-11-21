@@ -102,7 +102,7 @@ class DependencyGraph:
             elif isinstance(metric, RatioMetric):
                 refs = [metric.numerator, metric.denominator]
             elif isinstance(metric, DerivedMetric):
-                refs = REF_RE.findall(metric.expr)
+                refs = [metric.target(ref) for ref in REF_RE.findall(metric.expr)]
             for ref in refs:
                 kind = "measure" if ref in g.measure_owner else "metric"
                 self._add(f"{kind}:{ref}", me)

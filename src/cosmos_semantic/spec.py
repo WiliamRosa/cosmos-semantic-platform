@@ -203,6 +203,27 @@ class OffsetInput(_Base):
             "grain. Only days and months, for now."
         )
     )
+    alias: Name | None = Field(
+        None,
+        description=(
+            "Name `expr` uses for this shifted read, as `{alias}`, so the expression can also "
+            "read `metric` at the same period, such as `revenue_prev` for `revenue` read "
+            "`1 month` earlier (DEC-44). Without it, every `{metric}` in `expr` is shifted."
+        ),
+    )
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_alias(self, handler) -> dict[str, Any]:
+        # Without an alias the dump (and so the model hash) stays as it was before DEC-44.
+        data = handler(self)
+        if self.alias is None and isinstance(data, dict):
+            data.pop("alias", None)
+        return data
+
+    @property
+    def ref(self) -> str:
+        """The name ``expr`` reads this input by: its alias, or else the metric's name."""
+        return self.alias or self.metric
 
 
 class DerivedMetric(_MetricBase):
@@ -212,13 +233,58 @@ class DerivedMetric(_MetricBase):
         [],
         description=(
             "References of `expr` read at an earlier period, each with its `offset`; the "
-            "others are read at the same period. Queries need exactly one time dimension."
+            "others are read at the same period. Queries need exactly one time dimension. "
+            "Give an input an `alias` to read the same metric both shifted and unshifted."
         ),
     )
 
     def offsets(self) -> dict[str, str]:
-        """Referenced name -> offset, for the references read at an earlier period."""
-        return {i.metric: i.offset for i in self.inputs}
+        """Name used in ``expr`` (an input's alias, or else its metric) -> offset, for the
+        references read at an earlier period."""
+        return {i.ref: i.offset for i in self.inputs}
+
+    def aliases(self) -> dict[str, str]:
+        """Alias -> the metric or measure it reads, for the inputs with an alias (DEC-44)."""
+        return {i.alias: i.metric for i in self.inputs if i.alias}
+
+    def target(self, ref: str) -> str:
+        """The metric or measure a name used in ``expr`` reads: an alias's metric, or the
+        name itself."""
+        return self.aliases().get(ref, ref)
+
+
+def input_problems(metric: DerivedMetric, refs: set[str], taken: set[str]) -> list[str]:
+    """Why the ``inputs`` of a derived metric cannot be read, apart from their offsets: each
+    must be named once, used in ``expr`` (whose references are ``refs``), and an alias must not
+    be the name of a measure or metric in ``taken`` (DEC-18, DEC-44). Empty when they can."""
+    problems: list[str] = []
+    seen: dict[str, OffsetInput] = {}
+    for item in metric.inputs:
+        first = seen.setdefault(item.ref, item)
+        if first is item:
+            continue
+        if item.alias is None and first.alias is None:
+            problems.append(
+                f"`{item.metric}` is listed more than once in `inputs`; to read it at "
+                "several periods, give each input of it an `alias` and read it in `expr` "
+                "by that name"
+            )
+        else:
+            problems.append(f"`{item.ref}` names more than one input; use another `alias`")
+    for item in metric.inputs:
+        if item.alias is not None and item.alias in taken:
+            problems.append(
+                f"alias `{item.alias}` is already the name of a measure or metric; choose "
+                f"another, so `{{{item.alias}}}` in `expr` reads one thing"
+            )
+        elif item.ref not in refs:
+            if item.alias is None:
+                problems.append(f"input `{item.metric}` is not referenced in `expr`")
+            else:
+                problems.append(
+                    f"alias `{item.alias}` (input `{item.metric}`) is not referenced in `expr`"
+                )
+    return problems
 
 
 # Aggregations whose per-period values combine over a rolling window or a running (to-date)

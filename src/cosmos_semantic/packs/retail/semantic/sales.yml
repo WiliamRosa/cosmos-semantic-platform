@@ -191,6 +191,16 @@ metrics:
     owner: controllership
     expr: "({revenue} - {revenue_prev_month}) / {revenue_prev_month}"
     description: Revenue growth over the month before (null when that month has no revenue)
+  - name: revenue_yoy_growth
+    type: derived
+    owner: controllership
+    expr: "({revenue} - {revenue_year_before}) / {revenue_year_before}"
+    inputs:
+      - metric: revenue
+        offset: 12 months
+        alias: revenue_year_before
+    description: >-
+      Revenue growth over the same period a year before (null when that period has no revenue)
   - name: order_count_7_days_earlier
     type: derived
     owner: controllership
