@@ -23,7 +23,7 @@ import pyarrow as pa
 from cosmos_semantic.compiler import SemanticGraph
 from cosmos_semantic.expressions import REF_RE
 from cosmos_semantic.ontology import Glossary, rule_logic, run_rule_tests
-from cosmos_semantic.planner import CompiledQuery, Principal, QueryRequest
+from cosmos_semantic.planner import CompiledQuery, Principal, QueryRequest, QueryTrace
 from cosmos_semantic.spec import (
     CumulativeMetric,
     DerivedMetric,
@@ -122,7 +122,8 @@ class EvidenceBuilder:
         trace = compiled.trace
         caveats = [REPRODUCIBILITY_CAVEAT]
         metrics = [
-            self._metric(name) | {"time": self.time(name, request)} for name in request.metrics
+            self._metric(name) | {"time": self.time(name, request, trace)}
+            for name in request.metrics
         ]
         for item in trace.one_to_many:
             what = ", ".join(item["dimensions"]) or "filters " + ", ".join(item["filters"])
@@ -263,7 +264,9 @@ class EvidenceBuilder:
             entry["reconciliation"] = {"abs_tolerance": abs_tol, "rel_tolerance": rel_tol}
         return entry
 
-    def time(self, name: str, request: QueryRequest) -> dict[str, Any] | None:
+    def time(
+        self, name: str, request: QueryRequest, trace: QueryTrace | None = None
+    ) -> dict[str, Any] | None:
         """The time semantics of a cumulative or offset metric (DEC-37), None for the others.
 
         ``kind`` is ``grain_to_date`` (``period`` null for a running total over all time),
@@ -272,7 +275,11 @@ class EvidenceBuilder:
         are the request's time dimension and its grain. ``filters_applied`` says when the
         request's ``filters`` and the row filters restrict the rows: ``before`` the window
         or shift, so a filter on the time dimension also leaves out the earlier periods a
-        window or offset would read.
+        window or offset would read; or, for a rolling window (DEC-34), ``time_after``: the
+        filters on the time dimension choose the output days and the window still reads the
+        N - 1 days before them, while the other filters restrict the facts first. A rolling
+        window is ``before`` only when ``trace`` (the query's) shows a filter on its time
+        dimension whose shape the planner could not split.
         """
         g = self.graph
         metric = g.metrics.get(name) if name not in g.measure_owner else None
@@ -293,10 +300,14 @@ class EvidenceBuilder:
         refs = [g.resolve_dimension(d) for d in request.dimensions]
         times = [r for r in refs if g.dimension(r).type == "time"]
         ref = times[0] if len(times) == 1 else None
+        applied = "before"
+        if time["kind"] == "window":
+            split = trace.window_filters.get(name) if trace else None
+            applied = "before" if split and split["before"] else "time_after"
         return time | {
             "time_dimension": request.dimensions[refs.index(ref)] if ref else None,
             "query_grain": ref.grain if ref else None,
-            "filters_applied": "before",
+            "filters_applied": applied,
         }
 
     def _shifts(self, name: str, seen: frozenset[str] = frozenset()) -> list[dict[str, str]]:

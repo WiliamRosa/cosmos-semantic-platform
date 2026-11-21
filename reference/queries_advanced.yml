@@ -528,40 +528,43 @@ cases:
           ON o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
         GROUP BY d.dd
 
+  # A filter on the window's time dimension chooses the output days; each day's window still
+  # reads the 6 days before it, from facts the filter leaves out (DEC-34). Other filters apply
+  # to the facts first.
   - id: A30
     category: tempo
     phase: 3
-    title: Rolling 7-day revenue by status and day, over the last 45 days only
+    title: Rolling 7-day revenue by status and day over the last 45 days, with full windows
     request:
       metrics: [revenue_rolling_7_days, revenue]
       dimensions: [orders.status, orders.ordered_at__day]
       filters: ["{orders.ordered_at} >= CURRENT_DATE - INTERVAL '45' DAY"]
     sql: |
       WITH f AS (
-        SELECT status, ordered_at, amount FROM public.orders
+        SELECT status, ordered_at FROM public.orders
         WHERE ordered_at >= CURRENT_DATE - INTERVAL '45' DAY
       )
       SELECT d.status AS orders__status, d.dd AS orders__ordered_at__day,
-             SUM(f.amount) AS revenue_rolling_7_days,
-             SUM(CASE WHEN f.ordered_at >= d.dd THEN f.amount END) AS revenue
+             SUM(o.amount) AS revenue_rolling_7_days,
+             SUM(CASE WHEN o.ordered_at >= d.dd THEN o.amount END) AS revenue
       FROM (SELECT DISTINCT status, DATE_TRUNC('day', ordered_at) AS dd FROM f) d
-      JOIN f
-        ON f.status = d.status
-        AND f.ordered_at >= d.dd - INTERVAL '6' DAY AND f.ordered_at < d.dd + INTERVAL '1' DAY
+      JOIN public.orders o
+        ON o.status = d.status
+        AND o.ordered_at >= d.dd - INTERVAL '6' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
       GROUP BY d.status, d.dd
     sql_by_dialect:
       tsql: |
         WITH f AS (
-          SELECT status, ordered_at, amount FROM public.orders
+          SELECT status, ordered_at FROM public.orders
           WHERE ordered_at >= DATEADD(day, -45, CAST(GETDATE() AS DATE))
         )
         SELECT d.status AS orders__status, d.dd AS orders__ordered_at__day,
-               SUM(f.amount) AS revenue_rolling_7_days,
-               SUM(CASE WHEN f.ordered_at >= d.dd THEN f.amount END) AS revenue
+               SUM(o.amount) AS revenue_rolling_7_days,
+               SUM(CASE WHEN o.ordered_at >= d.dd THEN o.amount END) AS revenue
         FROM (SELECT DISTINCT status, DATETRUNC(day, ordered_at) AS dd FROM f) d
-        JOIN f
-          ON f.status = d.status
-          AND f.ordered_at >= DATEADD(day, -6, d.dd) AND f.ordered_at < DATEADD(day, 1, d.dd)
+        JOIN public.orders o
+          ON o.status = d.status
+          AND o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
         GROUP BY d.status, d.dd
 
   # -- Cumulative metrics over min/max measures; refused grains (DEC-21) -----
@@ -930,3 +933,193 @@ cases:
       dimensions: [orders.status]
       metric_filters: ["{order_count} > 10"]
     expect_error: QueryError
+
+  # -- Date filters do not cut rolling windows short (DEC-34) ----------------
+  # The hand-written SQL picks the days the filter keeps, then reads each day's whole window
+  # from the facts that pass the other filters only. Upper bounds need nothing earlier.
+  - id: A44
+    category: tempo
+    phase: 3
+    title: Rolling 7-day revenue of completed orders by day, between two dates
+    request:
+      metrics: [revenue_rolling_7_days]
+      dimensions: [orders.ordered_at__day]
+      filters:
+        - "{orders.ordered_at} BETWEEN CURRENT_DATE - INTERVAL '60' DAY AND CURRENT_DATE - INTERVAL '30' DAY"
+        - "{orders.status} = 'completed'"
+    sql: |
+      WITH c AS (SELECT ordered_at, amount FROM public.orders WHERE status = 'completed')
+      SELECT d.dd AS orders__ordered_at__day, SUM(c.amount) AS revenue_rolling_7_days
+      FROM (
+        SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM c
+        WHERE ordered_at BETWEEN CURRENT_DATE - INTERVAL '60' DAY
+                             AND CURRENT_DATE - INTERVAL '30' DAY
+      ) d
+      JOIN c ON c.ordered_at >= d.dd - INTERVAL '6' DAY AND c.ordered_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.dd
+    sql_by_dialect:
+      tsql: |
+        WITH c AS (SELECT ordered_at, amount FROM public.orders WHERE status = 'completed')
+        SELECT d.dd AS orders__ordered_at__day, SUM(c.amount) AS revenue_rolling_7_days
+        FROM (
+          SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM c
+          WHERE ordered_at BETWEEN DATEADD(day, -60, CAST(GETDATE() AS DATE))
+                               AND DATEADD(day, -30, CAST(GETDATE() AS DATE))
+        ) d
+        JOIN c
+          ON c.ordered_at >= DATEADD(day, -6, d.dd) AND c.ordered_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.dd
+
+  # A date column, a range written as one filter (AND), a 30-day window, null segments and a
+  # row filter: the row filter still applies to the facts first.
+  - id: A45
+    category: tempo
+    phase: 3
+    title: Rolling 30-day count by segment and day for a date range, under a row filter
+    request:
+      metrics: [customers_rolling_30_days]
+      dimensions: [customers.segment, customers.last_order_at__day]
+      filters:
+        - "{customers.last_order_at} >= CURRENT_DATE - INTERVAL '120' DAY AND {customers.last_order_at} < CURRENT_DATE - INTERVAL '60' DAY"
+    user: { region: Northeast }
+    sql: |
+      WITH c AS (
+        SELECT segment, last_order_at FROM public.customers WHERE region = 'Northeast'
+      )
+      SELECT d.segment AS customers__segment, d.dd AS customers__last_order_at__day,
+             SUM(CASE WHEN c.last_order_at IS NOT NULL THEN 1 END) AS customers_rolling_30_days
+      FROM (
+        SELECT DISTINCT segment, DATE_TRUNC('day', last_order_at) AS dd FROM c
+        WHERE last_order_at >= CURRENT_DATE - INTERVAL '120' DAY
+          AND last_order_at < CURRENT_DATE - INTERVAL '60' DAY
+      ) d
+      LEFT JOIN c
+        ON (c.segment = d.segment OR (c.segment IS NULL AND d.segment IS NULL))
+        AND c.last_order_at >= d.dd - INTERVAL '29' DAY
+        AND c.last_order_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.segment, d.dd
+    sql_by_dialect:
+      tsql: |
+        WITH c AS (
+          SELECT segment, last_order_at FROM public.customers WHERE region = 'Northeast'
+        )
+        SELECT d.segment AS customers__segment, d.dd AS customers__last_order_at__day,
+               SUM(CASE WHEN c.last_order_at IS NOT NULL THEN 1 END) AS customers_rolling_30_days
+        FROM (
+          SELECT DISTINCT segment, DATETRUNC(day, last_order_at) AS dd FROM c
+          WHERE last_order_at >= DATEADD(day, -120, CAST(GETDATE() AS DATE))
+            AND last_order_at < DATEADD(day, -60, CAST(GETDATE() AS DATE))
+        ) d
+        LEFT JOIN c
+          ON (c.segment = d.segment OR (c.segment IS NULL AND d.segment IS NULL))
+          AND c.last_order_at >= DATEADD(day, -29, d.dd)
+          AND c.last_order_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.segment, d.dd
+
+  # An IN list of days at day grain: each listed day with facts is a row with its whole window.
+  # The hand-written SQL selects the days by range, not by truncating.
+  - id: A46
+    category: tempo
+    phase: 3
+    title: Rolling 7-day minimum on two listed days
+    request:
+      metrics: [smallest_order_rolling_7_days]
+      dimensions: [orders.ordered_at__day]
+      filters:
+        - "{orders.ordered_at__day} IN (CURRENT_DATE - INTERVAL '10' DAY, CURRENT_DATE - INTERVAL '20' DAY)"
+    sql: |
+      SELECT d.dd AS orders__ordered_at__day, MIN(o.amount) AS smallest_order_rolling_7_days
+      FROM (
+        SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM public.orders
+        WHERE (ordered_at >= CURRENT_DATE - INTERVAL '10' DAY
+               AND ordered_at < CURRENT_DATE - INTERVAL '9' DAY)
+           OR (ordered_at >= CURRENT_DATE - INTERVAL '20' DAY
+               AND ordered_at < CURRENT_DATE - INTERVAL '19' DAY)
+      ) d
+      JOIN public.orders o
+        ON o.ordered_at >= d.dd - INTERVAL '6' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.dd
+    sql_by_dialect:
+      tsql: |
+        SELECT d.dd AS orders__ordered_at__day, MIN(o.amount) AS smallest_order_rolling_7_days
+        FROM (
+          SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM public.orders
+          WHERE (ordered_at >= DATEADD(day, -10, CAST(GETDATE() AS DATE))
+                 AND ordered_at < DATEADD(day, -9, CAST(GETDATE() AS DATE)))
+             OR (ordered_at >= DATEADD(day, -20, CAST(GETDATE() AS DATE))
+                 AND ordered_at < DATEADD(day, -19, CAST(GETDATE() AS DATE)))
+        ) d
+        JOIN public.orders o
+          ON o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.dd
+
+  # A filter shape the planner cannot split (NOT) keeps the behaviour before DEC-34: it
+  # restricts the facts first, so the first days of the range see only the filtered facts.
+  - id: A47
+    category: tempo
+    phase: 3
+    title: A NOT filter on the time dimension still cuts the first windows of the range
+    request:
+      metrics: [revenue_rolling_7_days]
+      dimensions: [orders.ordered_at__day]
+      filters: ["NOT ({orders.ordered_at} < CURRENT_DATE - INTERVAL '45' DAY)"]
+    sql: |
+      WITH f AS (
+        SELECT ordered_at, amount FROM public.orders
+        WHERE ordered_at >= CURRENT_DATE - INTERVAL '45' DAY
+      )
+      SELECT d.dd AS orders__ordered_at__day, SUM(f.amount) AS revenue_rolling_7_days
+      FROM (SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM f) d
+      JOIN f ON f.ordered_at >= d.dd - INTERVAL '6' DAY AND f.ordered_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.dd
+    sql_by_dialect:
+      tsql: |
+        WITH f AS (
+          SELECT ordered_at, amount FROM public.orders
+          WHERE ordered_at >= DATEADD(day, -45, CAST(GETDATE() AS DATE))
+        )
+        SELECT d.dd AS orders__ordered_at__day, SUM(f.amount) AS revenue_rolling_7_days
+        FROM (SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM f) d
+        JOIN f
+          ON f.ordered_at >= DATEADD(day, -6, d.dd) AND f.ordered_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.dd
+
+  # An upper bound inside a day on the timestamp column (12:00, 22 days ago): that day is kept
+  # (it has orders before noon) and its window still holds its orders after noon. The lower
+  # bound is at midnight. `CAST(... AS DATETIME)` keeps the hour arithmetic valid in SQL
+  # Server, where a DATE takes no hours.
+  - id: A48
+    category: tempo
+    phase: 3
+    title: Rolling 7-day revenue and minimum up to noon of a day, with that day's window whole
+    request:
+      metrics: [revenue_rolling_7_days, smallest_order_rolling_7_days]
+      dimensions: [orders.ordered_at__day]
+      filters:
+        - "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '40' DAY"
+        - "{orders.ordered_at} <= CAST(CURRENT_DATE AS DATETIME) - INTERVAL '516' HOUR"
+    sql: |
+      WITH f AS (
+        SELECT ordered_at FROM public.orders
+        WHERE ordered_at >= CURRENT_DATE - INTERVAL '40' DAY
+          AND ordered_at <= CAST(CURRENT_DATE AS TIMESTAMP) - INTERVAL '516' HOUR
+      )
+      SELECT d.dd AS orders__ordered_at__day, SUM(o.amount) AS revenue_rolling_7_days,
+             MIN(o.amount) AS smallest_order_rolling_7_days
+      FROM (SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM f) d
+      JOIN public.orders o
+        ON o.ordered_at >= d.dd - INTERVAL '6' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.dd
+    sql_by_dialect:
+      tsql: |
+        WITH f AS (
+          SELECT ordered_at FROM public.orders
+          WHERE ordered_at >= DATEADD(day, -40, CAST(GETDATE() AS DATE))
+            AND ordered_at <= DATEADD(hour, -516, CAST(CAST(GETDATE() AS DATE) AS DATETIME2))
+        )
+        SELECT d.dd AS orders__ordered_at__day, SUM(o.amount) AS revenue_rolling_7_days,
+               MIN(o.amount) AS smallest_order_rolling_7_days
+        FROM (SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM f) d
+        JOIN public.orders o
+          ON o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.dd

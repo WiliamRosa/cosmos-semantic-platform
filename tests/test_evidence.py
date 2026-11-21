@@ -180,7 +180,8 @@ def test_offset_formula_names_the_earlier_period(graph):
 
 def test_cumulative_and_offset_metrics_carry_a_time_block(graph, connector, tmp_path):
     """Cumulative and offset metrics state their time semantics as fields (DEC-37), not only
-    in the formula text; the request's filters apply before the window or shift today."""
+    in the formula text; the request's filters apply before a running total or a shift, and a
+    filter on the time dimension chooses a rolling window's output days (DEC-34)."""
     service = make_service(graph, connector, tmp_path)
 
     def times(request: QueryRequest) -> dict:
@@ -222,7 +223,7 @@ def test_cumulative_and_offset_metrics_carry_a_time_block(graph, connector, tmp_
         "days": 7,
         "time_dimension": "orders.ordered_at__day",
         "query_grain": "day",
-        "filters_applied": "before",
+        "filters_applied": "time_after",
     }
     assert found["order_count_7_days_earlier"]["shifts"] == [
         {"metric": "order_count_7_days_earlier", "input": "order_count", "offset": "7 days"}
@@ -243,11 +244,11 @@ def test_time_block_is_null_for_metrics_without_time_semantics(graph):
     ]
 
 
-def test_filters_applied_before_matches_the_planner(graph, duckdb_connector, tmp_path):
-    """`filters_applied: "before"` (DEC-37) is what the planner does: a filter on the time
-    dimension also removes the earlier periods an offset or a rolling window reads. DEC-34
-    changes this order for rolling windows; when it does, this test fails and the field must
-    change with it."""
+def test_filters_applied_matches_the_planner(graph, duckdb_connector, tmp_path):
+    """`filters_applied` (DEC-37) is what the planner does. `before`: a filter on the time
+    dimension also removes the earlier periods an offset reads. `time_after` (DEC-34): a
+    rolling window still reads the days before the filtered range; a filter shape the planner
+    cannot split (here `NOT`) keeps `before` and cuts the window."""
     service = make_service(graph, duckdb_connector, tmp_path)
 
     def rows(metrics, dimension, filters=()):
@@ -276,18 +277,27 @@ def test_filters_applied_before_matches_the_planner(graph, duckdb_connector, tmp
     assert first["revenue"] is not None
     assert first["revenue_prev_month"] is None
 
-    # Window: a day whose 7-day window reaches earlier revenue sums only its own day once the
-    # filter starts there.
+    # Window: a day whose 7-day window reaches earlier revenue keeps its whole window once the
+    # filter starts there, and sums only its own day under a filter that cannot be split.
     day_col = "orders.ordered_at__day"
-    unfiltered, _ = rows(["revenue", "revenue_rolling_7_days"], day_col)
-    day = next(
-        key(r["orders__ordered_at__day"])
+    unfiltered, times = rows(["revenue", "revenue_rolling_7_days"], day_col)
+    assert times["revenue_rolling_7_days"]["filters_applied"] == "time_after"
+    full = next(
+        r
         for r in unfiltered
         if r["orders__ordered_at__day"] is not None
         and r["revenue"] is not None
         and r["revenue_rolling_7_days"] > r["revenue"] + 0.005
     )
+    day = key(full["orders__ordered_at__day"])
     filtered, times = rows(["revenue", "revenue_rolling_7_days"], day_col, since(day))
+    assert times["revenue_rolling_7_days"]["filters_applied"] == "time_after"
+    first = next(r for r in filtered if key(r["orders__ordered_at__day"]) == day)
+    assert first["revenue_rolling_7_days"] == pytest.approx(full["revenue_rolling_7_days"])
+    assert first["revenue"] == pytest.approx(full["revenue"])
+
+    unsplit = [f"NOT ({{orders.ordered_at}} < DATE '{day}')"]
+    filtered, times = rows(["revenue", "revenue_rolling_7_days"], day_col, unsplit)
     assert times["revenue_rolling_7_days"]["filters_applied"] == "before"
     first = next(r for r in filtered if key(r["orders__ordered_at__day"]) == day)
     assert first["revenue_rolling_7_days"] == pytest.approx(first["revenue"])

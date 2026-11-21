@@ -123,6 +123,10 @@ def adapt(tree: exp.Expression, dialect: str) -> exp.Expression:
                 amount = exp.Mul(this=exp.Paren(this=amount), expression=exp.Literal.number(factor))
             interval = exp.Anonymous(this=function, expressions=[amount, exp.Literal.string(unit)])
             return exp.Add(this=sub(node.this), expression=interval)
+        if isinstance(node, exp.Cast) and node.to.is_type(exp.DataType.Type.DATETIME):
+            # Oracle has no DATETIME; its TIMESTAMP holds a date and a time of day, as
+            # DATETIME does elsewhere (a request filter such as `CAST(CURRENT_DATE AS DATETIME)`).
+            return exp.Cast(this=sub(node.this), to=exp.DataType.build("timestamp"))
         if isinstance(node, exp.Select) and node.args.get("group"):
             _expand_group_positions(node)
         return node
