@@ -6,12 +6,14 @@ Only the YAML is read; the dbt project is never executed. ``ref('x')`` becomes t
 
 Export: the legacy spec, which MetricFlow still reads. One semantic model per model with
 entities, dimensions and measures (each measure also a metric, ``create_metric``), simple,
-ratio and derived metrics (offset inputs as ``offset_window``), and cumulative metrics with a
-rolling window in days (``window`` in ``cumulative_type_params``); filters become
-``{{ Dimension('e__d') }}``. Division in derived metrics and AVG are written with a ``1e0 *`` factor, as in the Cube export.
-``import_dbt`` reads the export back with the same numbers in Cosmos. The export fails closed on
-row filters and sensitivity, and on metrics it cannot carry (running totals, filters on a
-time dimension, a business rule or ``$user``), unless the caller accepts the loss. Business rules,
+ratio and derived metrics (offset inputs as ``offset_window``), cumulative metrics with a
+rolling window in days (``window`` in ``cumulative_type_params``) and running totals since the
+start of a period over ``sum`` and ``count`` measures (``grain_to_date``, with
+``period_agg: last``); filters become ``{{ Dimension('e__d') }}``. Division in derived metrics
+and AVG are written with a ``1e0 *`` factor, as in the Cube export. ``import_dbt`` reads the
+export back with the same numbers in Cosmos. The export fails closed on row filters and
+sensitivity, and on metrics it cannot carry (other running totals, filters on a time dimension,
+a business rule or ``$user``), unless the caller accepts the loss. Business rules,
 the glossary and the business context are not exported yet; each one present is a warning.
 """
 
@@ -25,10 +27,12 @@ import sqlglot
 import yaml
 from sqlglot import exp
 
+from cosmos_semantic.compiler import TIME_GRAINS
 from cosmos_semantic.errors import QueryError
 from cosmos_semantic.expressions import REF_RE, USER_RE
 from cosmos_semantic.interchange import ExportResult, ImportResult, read_yaml_files
 from cosmos_semantic.interchange.cube import (
+    _TO_DATE_AGGS,
     _plural,
     real_division,
     refuse_policy_loss,
@@ -794,14 +798,10 @@ class _DbtWriter:
 
     def _cumulative(self, metric: CumulativeMetric) -> dict[str, Any]:
         """A rolling window in days: MetricFlow's ``window`` covers the days D - (N - 1) to D
-        of ``metric_time``, as the planner's does. Running totals wait for a later slice."""
+        of ``metric_time``, as the planner's does. Running totals since the start of a period
+        are ``_to_date``."""
         if metric.grain_to_date:
-            # At a grain coarser than the to-date period MetricFlow returns a value, while the
-            # engine refuses the query (DEC-21).
-            raise _NotExported(
-                f"it is a running total (`grain_to_date: {metric.grain_to_date}`), and the dbt "
-                "export does not carry it yet"
-            )
+            return self._to_date(metric)
         if not metric.window:
             raise _NotExported(
                 "it is a running total without a window, and the dbt export does not carry it yet"
@@ -837,6 +837,58 @@ class _DbtWriter:
         )
         window = f"{days} day" if days == 1 else f"{days} days"
         params = {"measure": metric.measure, "cumulative_type_params": {"window": window}}
+        return {"type": "cumulative", "type_params": params}
+
+    def _to_date(self, metric: CumulativeMetric) -> dict[str, Any]:
+        """A ``grain_to_date`` running total of a ``sum`` or ``count`` measure (DEC-31).
+
+        MetricFlow joins each day of its time spine to the facts from the start of that day's
+        period (``date_trunc``) up to the day, both included: by day, the planner's running sum
+        of the daily values. At a coarser query grain MetricFlow computes by day and keeps one
+        value per bucket with ``period_agg``; ``last`` keeps the bucket's last day, the total
+        from the start of the period to the end of the bucket, which is the planner's running
+        sum of per-bucket values. MetricFlow's default, ``first``, keeps the first day."""
+        node, measure = self.graph.measure(metric.measure)
+        if measure.agg not in _TO_DATE_AGGS:
+            raise _NotExported(
+                f"it is a running total over a measure that aggregates with `{measure.agg}`, "
+                "and the dbt export carries running totals of `sum` and `count` measures only"
+            )
+        owner, spec = node.spec.name, node.spec
+        times = [d.name for d in spec.dimensions if d.type == "time"]
+        if not times:
+            raise _NotExported(
+                f"its measure's model `{owner}` has no time dimension for MetricFlow to "
+                "accumulate over"
+            )
+        period = metric.grain_to_date
+        # The grains the planner accepts (``to_date_grain_problem``), hour aside: dbt groups
+        # the exported time dimensions by day at the finest.
+        fits = [
+            g
+            for g in TIME_GRAINS[1 : TIME_GRAINS.index(period) + 1]
+            if g != "week" or period == "week"
+        ]
+        grains = fits[0] if len(fits) == 1 else f"{', '.join(fits[:-1])} or {fits[-1]}"
+        others = ", ".join(f"`{owner}.{t}`" for t in times[1:])
+        self.warnings.append(
+            f"metrics.{metric.name}: MetricFlow accumulates over `metric_time`, which is "
+            f"`{owner}.{times[0]}`; by that dimension at {grains} grain the numbers are the "
+            "engine's on the periods with facts. MetricFlow also returns periods without facts "
+            f"after the first fact of a {period} and the grains the engine refuses, and a time "
+            f"constraint that starts inside a {period} does not cut its total, while the engine "
+            "filters the facts first"
+            + (
+                f"; queried by {others}, the engine accumulates over that dimension instead, "
+                "which MetricFlow does not"
+                if others
+                else ""
+            )
+        )
+        params = {
+            "measure": metric.measure,
+            "cumulative_type_params": {"grain_to_date": period, "period_agg": "last"},
+        }
         return {"type": "cumulative", "type_params": params}
 
     def _derived(self, metric) -> dict[str, Any]:

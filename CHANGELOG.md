@@ -26,6 +26,14 @@ format or the API; such changes are listed under **Changed**.
   (A35 to A38) with the hand-written SQL's numbers, and offsets of 1, 7 and 14 days and 1, 3
   and 12 months over two models return the native numbers at every grain, on DuckDB and every
   database configured in CI.
+- A query explorer in the console (DEC-41), the read-only first slice of the phase-4 playground:
+  pick a metric, dimensions, a time dimension and grain, filters (a dimension, an operator and a
+  value; never SQL) and business rules, then run it or only show its SQL. It shows the result
+  table, the generated SQL and the evidence envelope: rules, row filters and user context,
+  fingerprints and caveats, with a link to the audited answer. It calls `POST /v1/query` and
+  `POST /v1/sql` with the console's credential, so the same row filters apply and every run is
+  audited like any API query. It is in the sidebar and in `Ctrl+K`, in English and Portuguese;
+  the public demo explains that it needs `cosmos serve`.
 - A social media agent for the project's LinkedIn page ([ADR 0014](docs/decisions/0014-social-media-agent.md)):
   on weekday eves it opens one pull request labelled `social` with the next business day's post, its
   visual and the source of every claim, under `marketing/linkedin/` (playbook, page copy, brand assets).
@@ -51,6 +59,26 @@ format or the API; such changes are listed under **Changed**.
   test checks them against hand-written SQL and a model of DAX by day, week, month, quarter,
   year and by month and buyer, on DuckDB and every database configured in CI.
 
+- `cosmos export dbt` writes running totals since the start of a period (DEC-31): a cumulative
+  metric with `grain_to_date` over a `sum` or `count` measure becomes a MetricFlow `cumulative`
+  metric with `cumulative_type_params: {grain_to_date: <period>, period_agg: last}`, which
+  `cosmos import dbt` reads back as the same metric, so the example's `revenue_year_to_date`
+  and `revenue_month_to_date` no longer need `--allow-metric-loss`. MetricFlow sums the facts
+  from the start of each day's period up to the day, and `period_agg: last` keeps each coarser
+  bucket's last day (MetricFlow's default, `first`, would keep its first day), so by the
+  model's `agg_time_dimension` at day grain, and at every grain the engine accepts for the
+  period, the buckets both return have the same numbers. A warning per metric says so and
+  lists where they differ: MetricFlow also returns days after the first fact of a period that
+  have no facts, answers the grains the engine refuses (coarser than the period, DEC-21, and
+  weeks under a month, quarter or year, DEC-28), reads the facts from the start of the period
+  when a time constraint starts inside it while the engine filters first, and always
+  accumulates over `metric_time`. Running totals over `min` or `max` measures, without a period,
+  or over a model without a time dimension stay refused, each with its reason. The re-imported
+  example answers 30 reference queries (52 with its policies), A08, A09, A32 and A39 among them,
+  and running totals for every period over `sum` and `count` measures of two models return the
+  native numbers at every grain the planner accepts, with another dimension and with a time
+  filter. The planner and the SQL of every request are unchanged
+  ([interoperability](docs/interoperability.md#exporting-dbt)).
 - Structured time semantics in the evidence (DEC-37): each entry of `metrics` carries a `time`
   block for cumulative and offset metrics (null for the others), so the time logic is no longer
   only inside the `formula` text. It holds `kind` (`grain_to_date` with its `period`, null for a
