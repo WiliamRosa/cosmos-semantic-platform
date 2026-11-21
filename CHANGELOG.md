@@ -36,8 +36,14 @@ format or the API; such changes are listed under **Changed**.
   it), `entrypoint.sh` falls back to `--allow-anonymous` until `COSMOS_OIDC_ISSUER` is set, and
   `main.bicep` provisions a scale-to-zero Container App, a Key Vault, and a user-assigned
   managed identity with "Key Vault Secrets User" on it. `createUiDefinition.json` adds one
-  wizard step for Microsoft Entra ID wiring. Not done: a production `connections.yml` wired to
-  Key Vault secrets, and the Partner Center listing itself.
+  wizard step for Microsoft Entra ID wiring. Validated end-to-end in a real subscription
+  (ADR 0015's 2026-11-21 update): image build and push, Bicep deploy, and the actual wizard and
+  post-deploy overview/side-menu chrome via a private Service Catalog Managed Application. Fixed
+  along the way: the `AcrPull` role assignment now targets the registry's own resource group
+  through `acr-pull-role.bicep` (a module; it previously defaulted to the deployment's own
+  resource group, granting nothing useful), and a new `.dockerignore` keeps the build context
+  from including `.venv`. Not done: a production `connections.yml` wired to Key Vault secrets,
+  and the Partner Center listing itself.
 - `cosmos export dbt` and `cosmos import dbt` carry offsets as MetricFlow's `offset_window`
   (DEC-36). The export writes a derived metric's `inputs: [{metric, offset}]` as the input's
   `offset_window` in the largest unit that holds the offset (`7 days` as `1 week`, `3 months` as

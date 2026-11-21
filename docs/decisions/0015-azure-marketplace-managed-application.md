@@ -38,3 +38,14 @@ Deferred, revisited only with real listing progress:
 - Building from source instead of PyPI means the demo image can drift from the latest *released* engine; re-pin to a tagged PyPI release once one exists that matches the example model in use.
 - A Managed Application, unlike SaaS, has no built-in per-seat or metered billing tied to actual usage inside the deployed instance; Marketplace billing here is limited to a flat "Get It Now" subscription or usage-based fee on top of infrastructure cost, set in Partner Center, not in this template.
 - This does not commit to Marketplace certification, pricing or publishing; those remain separate, explicit decisions.
+
+## Update, 2026-11-21: end-to-end test in a real subscription
+
+Tested the whole path for real: built the image, pushed it to a temporary Azure Container Registry (used only because the publisher's GitHub token lacked `write:packages`; a published offer should still reference a publicly pullable image, so no registry role is needed in the customer's subscription), compiled and deployed `main.bicep` directly, then wrapped it as a private `Microsoft.Solutions/applicationDefinitions` (a Service Catalog Managed Application, visible only in this tenant, not published anywhere) to see the actual Marketplace wizard and the post-deploy overview/side-menu chrome this ADR described.
+
+Two real bugs surfaced and were fixed in `main.bicep`:
+
+- The `AcrPull` role assignment had no explicit `scope`, so it defaulted to the resource group being deployed into rather than the registry's own resource group, granting a permission that pointed nowhere useful. Fixed by moving it into `acr-pull-role.bicep`, a module invoked with `scope: resourceGroup(...)` targeting the registry's actual resource group, the pattern Bicep requires for any cross-resource-group role assignment.
+- The repository had no `.dockerignore`, so building the image sent the whole working tree (including `.venv`, with every optional database connector installed) as build context; a remote `az acr build` stalled uploading it. Added `.dockerignore` restricting the context to what the Dockerfile actually copies.
+
+Both fixes are in this version of `main.bicep`; the CLI command for `az acr build` also needs `--file`/context to stay at the repository root even with the smaller context. A Container App at `minReplicas: 0` takes roughly a minute to cold-start on its first request after a fresh deploy; this is expected, not a failure.

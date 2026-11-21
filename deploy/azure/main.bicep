@@ -21,6 +21,12 @@ param namePrefix string = 'cosmossem'
 @description('Container image reference. Fixed by the publisher; not exposed in the deployment wizard.')
 param containerImage string = 'ghcr.io/wiliamrosa/cosmos-semantic-demo:latest'
 
+@description('Private registry login server (e.g. myregistry.azurecr.io), if containerImage is not publicly pullable. Empty by default: a published offer should reference a public image, so no registry credentials are needed in the customer subscription.')
+param registryServer string = ''
+
+@description('Full ARM resource ID of the private registry (e.g. an Azure Container Registry), used only to grant AcrPull at its actual scope. Required whenever registryServer is set and the registry is an ACR in this same subscription; leave both empty for a public image.')
+param registryResourceId string = ''
+
 @description('Microsoft Entra ID issuer URL for COSMOS_OIDC_ISSUER (e.g. https://login.microsoftonline.com/<tenant-id>/v2.0). Leave empty to deploy in anonymous/test mode.')
 param oidcIssuer string = ''
 
@@ -79,6 +85,22 @@ resource keyVaultSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-0
   }
 }
 
+// AcrPull, granted to the Container App's identity only when registryResourceId
+// is set, so a private registry (e.g. an ACR used while testing) can be
+// pulled from without storing a registry password anywhere. A module because
+// the registry usually lives in a different resource group than this
+// deployment; a role assignment declared inline with no explicit `scope`
+// defaults to the resource group being deployed into, which would grant
+// AcrPull somewhere useless.
+module acrPullRole 'acr-pull-role.bicep' = if (!empty(registryResourceId)) {
+  name: 'acr-pull-role'
+  scope: resourceGroup(split(registryResourceId, '/')[4])
+  params: {
+    registryName: last(split(registryResourceId, '/'))
+    principalId: identity.properties.principalId
+  }
+}
+
 resource containerAppEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: envName
   location: location
@@ -110,6 +132,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8080
         transport: 'http'
       }
+      registries: empty(registryServer) ? [] : [
+        {
+          server: registryServer
+          identity: identity.id
+        }
+      ]
     }
     template: {
       containers: [
@@ -149,6 +177,9 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
+  dependsOn: empty(registryResourceId) ? [] : [acrPullRole]
+  // ^ module reference; Bicep allows depending on a conditional module the
+  // same way it allows depending on a conditional resource.
 }
 
 @description('The public URL of the deployed Cosmos Semantic instance (REST API, MCP server and read-only console).')
