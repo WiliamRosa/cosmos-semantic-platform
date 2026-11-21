@@ -20,3 +20,4 @@ build/
 /console/public/demo-data/
 /console/out-demo/
 .wrangler/
+.dev.vars

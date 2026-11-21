@@ -14,11 +14,13 @@
     { "pattern": "cosmosdata.ai", "custom_domain": true },
     { "pattern": "www.cosmosdata.ai", "custom_domain": true }
   ],
-  // Email Routing must be enabled on cosmosdata.ai, and CONTACT_TO must be an address it
-  // delivers to. run_worker_first lets the Worker redirect www to the apex for every path.
+  // Email Routing must be enabled on cosmosdata.ai. Cloudflare only delivers to a verified
+  // destination address of Email Routing, so the recipient is not kept here: the site workflow
+  // passes it from the CONTACT_TO repository secret (see site/README.md).
+  // run_worker_first lets the Worker redirect www to the apex for every path.
   "send_email": [{ "name": "CONTACT_EMAIL" }],
   "vars": {
-    "CONTACT_TO": "administrator@cosmosdata.ai",
     "CONTACT_FROM": "website@cosmosdata.ai"
-  }
+  },
+  "observability": { "enabled": true }
 }
