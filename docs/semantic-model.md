@@ -154,6 +154,8 @@ Time dimensions accept a grain suffix in requests: `orders.ordered_at__day`, `__
 
 Because the planner aggregates each measure at its own grain before combining them, ratios and derived metrics can use measures from different models without row multiplication.
 
+Every metric also takes the optional fields `description`, `label`, `owner` and `reconciliation` ([reconciliation tolerance](#reconciliation-tolerance)).
+
 #### Period to date
 
 `grain_to_date` accumulates the measure from the start of each `day`, `week`, `month`, `quarter` or `year` up to each row of the request:
@@ -219,6 +221,26 @@ metrics:
 - **Requests.** A metric that reads an offset, directly (`revenue_prev_month`) or through another metric (`revenue_mom_growth`), needs exactly one time dimension in the request.
 - **Supported for now.** Offsets in days and months (`1 day`, `7 days`, `1 month`, `12 months`). Other units (`2 weeks`, `1 year`), an offset of zero, an input not referenced in `expr` or listed twice, an offset of a cumulative metric, and an offset over a metric that has offsets of its own are errors in `cosmos validate` and `cosmos check`; the planner refuses them too. An expression cannot yet read the same reference both shifted and unshifted, so growth is written over a second metric, as above. The Cube export refuses these metrics, and Ossie keeps them only in the Cosmos extension; `cosmos import powerbi` reads `SAMEPERIODLASTYEAR`, `DATEADD` and `PARALLELPERIOD` by month as offsets ([where they differ from DAX](interoperability.md#importing-power-bi)). `cosmos export dbt` writes them as MetricFlow's `offset_window` and `cosmos import dbt` reads it back (DEC-36); MetricFlow (0.210 and later) shifts whole periods at a grain not coarser than the window's unit and each day of its time spine otherwise, so the export writes each offset in the largest unit that holds it, and it returns periods without facts and applies `metric_time` filters after the shift ([where they differ](interoperability.md#offsets)).
 - **SQL.** One aggregate per model and offset, grouped like the others at the query's grain, joined to the spine of dimension values on its period moved forward by the offset (`DATEADD`, `+ INTERVAL`, `NUMTOYMINTERVAL` in Oracle), with plain equality on the period and null-safe equality on the other dimensions.
+
+#### Reconciliation tolerance
+
+`cosmos reconcile` and the reconciliation cases of `cosmos check` compare the governed value of each row with the legacy one. By default they agree only when they are equal up to float noise (an absolute difference of `1e-6` or a relative one of `1e-9`), so a legacy report rounded to cents or to thousands always differs. A metric can declare how close is close enough:
+
+```yaml
+metrics:
+  - name: net_revenue
+    type: derived
+    expr: "{revenue} - {discounts}"
+    reconciliation:
+      abs_tolerance: 0.01     # the finance report rounds to cents
+      rel_tolerance: 0.001    # or is within 0.1% of the governed value
+```
+
+- **Agreement.** A legacy value agrees when it is within `abs_tolerance` of the governed value, or within `rel_tolerance` times the larger of the two (`math.isclose`). A field left out keeps its default, so `abs_tolerance: 0.01` alone still allows the default relative difference of `1e-9`.
+- **Validation.** Each tolerance is a non-negative, finite number; strings, booleans and unknown keys are refused, and `reconciliation` needs at least one of the two fields.
+- **Where it applies.** The tolerance of the reconciled metric decides matched and differing rows in `cosmos reconcile` (against SQL and against another model), the pass or fail of each `cosmos check` case, and so the metric's health. The likely-cause probes compare within it too, so a cause is still found when the legacy report is also rounded. A measure reconciled on its own always uses the default.
+- **What the output states.** The reconcile report has `tolerance` (`abs_tolerance`, `rel_tolerance` and `source`: `metric` or `default`), `rows.within_tolerance` (matched rows that are not equal), `tolerated` (up to five of them) and a `difference` (legacy minus governed) on each example. Each check run case records its `tolerance`, health's `reconciled` and `reconciliation_failed` reasons carry it when it is the metric's own, and the evidence of a query lists it under the metric as `reconciliation`.
+- **Hashes.** A metric without `reconciliation` serializes as before, so the model hash, the generated SQL and the evidence of existing models do not change. Declaring a tolerance changes the model hash (as any change to the model does) but not the SQL.
 
 ### Row filters
 
