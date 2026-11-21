@@ -43,7 +43,7 @@ Databricks is optional and needs a SQL warehouse: set `DATABRICKS_HTTP_PATH`, pl
 
 Snowflake is optional too: run [deploy/snowflake-setup.sql](deploy/snowflake-setup.sql) once with your public key, then set `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PRIVATE_KEY_FILE`, `SNOWFLAKE_ROLE` and `SNOWFLAKE_WAREHOUSE` (or `SNOWFLAKE_CONNECTION_NAME`). The tests load the example data into `SNOWFLAKE_DATABASE` (default `COSMOS_DEMO`).
 
-BigQuery is optional and in preview ([ADR 0015](docs/decisions/0015-bigquery-as-a-data-source.md)). Follow [deploy/bigquery-setup.md](deploy/bigquery-setup.md) for a free sandbox project. Then set `COSMOS_BIGQUERY_PROJECT` and `COSMOS_BIGQUERY_DATASET` (default `cosmos_demo`), log in with `gcloud auth application-default login` or set `COSMOS_BIGQUERY_CREDENTIALS_FILE`, and run `uv run pytest -m bigquery`. Without a project, the local emulator (`--profile bigquery`, `COSMOS_BIGQUERY_ENDPOINT=http://localhost:19050`) checks the SQL against BigQuery's analyzer. A change to the BigQuery dialect still needs the live run before merge.
+BigQuery is optional and in preview ([ADR 0016](docs/decisions/0016-bigquery-as-a-data-source.md)). Follow [deploy/bigquery-setup.md](deploy/bigquery-setup.md) for a free sandbox project. Then set `COSMOS_BIGQUERY_PROJECT` and `COSMOS_BIGQUERY_DATASET` (default `cosmos_demo`), log in with `gcloud auth application-default login` or set `COSMOS_BIGQUERY_CREDENTIALS_FILE`, and run `uv run pytest -m bigquery`. Without a project, the local emulator (`--profile bigquery`, `COSMOS_BIGQUERY_ENDPOINT=http://localhost:19050`) checks the SQL against BigQuery's analyzer. A change to the BigQuery dialect still needs the live run before merge.
 
 ## What every change needs
 

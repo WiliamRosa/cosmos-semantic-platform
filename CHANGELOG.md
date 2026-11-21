@@ -9,7 +9,7 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
-- BigQuery as a data source, in preview (DEC-40, [ADR 0015](docs/decisions/0015-bigquery-as-a-data-source.md)):
+- BigQuery as a data source, in preview (DEC-40, [ADR 0016](docs/decisions/0016-bigquery-as-a-data-source.md)):
   `type: bigquery` with the `bigquery` extra (`google-cloud-bigquery`). It logs in with
   Application Default Credentials or a service account key (`options.credentials_file`),
   `options.maximum_bytes_billed` stops a query that would scan more, and the model's schemas map

@@ -1,4 +1,4 @@
-# ADR 0015: BigQuery as a data source
+# ADR 0016: BigQuery as a data source
 
 - **Status:** accepted
 - **Date:** 2026-11-21

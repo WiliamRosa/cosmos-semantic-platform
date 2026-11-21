@@ -1,6 +1,6 @@
 # BigQuery test project
 
-A free BigQuery sandbox project is enough to run the Cosmos test suite against BigQuery ([ADR 0015](../docs/decisions/0015-bigquery-as-a-data-source.md)). The sandbox needs no billing account. Its limits are 10 GB of storage and 1 TB of queries a month, and tables expire after 60 days. The test data takes a few megabytes.
+A free BigQuery sandbox project is enough to run the Cosmos test suite against BigQuery ([ADR 0016](../docs/decisions/0016-bigquery-as-a-data-source.md)). The sandbox needs no billing account. Its limits are 10 GB of storage and 1 TB of queries a month, and tables expire after 60 days. The test data takes a few megabytes.
 
 ## 1. Create the project
 
