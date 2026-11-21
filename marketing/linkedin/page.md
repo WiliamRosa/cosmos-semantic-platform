@@ -13,13 +13,13 @@ The page has two language versions, the default one and English, and both hold t
 | Tagline | Open-source semantic layer for AI agents: the same number on every database, with the proof in every answer. |
 | Logo | [`brand/logo-400.png`](brand/logo-400.png) |
 | Cover | [`brand/banner-1128x191.png`](brand/banner-1128x191.png) (text starts 330 px from the left, clear of the logo) |
-| Button | Visit website → https://wiliamrosa.github.io/cosmos-semantic-platform/ |
+| Button | Visit website → https://cosmosdata.ai |
 
 ## Details
 
 | Field | Value |
 | --- | --- |
-| Website | https://github.com/WiliamRosa/cosmos-semantic-platform |
+| Website | https://cosmosdata.ai |
 | Industry | Software Development |
 | Company size | 2-10 employees |
 | Type | Self-employed |
@@ -44,5 +44,6 @@ What you get:
 
 Apache 2.0. Install with pip install cosmos-semantic.
 
+Website: https://cosmosdata.ai
 Live demo: https://wiliamrosa.github.io/cosmos-semantic-platform/
 Code and docs: https://github.com/WiliamRosa/cosmos-semantic-platform
