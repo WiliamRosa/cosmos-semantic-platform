@@ -21,7 +21,11 @@ it validates the form (JSON from the page script, or a plain form post without J
 it to `CONTACT_TO` through the Cloudflare Email Routing binding, with the visitor's address as
 Reply-To. Spam guards: a hidden honeypot field, a minimum of three seconds on the page, a
 same-origin check and size limits. Nothing is stored. Email Routing must stay enabled on
-cosmosdata.ai, and `CONTACT_TO` (in `wrangler.jsonc`) must be an address it delivers to.
+cosmosdata.ai. Cloudflare sends only to a *verified destination address* of Email Routing (the
+mailbox that administrator@cosmosdata.ai forwards to), so `CONTACT_TO` comes from the repository
+secret of the same name, passed by the workflow with `wrangler deploy --var`; the address is never
+committed. Failures are logged (Workers observability). For `wrangler dev`, put
+`CONTACT_TO=you@example.com` in `site/.dev.vars`.
 
 The `site` workflow builds on every pull request that touches the site and deploys on `main`.
 It needs the repository secrets `CLOUDFLARE_API_TOKEN` (template "Edit Cloudflare Workers") and
