@@ -6,6 +6,7 @@ ADBC is the default path; SQLAlchemy is the fallback for sources without a matur
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from abc import ABC, abstractmethod
@@ -19,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlglot import exp
 
 from cosmos_semantic.errors import ConnectorError, ModelError
+
+log = logging.getLogger(__name__)
 
 _ENV_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
 
@@ -449,16 +452,22 @@ class TrinoConnector(Connector):
             auth = trino.auth.JWTAuthentication(opts["access_token"])
         elif opts.get("password"):
             auth = trino.auth.BasicAuthentication(opts["user"], opts["password"])
-        session = {
-            "query_max_run_time": f"{int(config.timeout_seconds)}s",
-            **(opts.get("session_properties") or {}),
-        }
+        session = dict(opts.get("session_properties") or {})
+        if "query_max_run_time" in session:
+            raise ModelError(
+                "trino session_properties cannot set query_max_run_time; "
+                "use the source's timeout_seconds"
+            )
+        session["query_max_run_time"] = f"{int(config.timeout_seconds)}s"
+        verify = _trino_verify(opts.get("verify", True))
+        if verify is False:
+            log.warning("trino source: TLS certificate verification is disabled (verify: false)")
         kwargs: dict[str, Any] = {
             "host": opts["host"],
             "user": opts["user"],
             "catalog": opts["catalog"],
             "session_properties": session,
-            "verify": _trino_verify(opts.get("verify", True)),
+            "verify": verify,
             "source": opts.get("source", "cosmos-semantic"),
         }
         for key in ("port", "http_scheme", "roles"):

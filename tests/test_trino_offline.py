@@ -77,6 +77,73 @@ def test_every_reference_query_plans_and_parses_as_trino(graph):
     assert planned >= 50
 
 
+def _is_date(node) -> bool:
+    return isinstance(node, sqlglot.exp.CurrentDate) or (
+        isinstance(node, sqlglot.exp.Cast) and node.to.is_type(sqlglot.exp.DataType.Type.DATE)
+    )
+
+
+def test_no_reference_or_zoo_sql_subtracts_dates():
+    """In Trino a date minus a date is an interval, not a number of days: day numbers are
+    written with DATE_DIFF('day', ...) instead (A37)."""
+    from cosmos_semantic.reconcile import load_zoo
+
+    from .conftest import ROOT
+
+    cases = load_cases(CASES) + load_cases(CASES.with_name("queries_advanced.yml"))
+    sqls = {c.id: c.sql_for("trino") for c in cases}
+    zoo = load_zoo(ROOT / "examples" / "ecommerce" / "divergence_zoo.yml")
+    sqls.update({c.id: c.sql_for("trino") for c in zoo})
+    checked = 0
+    for case_id, sql in sqls.items():
+        if sql is None:
+            continue
+        for sub in sqlglot.parse_one(sql, read="trino").find_all(sqlglot.exp.Sub):
+            assert not (_is_date(sub.this) and _is_date(sub.expression)), case_id
+        checked += 1
+    assert checked >= 50
+    assert "DATE_DIFF('day'" in sqls["A37"]
+
+
+def test_the_check_catches_a_date_minus_a_date():
+    sql = "SELECT CAST(d AS DATE) - DATE '2000-01-01' FROM t"
+    subs = list(sqlglot.parse_one(sql, read="trino").find_all(sqlglot.exp.Sub))
+    assert any(_is_date(s.this) and _is_date(s.expression) for s in subs)
+
+
+def test_plural_interval_units_become_singular():
+    sql = _adapted("SELECT d + INTERVAL '3 days', ordered_at - INTERVAL '2 hours' FROM t")
+    assert "DATE_ADD('DAY', 3, d)" in sql
+    assert "DATE_ADD('HOUR', -2, ordered_at)" in sql
+    assert "DAYS" not in sql and "HOURS" not in sql
+
+
+def test_plural_hours_on_a_date_read_it_as_a_timestamp():
+    sql = _adapted("SELECT CAST('2026-11-20' AS DATE) + INTERVAL '12 hours'")
+    assert sql == "SELECT DATE_ADD('HOUR', 12, CAST(CAST('2026-11-20' AS DATE) AS TIMESTAMP))"
+
+
+def test_hour_grain_truncates_a_timestamp():
+    """Trino refuses DATE_TRUNC('hour', date); the column is read as a TIMESTAMP first."""
+    from sqlglot import exp
+
+    from cosmos_semantic import dialects
+
+    column = exp.column("created_at", table="customers")
+    sql = dialects.trunc(column, "hour", "trino").sql("trino")
+    assert sql == "DATE_TRUNC('HOUR', CAST(customers.created_at AS TIMESTAMP))"
+    assert dialects.trunc(column, "day", "trino").sql("trino") == (
+        "DATE_TRUNC('DAY', customers.created_at)"
+    )
+
+
+def test_hour_grain_in_a_planned_query(graph):
+    sql = _plan(
+        graph, QueryRequest(metrics=["order_count"], dimensions=["orders.ordered_at__hour"])
+    )
+    assert "DATE_TRUNC('HOUR', CAST(orders.ordered_at AS TIMESTAMP))" in sql
+
+
 def test_date_minus_interval_becomes_date_add():
     sql = _adapted("SELECT 1 FROM t WHERE d >= CURRENT_DATE - INTERVAL '45' DAY")
     assert "DATE_ADD('DAY', -45, CURRENT_DATE)" in sql
@@ -202,6 +269,29 @@ def test_queries_stop_at_the_source_timeout(fake_trino):
         "query_max_run_time": "45s",
         "query_priority": 2,
     }
+
+
+def test_session_properties_cannot_lift_the_timeout(fake_trino):
+    config = DataSourceConfig(
+        type="trino",
+        uri="trino://cosmos@localhost:18080/memory",
+        options={"session_properties": {"query_max_run_time": "10h"}},
+    )
+    with pytest.raises(ModelError, match="timeout_seconds"):
+        connect(config)
+    assert fake_trino == []
+
+
+def test_disabled_tls_verification_is_logged_without_values(fake_trino, caplog):
+    config = DataSourceConfig(
+        type="trino",
+        uri="trino://analyst@h:443/c?http_scheme=https",
+        options={"password": "s3cret", "verify": "false"},
+    )
+    with caplog.at_level("WARNING", logger="cosmos_semantic.connectors"):
+        connect(config)
+    assert "verification is disabled" in caplog.text
+    assert "s3cret" not in caplog.text and "analyst" not in caplog.text
 
 
 def test_a_password_uses_basic_authentication_over_https(fake_trino):

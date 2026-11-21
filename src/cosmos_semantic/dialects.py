@@ -71,6 +71,9 @@ def trunc(value: exp.Expression, unit: str, dialect: str) -> exp.Expression:
         unit = "ISO_WEEK"  # SQL Server weeks depend on DATEFIRST; ISO weeks start on Monday
     if unit == "WEEK" and dialect == "bigquery":
         unit = "ISOWEEK"  # BigQuery's WEEK starts on Sunday; ISOWEEK starts on Monday
+    if unit in _TIME_OF_DAY_UNITS and dialect == "trino":
+        # Trino refuses DATE_TRUNC('hour', date); a date read as a time is midnight.
+        value = exp.Cast(this=value, to=exp.DataType.build("TIMESTAMP"))
     return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit))
 
 
@@ -183,17 +186,26 @@ def _bigquery(node: exp.Expression) -> exp.Expression:
 
 
 def _trino(node: exp.Expression) -> exp.Expression:
-    """Trino rewrites: ``DATE_ADD('hour', n, date)`` fails (a ``DATE`` has no time of day), so
-    a date that gets hours, minutes or seconds is cast to ``TIMESTAMP`` first, which is what
-    PostgreSQL does implicitly for ``date + INTERVAL '3' HOUR``."""
-    if (
-        isinstance(node, exp.DateAdd | exp.TsOrDsAdd)
-        and node.text("unit").upper() in ("HOUR", "MINUTE", "SECOND")
-        and _is_date(node.this)
-    ):
-        node = node.copy()
+    """Trino rewrites: units are singular (``INTERVAL '3 days'`` arrives as ``DAYS``, which
+    ``DATE_ADD`` refuses), and ``DATE_ADD('hour', n, date)`` fails (a ``DATE`` has no time of
+    day), so a date that gets hours, minutes or seconds is cast to ``TIMESTAMP`` first, which is
+    what PostgreSQL does implicitly for ``date + INTERVAL '3' HOUR``."""
+    if not (isinstance(node, exp.DateAdd | exp.TsOrDsAdd) and node.text("unit")):
+        return node
+    unit = node.text("unit").upper()
+    singular = unit[:-1] if unit.endswith("S") and unit[:-1] in _DATE_ADD_UNITS else unit
+    to_time = singular in _TIME_OF_DAY_UNITS and _is_date(node.this)
+    if singular == unit and not to_time:
+        return node
+    node = node.copy()
+    node.set("unit", exp.Var(this=singular))
+    if to_time:
         node.set("this", exp.Cast(this=node.this, to=exp.DataType.build("TIMESTAMP")))
     return node
+
+
+_TIME_OF_DAY_UNITS = ("HOUR", "MINUTE", "SECOND")
+_DATE_ADD_UNITS = ("YEAR", "QUARTER", "MONTH", "WEEK", "DAY", *_TIME_OF_DAY_UNITS)
 
 
 # SQLGlot writes TIMESTAMP (without a time zone) as BigQuery's DATETIME.
