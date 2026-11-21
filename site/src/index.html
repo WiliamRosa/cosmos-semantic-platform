@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cosmos Semantic: the semantic layer that makes AI agents get the number right</title>
+  <meta name="description" content="Open-source semantic layer with an ontology at its core. AI agents and apps get the same number on every database, with the proof in every answer. Apache 2.0.">
+  <link rel="canonical" href="https://cosmosdata.ai/">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://cosmosdata.ai/">
+  <meta property="og:title" content="Cosmos Semantic: verifiable numbers for AI agents">
+  <meta property="og:description" content="The same number on every database, with the proof in every answer. Open source, Apache 2.0.">
+  <meta property="og:image" content="https://cosmosdata.ai/assets/social-preview.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="theme-color" content="#0b1220">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Cosmos Semantic",
+   "applicationCategory":"DeveloperApplication","operatingSystem":"Linux, macOS, Windows",
+   "license":"https://www.apache.org/licenses/LICENSE-2.0","url":"https://cosmosdata.ai/",
+   "codeRepository":"https://github.com/WiliamRosa/cosmos-semantic-platform",
+   "offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#top" aria-label="Cosmos Semantic, home">
+        <svg class="brand-logo" viewBox="3 3 26 26" aria-hidden="true">
+          <ellipse cx="16" cy="16" rx="12" ry="4.6" transform="rotate(-24 16 16)" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".55"/>
+          <circle cx="16" cy="16" r="5.5" fill="#38bdf8"/>
+          <circle cx="26.9" cy="11.2" r="1.6" fill="#34d399"/>
+        </svg>
+        <span>Cosmos Semantic</span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+        <a href="#demo">Demo</a>
+        <a href="#start">Quickstart</a>
+        <a href="#news">News</a>
+      </nav>
+      <div class="header-cta">
+        <a class="btn btn-ghost btn-small" href="https://github.com/WiliamRosa/cosmos-semantic-platform" rel="noopener">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+        <a class="btn btn-primary btn-small" href="https://wiliamrosa.github.io/cosmos-semantic-platform/" rel="noopener">Live demo</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="wrap hero-inner">
+        <div class="hero-copy">
+          <a class="pill" href="https://github.com/WiliamRosa/cosmos-semantic-platform/releases/latest" rel="noopener">
+            <span class="dot"></span> <span id="release">v0.4.0</span> released · Apache 2.0
+          </a>
+          <h1>AI agents that get the number right, <em>and prove it.</em></h1>
+          <p class="lead">
+            Cosmos Semantic is an open-source semantic layer with an ontology at its core.
+            Define metrics, business rules and concepts once. Agents ask for a governed metric over
+            MCP instead of guessing SQL, and every answer carries its evidence.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="https://wiliamrosa.github.io/cosmos-semantic-platform/" rel="noopener">Open the live demo</a>
+            <button class="install" type="button" data-copy="pip install cosmos-semantic" aria-label="Copy the install command">
+              <span class="prompt">$</span> pip install cosmos-semantic
+              <span class="copy-label">Copy</span>
+            </button>
+          </div>
+          <p class="hero-note">No install needed for the demo: read-only console, synthetic data.</p>
+        </div>
+        <figure class="hero-media">
+          <video autoplay muted loop playsinline preload="metadata" poster="assets/console-overview.png"
+                 aria-label="The Cosmos Semantic console: metric health, an audited answer, a refused request for personal data, a business process graph">
+            <source src="assets/console-demo.mp4" type="video/mp4">
+          </video>
+          <figcaption>The console, 45 seconds, no sound.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="problem">
+      <div class="wrap problem-inner">
+        <p class="quote">"Revenue" has three definitions. "Active customer" means 60 days to one team and 90 to another.</p>
+        <p>An agent that writes SQL straight over raw tables returns numbers that look right and that nobody can explain. Cosmos Semantic puts the business definitions between the agent and the data.</p>
+      </div>
+    </section>
+
+    <section id="how" class="section">
+      <div class="wrap">
+        <p class="eyebrow">How it works</p>
+        <h2>Define once. Serve everywhere. Prove every answer.</h2>
+        <ol class="steps">
+          <li>
+            <span class="step-n">1</span>
+            <h3>Define</h3>
+            <p>Metrics, dimensions and business rules in YAML with the dbt Semantic Layer vocabulary, a bilingual SKOS glossary, owners and tests. Or import them from dbt, Power BI, Cube and Apache Ossie.</p>
+          </li>
+          <li>
+            <span class="step-n">2</span>
+            <h3>Serve</h3>
+            <p>A native MCP server for AI agents and a REST API for apps. Agents find the concept, ask for the metric and get deterministic SQL. Personal data never reaches them.</p>
+          </li>
+          <li>
+            <span class="step-n">3</span>
+            <h3>Prove</h3>
+            <p>Every answer carries the expanded formula, the rules applied, the row filters, the reference date and hashes. <code>cosmos replay</code> tells whether a number changed, and why.</p>
+          </li>
+        </ol>
+        <div class="terminal" role="img" aria-label="Terminal output of a cosmos query with evidence">
+          <div class="term-bar"><span></span><span></span><span></span></div>
+<pre><span class="c-p">$</span> cosmos query revenue average_order_value --by orders.status --evidence
+orders__status  revenue        average_order_value
+--------------  -------------  -------------------
+pending         1,578,795.78   2,626.95
+canceled        1,518,830.03   2,548.37
+completed       12,562,542.20  2,615.56
+
+<span class="c-k">evidence</span>  q_2eae279c2b6b494da485
+  <span class="c-k">model</span>   edb8d14a70cd1e35  engine 0.1.0
+  <span class="c-k">as of</span>   2026-11-04 (America/New_York)  source local (duckdb)
+  <span class="c-k">metric</span>  revenue = SUM(orders.amount)
+  <span class="c-k">lineage</span> orders
+  <span class="c-k">sql</span>     eb5ca2c843244937  result 451c5e52d6f85089 (3 rows)</pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section section-alt">
+      <div class="wrap">
+        <p class="eyebrow">Features</p>
+        <h2>Built for the questions agents get wrong.</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>Multi-database</h3>
+            <p>One model, the same number on eight databases, checked by the test suite on every change.</p>
+          </article>
+          <article class="card">
+            <h3>Ontology</h3>
+            <p>A bilingual business glossary (SKOS), versioned business rules with owners and tests, and a knowledge graph of teams, systems and processes.</p>
+          </article>
+          <article class="card">
+            <h3>Built for AI agents</h3>
+            <p>A native MCP server, listed in the official MCP registry. Agents ask for governed metrics, and requests for personal data are refused and logged.</p>
+          </article>
+          <article class="card">
+            <h3>Verifiable numbers</h3>
+            <p>Evidence on every answer and replay of any audited query: tell whether a number changed and why.</p>
+          </article>
+          <article class="card">
+            <h3>Reconciliation</h3>
+            <p>Compare a governed metric with the legacy SQL a team already uses, and get the likely cause of each divergence.</p>
+          </article>
+          <article class="card">
+            <h3>Open, no lock-in</h3>
+            <p>Apache 2.0 and its own engine. Import from dbt, Power BI, Cube and Apache Ossie; export to dbt, Cube, Ossie and SKOS.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="databases" class="section">
+      <div class="wrap db-inner">
+        <div>
+          <p class="eyebrow">Multi-database</p>
+          <h2>Same question, same number.</h2>
+          <p class="section-lead">Dialects differ in integer division, rounding, booleans, week numbering and "today". The engine handles them, and an equivalence suite runs the same reference queries on every database in CI.</p>
+        </div>
+        <ul class="dbs" aria-label="Supported databases">
+          <li>Databricks</li><li>Snowflake</li><li>Oracle</li><li>SQL Server</li>
+          <li>PostgreSQL</li><li>MySQL</li><li>MariaDB</li><li>DuckDB</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="demo" class="section section-alt">
+      <div class="wrap">
+        <p class="eyebrow">See it</p>
+        <h2>From <code>pip install</code> to the same number on six databases.</h2>
+        <p class="section-lead">A 90-second narrated walkthrough with captions. Every command output in it is real.</p>
+        <div class="video-frame">
+          <video controls preload="none" poster="assets/walkthrough-poster.jpg">
+            <source src="assets/walkthrough.mp4" type="video/mp4">
+          </video>
+        </div>
+
+        <div class="demo-head">
+          <div>
+            <h3>The live demo console</h3>
+            <p>Read-only, synthetic data. Metric health, audited answers, business processes as graphs, the catalog in business words, and the query explorer.</p>
+          </div>
+          <a class="btn btn-primary" href="https://wiliamrosa.github.io/cosmos-semantic-platform/" rel="noopener">Open full screen</a>
+        </div>
+        <div class="browser">
+          <div class="term-bar"><span></span><span></span><span></span><em>wiliamrosa.github.io/cosmos-semantic-platform</em></div>
+          <iframe id="demo-frame" title="Cosmos Semantic live demo console" loading="lazy"
+                  data-src="https://wiliamrosa.github.io/cosmos-semantic-platform/"></iframe>
+          <button class="frame-load" type="button" id="demo-load">
+            <img src="assets/console-answer.png" alt="" loading="lazy">
+            <span class="btn btn-primary">Load the demo here</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section id="start" class="section">
+      <div class="wrap start-inner">
+        <div>
+          <p class="eyebrow">Quickstart</p>
+          <h2>A governed metric with its evidence in about a minute.</h2>
+          <p class="section-lead">On a local DuckDB file, no server and no account. Add the extras for the databases you use: <code>postgres</code>, <code>sqlserver</code>, <code>mysql</code>, <code>oracle</code>, <code>databricks</code>, <code>snowflake</code>, and <code>server</code> for REST and MCP.</p>
+          <div class="links">
+            <a href="https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md" rel="noopener">Read the quickstart →</a>
+            <a href="https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs" rel="noopener">Documentation →</a>
+            <a href="https://pypi.org/project/cosmos-semantic/" rel="noopener">PyPI →</a>
+          </div>
+        </div>
+        <div class="terminal">
+          <div class="term-bar"><span></span><span></span><span></span>
+            <button class="copy" type="button" data-copy-target="qs">Copy</button></div>
+<pre id="qs"><span class="c-p">$</span> pip install "cosmos-semantic[duckdb,testdata]"
+<span class="c-p">$</span> cosmos init demo && cd demo
+<span class="c-p">$</span> cosmos demo-data
+<span class="c-p">$</span> cosmos query revenue average_order_value --by orders.status --evidence
+<span class="c-p">$</span> cosmos explain rule:active_customer</pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="news" class="section section-alt">
+      <div class="wrap">
+        <div class="news-head">
+          <div>
+            <p class="eyebrow">News</p>
+            <h2>From the Cosmos Semantic page on LinkedIn.</h2>
+          </div>
+          <a class="btn btn-ghost" href="https://www.linkedin.com/company/cosmos-semantic/" rel="noopener">Follow on LinkedIn</a>
+        </div>
+        <div class="grid">
+          <article class="card post">
+            <img src="assets/social-preview.png" alt="The console under the headline Verifiable numbers for AI agents" loading="lazy">
+            <time datetime="2026-11-20">Nov 20, 2026</time>
+            <h3>Meet Cosmos Semantic</h3>
+            <p>An open-source semantic layer that makes AI agents get the number right, and prove it.</p>
+            <a href="https://www.linkedin.com/company/cosmos-semantic/posts/" rel="noopener">Read on LinkedIn →</a>
+          </article>
+          <article class="card post">
+            <img src="assets/console-process.png" alt="A business process as a graph, colored by health" loading="lazy">
+            <time datetime="2026-11-20">Nov 20, 2026</time>
+            <h3>Can you prove your AI agent's number is right?</h3>
+            <p>Nine slides: the problem, define, serve and prove, the eight databases, reconciliation and the ontology.</p>
+            <a href="assets/cosmos-semantic-carousel.pdf" rel="noopener">Open the slides (PDF) →</a>
+          </article>
+          <article class="card post">
+            <img src="assets/walkthrough-poster.jpg" alt="Narrated walkthrough, from pip install to six databases" loading="lazy">
+            <time datetime="2026-11-20">Nov 20, 2026</time>
+            <h3>pip install to six databases in 90 seconds</h3>
+            <p>Five real databases in Docker plus DuckDB, the same question and the same number.</p>
+            <a href="#demo">Watch it here →</a>
+          </article>
+        </div>
+        <p class="more">More: <a href="https://dev.to/wiliamrosa/cosmos-semantic-an-open-source-semantic-layer-that-makes-ai-agents-get-the-number-right-and-prove-1c06" rel="noopener">the launch article on dev.to</a> · <a href="https://wiliamrosa.github.io/articles/cosmos-semantic-camada-semantica-numeros-verificaveis/" rel="noopener">em português</a> · <a href="https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md" rel="noopener">changelog</a></p>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div class="wrap cta-inner">
+        <h2>Open source, and open for contributions.</h2>
+        <p>Star the repository, try a good first issue, or bring the number your agent got wrong.</p>
+        <div class="hero-actions center">
+          <a class="btn btn-primary" href="https://github.com/WiliamRosa/cosmos-semantic-platform" rel="noopener">Star on GitHub</a>
+          <a class="btn btn-ghost" href="https://github.com/WiliamRosa/cosmos-semantic-platform/labels/good%20first%20issue" rel="noopener">Good first issues</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <p>© 2026 Cosmos Semantic · Apache 2.0</p>
+      <nav aria-label="Footer">
+        <a href="https://github.com/WiliamRosa/cosmos-semantic-platform" rel="noopener">GitHub</a>
+        <a href="https://pypi.org/project/cosmos-semantic/" rel="noopener">PyPI</a>
+        <a href="https://registry.modelcontextprotocol.io/v0/servers?search=io.github.WiliamRosa/cosmos-semantic" rel="noopener">MCP registry</a>
+        <a href="https://www.linkedin.com/company/cosmos-semantic/" rel="noopener">LinkedIn</a>
+        <a href="https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/SECURITY.md" rel="noopener">Security</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>
