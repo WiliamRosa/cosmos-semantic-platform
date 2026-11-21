@@ -45,6 +45,7 @@
         <a href="#demo">Demo</a>
         <a href="#start">Quickstart</a>
         <a href="#news">News</a>
+        <a href="#contact">Contact</a>
       </nav>
       <div class="header-cta">
         <a class="btn btn-ghost btn-small" href="https://github.com/WiliamRosa/cosmos-semantic-platform" rel="noopener">
@@ -272,6 +273,33 @@ completed       12,562,542.20  2,615.56
       </div>
     </section>
 
+    <section id="contact" class="section">
+      <div class="wrap contact-inner">
+        <div>
+          <p class="eyebrow">Contact</p>
+          <h2>Talk to us.</h2>
+          <p class="section-lead">A pilot on your databases, a partnership, a talk for your team, or the number your agent got wrong.</p>
+          <p class="contact-direct">Or write to <a href="mailto:administrator@cosmosdata.ai">administrator@cosmosdata.ai</a>.</p>
+          <p class="contact-note">Bugs and feature requests are best as <a href="https://github.com/WiliamRosa/cosmos-semantic-platform/issues" rel="noopener">GitHub issues</a>, where everyone can follow them.</p>
+        </div>
+        <form class="contact-form card" id="contact-form" action="/api/contact" method="post" novalidate>
+          <div class="field-row">
+            <label>Name <input name="name" autocomplete="name" required maxlength="120"></label>
+            <label>Work email <input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+          </div>
+          <label><span>Company <span class="optional">(optional)</span></span> <input name="company" autocomplete="organization" maxlength="120"></label>
+          <label>Message <textarea name="message" rows="6" required maxlength="5000"></textarea></label>
+          <label class="hp" aria-hidden="true">Leave this empty <input name="website" tabindex="-1" autocomplete="off"></label>
+          <input type="hidden" name="started_at" value="">
+          <div class="form-foot">
+            <button class="btn btn-primary" type="submit">Send message</button>
+            <p class="form-status" role="status" aria-live="polite"></p>
+          </div>
+          <p class="form-privacy">We use your details only to answer you. Nothing is stored on this site.</p>
+        </form>
+      </div>
+    </section>
+
     <section class="cta">
       <div class="wrap cta-inner">
         <h2>Open source, and open for contributions.</h2>
@@ -293,6 +321,7 @@ completed       12,562,542.20  2,615.56
         <a href="https://registry.modelcontextprotocol.io/v0/servers?search=io.github.WiliamRosa/cosmos-semantic" rel="noopener">MCP registry</a>
         <a href="https://www.linkedin.com/company/cosmos-semantic/" rel="noopener">LinkedIn</a>
         <a href="https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/SECURITY.md" rel="noopener">Security</a>
+        <a href="#contact">Contact</a>
       </nav>
     </div>
   </footer>
