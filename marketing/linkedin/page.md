@@ -44,6 +44,5 @@ What you get:
 
 Apache 2.0. Install with pip install cosmos-semantic.
 
-Website: https://cosmosdata.ai
 Live demo: https://wiliamrosa.github.io/cosmos-semantic-platform/
 Code and docs: https://github.com/WiliamRosa/cosmos-semantic-platform
