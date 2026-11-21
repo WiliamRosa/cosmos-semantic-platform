@@ -68,5 +68,13 @@ services:
       interval: 5s
       retries: 60
 
+  # Optional: ... --profile bigquery up -d  (a BigQuery emulator for tests; not BigQuery itself)
+  bigquery:
+    image: ghcr.io/goccy/bigquery-emulator:0.8.1
+    profiles: [bigquery]
+    command: ["--project=cosmos-test", "--dataset=cosmos"]
+    ports:
+      - "19050:9050"
+
 volumes:
   cosmos-pg:

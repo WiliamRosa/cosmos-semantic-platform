@@ -17,6 +17,7 @@ SOURCES = [
     "mysql_connector",
     "mariadb_connector",
     "oracle_connector",
+    "bigquery_connector",
 ]
 SUL = Principal(user={"region": "Midwest"})
 

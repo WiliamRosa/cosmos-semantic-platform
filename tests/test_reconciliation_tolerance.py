@@ -27,6 +27,7 @@ SOURCES = [
     "mysql_connector",
     "mariadb_connector",
     "oracle_connector",
+    "bigquery_connector",
 ]
 
 # Average order value by status, rounded to one decimal in the legacy report (as zoo case Z09):

@@ -9,6 +9,16 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- BigQuery as a data source, in preview (DEC-40, [ADR 0015](docs/decisions/0015-bigquery-as-a-data-source.md)):
+  `type: bigquery` with the `bigquery` extra (`google-cloud-bigquery`). It logs in with
+  Application Default Credentials or a service account key (`options.credentials_file`),
+  `options.maximum_bytes_billed` stops a query that would scan more, and the model's schemas map
+  to datasets (`schema_map: {public: cosmos_demo}`). Weeks start on Monday (`ISOWEEK`), times
+  are `DATETIME` and date arithmetic on a time uses `DATETIME_ADD`, so the numbers match the
+  other databases. `cosmos demo-data` loads with free load jobs (they work in the BigQuery
+  sandbox), and `cosmos bootstrap` reads the dataset's `INFORMATION_SCHEMA`. On the BigQuery
+  emulator, 58 reference queries return the same numbers as DuckDB; a live run on a BigQuery
+  project ([setup](deploy/bigquery-setup.md)) is the gate before it leaves preview.
 - A metric can declare its reconciliation tolerance (DEC-39):
   `reconciliation: {abs_tolerance: 0.01, rel_tolerance: 0.001}`. `cosmos reconcile`, the
   reconciliation cases of `cosmos check` and member health use it in place of the fixed default

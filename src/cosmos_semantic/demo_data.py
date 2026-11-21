@@ -280,7 +280,8 @@ def load_sql(
 ) -> None:
     """Generic INSERT-based load, translated by SQLGlot into the source dialect.
 
-    Used for Databricks and SQL Server, which have no Arrow ingestion through the same path.
+    Used for Databricks and SQL Server, which have no Arrow ingestion through the same path, and
+    for the BigQuery emulator, which does not run load jobs.
     """
     import sqlglot
     from sqlglot import exp
@@ -338,15 +339,77 @@ def _sql_literal(value):
     return exp.Literal.string(str(value))
 
 
-def load(connector, tables: dict[str, pa.Table]) -> None:
-    from cosmos_semantic.connectors import ADBCPostgresConnector, DuckDBConnector
+_ARROW_TO_BIGQUERY = {
+    pa.int64(): "INT64",
+    pa.string(): "STRING",
+    pa.float64(): "FLOAT64",
+    pa.date32(): "DATE",
+    # A timestamp without a time zone is a civil date and time: BigQuery's DATETIME. Its
+    # TIMESTAMP is an instant in UTC, which SQLGlot writes for TIMESTAMP WITH TIME ZONE.
+    pa.timestamp("us"): "DATETIME",
+}
 
-    schema = connector.config.schema_map.get("public", "public")
+
+def load_bigquery(connector, tables: dict[str, pa.Table], dataset: str = "public") -> None:
+    """Loads each table with a load job from Parquet, which BigQuery runs free of charge and
+    allows in the sandbox (no billing account), where DML such as INSERT is refused."""
+    import io
+
+    import pyarrow.parquet as pq
+    from google.cloud import bigquery
+
+    client = connector.client
+    _ensure_dataset(client, dataset)
+    for name, table in tables.items():
+        buffer = io.BytesIO()
+        pq.write_table(table, buffer)
+        size = buffer.tell()
+        buffer.seek(0)
+        schema = [bigquery.SchemaField(f.name, _ARROW_TO_BIGQUERY[f.type]) for f in table.schema]
+        job = client.load_table_from_file(
+            buffer,
+            f"{client.project}.{dataset}.{name}",
+            size=size,  # a known size up to 5 MB goes in one multipart request
+            job_config=bigquery.LoadJobConfig(
+                source_format=bigquery.SourceFormat.PARQUET,
+                schema=schema,
+                write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+            ),
+        )
+        job.result()
+
+
+def _ensure_dataset(client, dataset: str) -> None:
+    """Creates the dataset (BigQuery's schema) through the API: the emulator answers an existing
+    one with an error 500 instead of 409, and ignores ``CREATE SCHEMA``."""
+    from google.api_core.exceptions import NotFound
+
+    try:
+        client.get_dataset(dataset)
+    except NotFound:
+        client.create_dataset(dataset)
+
+
+def load(connector, tables: dict[str, pa.Table], schema: str | None = None) -> None:
+    """Loads ``tables`` into ``schema`` (default: where the source maps ``public``) with the
+    fastest way each source allows."""
+    from cosmos_semantic.connectors import (
+        ADBCPostgresConnector,
+        BigQueryConnector,
+        DuckDBConnector,
+    )
+
+    if schema is None:
+        schema = connector.config.schema_map.get("public", "public")
     if isinstance(connector, DuckDBConnector):
         load_duckdb(connector.connection, tables, schema)
     elif isinstance(connector, ADBCPostgresConnector):
         load_postgres(connector.connection, tables, schema)
+    elif isinstance(connector, BigQueryConnector) and not connector.emulated:
+        load_bigquery(connector, tables, schema)
     else:
+        if isinstance(connector, BigQueryConnector):
+            _ensure_dataset(connector.client, schema)
         load_sql(connector, tables, schema)
 
 

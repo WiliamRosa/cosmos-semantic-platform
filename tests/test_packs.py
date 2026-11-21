@@ -11,7 +11,6 @@ import yaml
 
 from cosmos_semantic import demo_data
 from cosmos_semantic.compiler import compile_project
-from cosmos_semantic.connectors import ADBCPostgresConnector, DuckDBConnector
 from cosmos_semantic.errors import QueryError
 from cosmos_semantic.interchange import dump_project
 from cosmos_semantic.packs import PACKS_DIR, apply_pack, available, map_tables
@@ -27,6 +26,7 @@ SOURCES = [
     "mysql_connector",
     "mariadb_connector",
     "oracle_connector",
+    "bigquery_connector",
 ]
 EXAMPLE = Path(__file__).parents[1] / "examples" / "ecommerce" / "semantic"
 MIDWEST = Principal(user={"region": "Midwest"})
@@ -94,12 +94,7 @@ def connector(request, tables):
     if request.param not in _loaded:
         renamed = customer_tables(tables)
         schema = connector.config.schema_map.get(SCHEMA, SCHEMA)
-        if isinstance(connector, DuckDBConnector):
-            demo_data.load_duckdb(connector.connection, renamed, schema)
-        elif isinstance(connector, ADBCPostgresConnector):
-            demo_data.load_postgres(connector.connection, renamed, schema)
-        else:
-            demo_data.load_sql(connector, renamed, schema)
+        demo_data.load(connector, renamed, schema)
         _loaded.add(request.param)
     return connector
 

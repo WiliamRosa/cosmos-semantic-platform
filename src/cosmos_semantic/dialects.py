@@ -9,6 +9,9 @@ source cannot run before the tree is printed in that source's dialect:
 - **Oracle:** no ``IS [NOT] DISTINCT FROM`` (``DECODE`` treats two NULLs as equal), no
   ``DATE_ADD`` (interval functions instead) and no ``GROUP BY`` by position unless a session
   parameter is set (the positions are expanded instead).
+- **BigQuery:** ``WEEK`` truncates to Sunday, so weeks use ``ISOWEEK`` (Monday), as on the
+  other sources. A time without a time zone is a ``DATETIME`` there (SQLGlot writes it for
+  ``TIMESTAMP``), and ``TIMESTAMP_TRUNC`` and ``DATE_ADD`` accept it.
 - **Date arithmetic:** ``add_days`` and ``shift`` build one ``DATE_ADD`` node that SQLGlot prints
   per dialect; Oracle gets ``+ NUMTODSINTERVAL``/``NUMTOYMINTERVAL`` here.
 """
@@ -62,6 +65,8 @@ def trunc(value: exp.Expression, unit: str, dialect: str) -> exp.Expression:
         )
     if unit == "WEEK" and dialect == "tsql":
         unit = "ISO_WEEK"  # SQL Server weeks depend on DATEFIRST; ISO weeks start on Monday
+    if unit == "WEEK" and dialect == "bigquery":
+        unit = "ISOWEEK"  # BigQuery's WEEK starts on Sunday; ISOWEEK starts on Monday
     return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit))
 
 
@@ -82,6 +87,11 @@ def shift(value: exp.Expression, amount: int, unit: str) -> exp.Expression:
 
 def adapt(tree: exp.Expression, dialect: str) -> exp.Expression:
     """Rewrites what ``dialect`` cannot run; a no-op for the other dialects."""
+    if dialect == "bigquery":
+        from cosmos_semantic.expressions import portable
+
+        # date ± INTERVAL -> DateAdd first: in BigQuery a DATE plus an INTERVAL is a DATETIME.
+        return portable(tree).transform(_bigquery)
     if dialect not in _TRUNC_TEMPLATES:
         return tree
     if dialect == "oracle":
@@ -132,6 +142,45 @@ def adapt(tree: exp.Expression, dialect: str) -> exp.Expression:
         return node
 
     return tree.transform(fix)
+
+
+def _bigquery(node: exp.Expression) -> exp.Expression:
+    """BigQuery rewrites: Monday weeks in hand-written ``DATE_TRUNC('week', ...)`` (reference
+    SQL), ``DATETIME_ADD`` for date arithmetic on a time (``DATE_ADD`` takes only a ``DATE``
+    and no hours), and ``DATETIME(date)`` for a date read as a time: the same value as the
+    cast, which the BigQuery emulator used in tests gets wrong (1970-01-01)."""
+    if (
+        isinstance(node, exp.Cast)
+        and node.to.is_type(*_TIME_TYPES)
+        and (_is_date(node.this) or isinstance(node.this, exp.Date))
+    ):
+        return exp.Anonymous(this="DATETIME", expressions=[node.this.copy()])
+    if isinstance(node, exp.TimestampTrunc | exp.DateTrunc) and node.text("unit").upper() == "WEEK":
+        node = node.copy()
+        node.set("unit", exp.Var(this="ISOWEEK"))
+        return node
+    if isinstance(node, exp.DateAdd | exp.TsOrDsAdd) and node.text("unit"):
+        if _is_date(node.this) and node.text("unit").upper() not in ("HOUR", "MINUTE", "SECOND"):
+            return node
+        value = node.this.copy()
+        if not (isinstance(value, exp.Cast) and value.to.is_type(*_TIME_TYPES)):
+            value = exp.Cast(this=value, to=exp.DataType.build("TIMESTAMP"))
+        # ``transform`` does not descend into a replacement; adapt its value explicitly.
+        value = value.transform(_bigquery)
+        return exp.DatetimeAdd(
+            this=value, expression=node.expression.copy(), unit=exp.Var(this=node.text("unit"))
+        )
+    return node
+
+
+# SQLGlot writes TIMESTAMP (without a time zone) as BigQuery's DATETIME.
+_TIME_TYPES = (exp.DataType.Type.TIMESTAMP, exp.DataType.Type.DATETIME)
+
+
+def _is_date(value: exp.Expression) -> bool:
+    return isinstance(value, exp.CurrentDate) or (
+        isinstance(value, exp.Cast) and value.to.is_type(exp.DataType.Type.DATE)
+    )
 
 
 def _expand_group_positions(select: exp.Select) -> None:

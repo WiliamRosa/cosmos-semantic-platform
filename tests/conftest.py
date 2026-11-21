@@ -168,6 +168,34 @@ def snowflake_connector(tables):
     connector.close()
 
 
+@pytest.fixture(scope="session")
+def bigquery_connector(tables):
+    """BigQuery (DEC-40): a real project, or the emulator when COSMOS_BIGQUERY_ENDPOINT is set
+    (``ghcr.io/goccy/bigquery-emulator``, as in CI)."""
+    env = os.environ.get
+    if not env("COSMOS_BIGQUERY_PROJECT"):
+        pytest.skip(
+            "set COSMOS_BIGQUERY_PROJECT (with COSMOS_BIGQUERY_ENDPOINT for the emulator, or "
+            "Application Default Credentials / COSMOS_BIGQUERY_CREDENTIALS_FILE)"
+        )
+    connector = connect(
+        DataSourceConfig(
+            type="bigquery",
+            options={
+                "project": env("COSMOS_BIGQUERY_PROJECT"),
+                "location": env("COSMOS_BIGQUERY_LOCATION"),
+                "credentials_file": env("COSMOS_BIGQUERY_CREDENTIALS_FILE"),
+                "api_endpoint": env("COSMOS_BIGQUERY_ENDPOINT"),
+            },
+            schema_map={"public": env("COSMOS_BIGQUERY_DATASET", "cosmos_demo")},
+            timeout_seconds=20 if env("COSMOS_BIGQUERY_ENDPOINT") else 120,
+        )
+    )
+    demo_data.load(connector, tables)
+    yield connector
+    connector.close()
+
+
 # -- TPC-H (DEC-4): examples/tpch on the data of DuckDB's `tpch` extension ----
 
 TPCH = ROOT / "examples" / "tpch"

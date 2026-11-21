@@ -67,6 +67,7 @@ NUMBER_TYPES = INTEGER_TYPES | {
     "money",
     "smallmoney",
     "number",
+    "bignumeric",  # BigQuery; its INT64 and FLOAT64 read as int and float
 }
 TIME_TYPES = {
     "date",
@@ -181,6 +182,21 @@ class Bootstrapper:
                 "JOIN all_cons_columns k ON k.owner = c.owner "
                 "AND k.constraint_name = c.constraint_name "
                 f"WHERE c.constraint_type = 'P' AND c.owner = {schema}"
+            )
+        elif dialect == "bigquery":
+            # Each dataset has its own INFORMATION_SCHEMA; BigQuery has no unqualified one.
+            dataset = exp.to_identifier(self.physical_schema, quoted=True).sql(dialect=dialect)
+            columns_sql = (
+                "SELECT table_name, column_name, data_type "
+                f"FROM {dataset}.INFORMATION_SCHEMA.COLUMNS "
+                "ORDER BY table_name, ordinal_position"
+            )
+            keys_sql = (
+                "SELECT k.table_name, k.column_name "
+                f"FROM {dataset}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS AS c "
+                f"JOIN {dataset}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE AS k "
+                "ON k.constraint_name = c.constraint_name AND k.table_name = c.table_name "
+                "WHERE c.constraint_type = 'PRIMARY KEY'"
             )
         else:
             data_type = "data_type"

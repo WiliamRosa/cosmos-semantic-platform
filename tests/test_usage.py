@@ -23,6 +23,7 @@ SOURCES = [
     "mysql_connector",
     "mariadb_connector",
     "oracle_connector",
+    "bigquery_connector",
 ]
 ANA = Principal(user={"region": "Midwest"}, channel="api", subject="ana@example.com")
 BOT = Principal(user={"region": "Midwest"}, channel="mcp", subject="sales-agent")

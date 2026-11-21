@@ -43,7 +43,13 @@ class ReferenceCase(BaseModel):
         translation unless the case spells a version for the dialect."""
         if dialect in self.sql_by_dialect:
             return self.sql_by_dialect[dialect]
-        if self.sql is not None and dialect in ("databricks", "snowflake", "mysql", "oracle"):
+        if self.sql is not None and dialect in (
+            "databricks",
+            "snowflake",
+            "mysql",
+            "oracle",
+            "bigquery",
+        ):
             import sqlglot
 
             from cosmos_semantic import dialects
