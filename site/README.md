@@ -3,7 +3,7 @@
 The project website, served at [cosmosdata.ai](https://cosmosdata.ai/) by the Cloudflare Worker
 `cosmos-semantic-site` (static assets only, configured in `wrangler.jsonc`). One static page, no framework and no build dependencies.
 
-- `src/` holds the page, styles, script and the files Cloudflare Pages reads (`_headers`, `404.html`).
+- `src/` holds the page, styles, script and the files Cloudflare reads (`_headers`, `404.html`).
 - `build.py` copies `src/` to `dist/` and adds the media the repository already keeps: the social
   preview from `docs/assets/`, and the screenshots, slides and videos of the published LinkedIn
   posts in `marketing/linkedin/posts/`. Media is never committed twice.
