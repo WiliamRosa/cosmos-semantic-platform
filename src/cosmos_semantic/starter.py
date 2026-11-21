@@ -67,6 +67,13 @@ data_sources:
   #     maximum_bytes_billed: 1000000000            # a query that would scan more fails
   #     # credentials_file: ~/keys/cosmos-reader.json  # or `gcloud auth application-default login`
   #   schema_map: { public: cosmos_demo }          # in BigQuery a schema is a dataset
+  #
+  # trino:                                         # Trino or Starburst (preview)
+  #   type: trino
+  #   uri: trino://${COSMOS_TRINO_USER}@trino.example.com:443/hive?http_scheme=https
+  #   options:
+  #     password: ${COSMOS_TRINO_PASSWORD}         # or access_token: a JWT
+  #   schema_map: { public: sales }                # a schema of the catalog
 """
 
 

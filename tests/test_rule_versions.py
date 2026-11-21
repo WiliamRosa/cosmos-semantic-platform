@@ -26,6 +26,7 @@ SOURCES = [
     "mariadb_connector",
     "oracle_connector",
     "bigquery_connector",
+    "trino_connector",
 ]
 MIDWEST = Principal(user={"region": "Midwest"}, channel="api", subject="ana@example.com")
 CHANGE = dt.date(2026, 7, 1)  # active_customer went from 60 to 90 days on this date

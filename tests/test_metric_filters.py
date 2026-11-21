@@ -21,7 +21,17 @@ from cosmos_semantic.planner import (
 
 from .conftest import EXAMPLE
 
-DIALECTS = ["duckdb", "postgres", "tsql", "databricks", "snowflake", "mysql", "oracle", "bigquery"]
+DIALECTS = [
+    "duckdb",
+    "postgres",
+    "tsql",
+    "databricks",
+    "snowflake",
+    "mysql",
+    "oracle",
+    "bigquery",
+    "trino",
+]
 NORTHEAST = Principal(user={"region": "Northeast"})
 
 

@@ -12,6 +12,10 @@ source cannot run before the tree is printed in that source's dialect:
 - **BigQuery:** ``WEEK`` truncates to Sunday, so weeks use ``ISOWEEK`` (Monday), as on the
   other sources. A time without a time zone is a ``DATETIME`` there (SQLGlot writes it for
   ``TIMESTAMP``), and ``TIMESTAMP_TRUNC`` and ``DATE_ADD`` accept it.
+- **Trino:** ``DATE_TRUNC('week', ...)`` already starts on Monday and ``/`` on integers
+  truncates as in PostgreSQL, so SQLGlot's translation stands. Interval literals have no
+  ``WEEK`` or ``QUARTER`` and a ``DATE`` takes no hours, so ``date ± INTERVAL`` becomes
+  ``DATE_ADD`` and a date that gets hours, minutes or seconds is read as a ``TIMESTAMP`` first.
 - **Date arithmetic:** ``add_days`` and ``shift`` build one ``DATE_ADD`` node that SQLGlot prints
   per dialect; Oracle gets ``+ NUMTODSINTERVAL``/``NUMTOYMINTERVAL`` here.
 """
@@ -92,6 +96,11 @@ def adapt(tree: exp.Expression, dialect: str) -> exp.Expression:
 
         # date ± INTERVAL -> DateAdd first: in BigQuery a DATE plus an INTERVAL is a DATETIME.
         return portable(tree).transform(_bigquery)
+    if dialect == "trino":
+        from cosmos_semantic.expressions import portable
+
+        # date ± INTERVAL -> DateAdd: Trino's interval literals have no WEEK or QUARTER.
+        return portable(tree).transform(_trino)
     if dialect not in _TRUNC_TEMPLATES:
         return tree
     if dialect == "oracle":
@@ -170,6 +179,20 @@ def _bigquery(node: exp.Expression) -> exp.Expression:
         return exp.DatetimeAdd(
             this=value, expression=node.expression.copy(), unit=exp.Var(this=node.text("unit"))
         )
+    return node
+
+
+def _trino(node: exp.Expression) -> exp.Expression:
+    """Trino rewrites: ``DATE_ADD('hour', n, date)`` fails (a ``DATE`` has no time of day), so
+    a date that gets hours, minutes or seconds is cast to ``TIMESTAMP`` first, which is what
+    PostgreSQL does implicitly for ``date + INTERVAL '3' HOUR``."""
+    if (
+        isinstance(node, exp.DateAdd | exp.TsOrDsAdd)
+        and node.text("unit").upper() in ("HOUR", "MINUTE", "SECOND")
+        and _is_date(node.this)
+    ):
+        node = node.copy()
+        node.set("this", exp.Cast(this=node.this, to=exp.DataType.build("TIMESTAMP")))
     return node
 
 

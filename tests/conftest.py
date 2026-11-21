@@ -196,6 +196,24 @@ def bigquery_connector(tables):
     connector.close()
 
 
+@pytest.fixture(scope="session")
+def trino_connector(tables):
+    """Trino or Starburst (DEC-43): COSMOS_TRINO_URI names the server and a catalog that takes
+    CREATE TABLE and INSERT, such as the memory catalog of the container in
+    deploy/docker-compose.yml (``trino://cosmos@localhost:18080/memory``). A password comes
+    from COSMOS_TRINO_PASSWORD, never from the URI in a shared shell history."""
+    connector = _uri_connector(
+        "trino",
+        "COSMOS_TRINO_URI",
+        tables,
+        options={"password": os.environ.get("COSMOS_TRINO_PASSWORD")},
+        schema_map={"public": os.environ.get("COSMOS_TRINO_SCHEMA", "cosmos")},
+        timeout_seconds=120,
+    )
+    yield connector
+    connector.close()
+
+
 # -- TPC-H (DEC-4): examples/tpch on the data of DuckDB's `tpch` extension ----
 
 TPCH = ROOT / "examples" / "tpch"

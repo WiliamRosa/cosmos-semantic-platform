@@ -23,6 +23,7 @@ SOURCES = [
     "mariadb_connector",
     "oracle_connector",
     "bigquery_connector",
+    "trino_connector",
 ]
 SUDESTE = Principal(user={"region": "Northeast"}, channel="api", subject="ana@example.com")
 REQUEST = QueryRequest(

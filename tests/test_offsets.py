@@ -106,6 +106,7 @@ SOURCES = [
     "mariadb_connector",
     "oracle_connector",
     "bigquery_connector",
+    "trino_connector",
 ]
 
 
@@ -365,6 +366,7 @@ def test_validation_refuses_what_the_slice_does_not_cover():
         ("oracle", "+ NUMTOYMINTERVAL(1, 'MONTH')"),
         ("databricks", "DATEADD(MONTH, 1, "),
         ("snowflake", "DATEADD(MONTH, 1, "),
+        ("trino", "DATE_ADD('MONTH', 1, "),
     ],
 )
 def test_sql_for_every_dialect(dialect, shifted):
