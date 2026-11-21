@@ -18,7 +18,7 @@ AI agents that write SQL over raw tables return numbers that look right and that
 
 | | |
 | --- | --- |
-| **Multi-database** | One model, the same number on Databricks, Snowflake, Oracle, SQL Server, Postgres, MySQL, MariaDB and DuckDB, checked by the test suite on every change |
+| **Multi-database** | One model, the same number on Databricks, Snowflake, Oracle, SQL Server, Postgres, MySQL, MariaDB and DuckDB, checked by the test suite on every change; BigQuery in preview |
 | **Ontology** | A bilingual business glossary (SKOS), versioned business rules with owners and tests, and a knowledge graph of teams, systems and processes |
 | **Built for AI agents** | A native MCP server: agents find the concept, ask for a governed metric and get deterministic SQL; personal data never reaches them |
 | **Verifiable numbers** | Every answer carries the expanded formula, rules, row filters, reference date and hashes; `cosmos replay` tells whether a number changed and why |
@@ -42,7 +42,7 @@ cosmos explain rule:active_customer
 That is a governed metric with its evidence (formula, rules, policies, `as_of` and hashes) in about
 a minute, on a local DuckDB file. The [quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) continues with business
 rules, row filters, personal data and connecting an AI agent over MCP. Extras: `duckdb`,
-`postgres`, `sqlserver`, `mysql` (MySQL and MariaDB), `oracle`, `databricks`, `snowflake`, `server` (REST and MCP), `ai` (`cosmos suggest`), `testdata`.
+`postgres`, `sqlserver`, `mysql` (MySQL and MariaDB), `oracle`, `databricks`, `snowflake`, `bigquery`, `server` (REST and MCP), `ai` (`cosmos suggest`), `testdata`.
 
 ## Console
 
@@ -214,7 +214,7 @@ Editors validate and autocomplete model files through the JSON Schema in [schema
 | [Interoperability](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/interoperability.md) | Mapping to Apache Ossie, dbt and Cube (import and export), and Power BI import |
 | [Roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md) | Phases, MVP scope and exit criteria |
 | [Changelog](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md) | What changed in each release |
-| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source, 0011 adds MySQL, MariaDB and Oracle, 0012 adds the read-only console, 0013 sets up the supervised agent team |
+| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source, 0011 adds MySQL, MariaDB and Oracle, 0012 adds the read-only console, 0013 sets up the supervised agent team, 0014 adds the social media agent, 0016 adds BigQuery (preview) |
 
 ## Repository layout
 
@@ -225,8 +225,8 @@ src/cosmos_semantic/
   compiler.py        validation and semantic graph, with joins inferred from entities
   expressions.py     {member} and $user references, and protection of caller filters
   planner.py         query plan and per-dialect SQL (SQLGlot)
-  connectors.py      DuckDB, Postgres (ADBC), Databricks, Snowflake, Oracle, SQL Server and MySQL/MariaDB, always Arrow
-  dialects.py        per-dialect rewrites SQLGlot does not cover (MySQL, Oracle)
+  connectors.py      DuckDB, Postgres (ADBC), Databricks, Snowflake, BigQuery, Oracle, SQL Server and MySQL/MariaDB, always Arrow
+  dialects.py        per-dialect rewrites SQLGlot does not cover (MySQL, Oracle, BigQuery)
   engine.py          model + connections -> executed queries
   ontology.py        business rules (virtual dimensions and tests) and SKOS glossary
   catalog.py         members, concept search and explanations

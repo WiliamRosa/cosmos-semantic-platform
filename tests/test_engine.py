@@ -198,7 +198,8 @@ def test_measures_from_different_models_never_join_before_aggregating(graph):
 
 
 @pytest.mark.parametrize(
-    "dialect", ["postgres", "duckdb", "databricks", "snowflake", "tsql", "mysql", "oracle"]
+    "dialect",
+    ["postgres", "duckdb", "databricks", "snowflake", "tsql", "mysql", "oracle", "bigquery"],
 )
 def test_sql_is_generated_for_every_dialect(graph, dialect):
     compiled = Planner(graph, dialect).plan(
@@ -330,7 +331,8 @@ def test_rolling_windows_over_sum_count_min_and_max_pass_validation():
 
 
 @pytest.mark.parametrize(
-    "dialect", ["postgres", "duckdb", "databricks", "snowflake", "tsql", "mysql", "oracle"]
+    "dialect",
+    ["postgres", "duckdb", "databricks", "snowflake", "tsql", "mysql", "oracle", "bigquery"],
 )
 def test_rolling_window_sql_for_every_dialect(dialect):
     graph = compile_project(project(ROLLING))
@@ -506,7 +508,8 @@ def test_week_under_a_year_to_date_reaches_no_number_through_another_metric(metr
 
 
 @pytest.mark.parametrize(
-    "dialect", ["postgres", "duckdb", "databricks", "snowflake", "tsql", "mysql", "oracle"]
+    "dialect",
+    ["postgres", "duckdb", "databricks", "snowflake", "tsql", "mysql", "oracle", "bigquery"],
 )
 def test_to_date_combines_min_and_max_with_min_and_max(dialect):
     graph = compile_project(project(TO_DATE))

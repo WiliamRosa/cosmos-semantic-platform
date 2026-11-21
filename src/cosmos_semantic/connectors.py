@@ -31,6 +31,7 @@ DIALECTS = {
     "mysql": "mysql",
     "mariadb": "mysql",  # SQLGlot has no MariaDB dialect; the MySQL one covers what we generate
     "oracle": "oracle",
+    "bigquery": "bigquery",
 }
 
 
@@ -49,12 +50,21 @@ class DataSourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal[
-        "postgres", "duckdb", "databricks", "snowflake", "sqlserver", "mysql", "mariadb", "oracle"
+        "postgres",
+        "duckdb",
+        "databricks",
+        "snowflake",
+        "sqlserver",
+        "mysql",
+        "mariadb",
+        "oracle",
+        "bigquery",
     ]
     driver: Literal["adbc", "sqlalchemy", "native"] | None = Field(
         None,
         description=(
-            "Default: adbc for postgres, native for duckdb, databricks, snowflake and oracle, "
+            "Default: adbc for postgres, native for duckdb, databricks, snowflake, oracle and "
+            "bigquery, "
             "sqlalchemy for sqlserver, mysql and mariadb."
         ),
     )
@@ -319,6 +329,81 @@ class SnowflakeConnector(Connector):
         self._con.close()
 
 
+class BigQueryConnector(Connector):
+    """Google BigQuery through the official client; results come back as Arrow.
+
+    ``options``: ``project`` (required), ``location``, ``credentials_file`` (a service account
+    key; without it the client uses Application Default Credentials, as after
+    ``gcloud auth application-default login``), ``maximum_bytes_billed`` (a query that would
+    scan more fails instead of running) and ``api_endpoint`` (an emulator, for tests). The
+    model's schemas are BigQuery datasets: map them with ``schema_map``, such as
+    ``public: cosmos_demo``.
+    """
+
+    def __init__(self, config: DataSourceConfig) -> None:
+        super().__init__(config)
+        from google.cloud import bigquery
+
+        opts = {k: v for k, v in config.options.items() if v not in (None, "")}
+        if not opts.get("project"):
+            raise ModelError("a bigquery source needs options.project")
+        unknown = set(opts) - {
+            "project",
+            "location",
+            "credentials_file",
+            "maximum_bytes_billed",
+            "api_endpoint",
+        }
+        if unknown:
+            raise ModelError(f"unknown bigquery options: {', '.join(sorted(unknown))}")
+        kwargs: dict[str, Any] = {"project": opts["project"], "location": opts.get("location")}
+        if opts.get("api_endpoint"):
+            from google.api_core.client_options import ClientOptions
+            from google.auth.credentials import AnonymousCredentials
+
+            kwargs["client_options"] = ClientOptions(api_endpoint=opts["api_endpoint"])
+            kwargs["credentials"] = AnonymousCredentials()
+        elif opts.get("credentials_file"):
+            from google.oauth2 import service_account
+
+            kwargs["credentials"] = service_account.Credentials.from_service_account_file(
+                os.path.expanduser(opts["credentials_file"])
+            )
+        self._bigquery = bigquery
+        self._client = bigquery.Client(**kwargs)
+        self._max_bytes = opts.get("maximum_bytes_billed")
+        self.emulated = bool(opts.get("api_endpoint"))
+
+    @property
+    def client(self):
+        return self._client
+
+    def _query(self, sql: str):
+        """Starts a query job. The client's default retries wait up to ten minutes; a query here
+        gives up after the source's timeout, and a failed job is not run again."""
+        config = self._bigquery.QueryJobConfig(
+            job_timeout_ms=int(self.config.timeout_seconds) * 1000
+        )
+        if self._max_bytes:
+            config.maximum_bytes_billed = int(self._max_bytes)
+        retry = self._bigquery.DEFAULT_RETRY.with_timeout(self.config.timeout_seconds)
+        job = self._client.query(sql, job_config=config, retry=retry, job_retry=None)
+        return job, retry
+
+    def _run(self, sql: str, fetch_limit: int) -> pa.Table:
+        job, retry = self._query(sql)
+        rows = job.result(timeout=self.config.timeout_seconds, retry=retry, max_results=fetch_limit)
+        return rows.to_arrow(create_bqstorage_client=False).slice(0, fetch_limit)
+
+    def run_script(self, sql: str) -> None:
+        for statement in sqlglot.transpile(sql, read="bigquery", write="bigquery"):
+            job, retry = self._query(statement)
+            job.result(timeout=self.config.timeout_seconds, retry=retry)
+
+    def close(self) -> None:
+        self._client.close()
+
+
 class OracleConnector(Connector):
     """Oracle Database through python-oracledb in thin mode: pure Python, no Instant Client.
 
@@ -531,6 +616,7 @@ def connect(config: DataSourceConfig) -> Connector:
             "databricks": "native",
             "snowflake": "native",
             "oracle": "native",
+            "bigquery": "native",
             "sqlserver": "sqlalchemy",
             "mysql": "sqlalchemy",
             "mariadb": "sqlalchemy",
@@ -546,6 +632,8 @@ def connect(config: DataSourceConfig) -> Connector:
         return SnowflakeConnector(config)
     if config.type == "oracle":
         return OracleConnector(config)
+    if config.type == "bigquery":
+        return BigQueryConnector(config)
     if driver == "sqlalchemy":
         return SQLAlchemyConnector(config)
     raise ModelError(f"unsupported combination: {config.type} with {driver}")

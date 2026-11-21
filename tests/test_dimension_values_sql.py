@@ -31,6 +31,7 @@ SOURCES = [
     "mysql_connector",
     "mariadb_connector",
     "oracle_connector",
+    "bigquery_connector",
 ]
 
 # The engine's "today", pinned: rule.active_customer is "a purchase in the 90 days before it".

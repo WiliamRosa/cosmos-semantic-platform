@@ -58,6 +58,15 @@ data_sources:
   #     user: ${COSMOS_ORACLE_USER}
   #     password: ${COSMOS_ORACLE_PASSWORD}
   #   schema_map: { public: ${COSMOS_ORACLE_USER} }  # in Oracle a schema is a user
+  #
+  # bigquery:
+  #   type: bigquery
+  #   options:
+  #     project: ${COSMOS_BIGQUERY_PROJECT}
+  #     location: ${COSMOS_BIGQUERY_LOCATION:-US}
+  #     maximum_bytes_billed: 1000000000            # a query that would scan more fails
+  #     # credentials_file: ~/keys/cosmos-reader.json  # or `gcloud auth application-default login`
+  #   schema_map: { public: cosmos_demo }          # in BigQuery a schema is a dataset
 """
 
 

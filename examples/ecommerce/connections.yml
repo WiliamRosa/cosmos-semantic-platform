@@ -54,3 +54,13 @@ data_sources:
       user: ${COSMOS_ORACLE_USER:-cosmos}
       password: ${COSMOS_ORACLE_PASSWORD:-cosmos}
     schema_map: { public: cosmos }   # in Oracle a schema is a user
+
+  bigquery:
+    type: bigquery
+    options:
+      project: ${COSMOS_BIGQUERY_PROJECT:-cosmos-test}
+      location: ${COSMOS_BIGQUERY_LOCATION:-}
+      credentials_file: ${COSMOS_BIGQUERY_CREDENTIALS_FILE:-}
+      # The local emulator (`--profile bigquery`); leave it empty for BigQuery itself.
+      api_endpoint: ${COSMOS_BIGQUERY_ENDPOINT:-http://localhost:19050}
+    schema_map: { public: "${COSMOS_BIGQUERY_DATASET:-cosmos}" }   # a schema is a dataset

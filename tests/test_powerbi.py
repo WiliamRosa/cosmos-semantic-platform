@@ -136,6 +136,7 @@ def test_bim_and_tmdl_give_the_same_model():
         "mysql_connector",
         "mariadb_connector",
         "oracle_connector",
+        "bigquery_connector",
     ],
 )
 def test_imported_model_matches_native(path, source, graph, request):
@@ -449,6 +450,7 @@ SOURCES = [
     "mysql_connector",
     "mariadb_connector",
     "oracle_connector",
+    "bigquery_connector",
 ]
 
 
