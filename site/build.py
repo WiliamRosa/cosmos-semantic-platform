@@ -29,9 +29,12 @@ MEDIA = {
 
 
 def main() -> None:
-    if DIST.exists():
-        shutil.rmtree(DIST)
-    shutil.copytree(SRC, DIST)
+    # Empty dist/ instead of deleting it: on Windows an editor or shell holding the folder open
+    # blocks removing the folder itself, but not its contents.
+    DIST.mkdir(exist_ok=True)
+    for entry in DIST.iterdir():
+        shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+    shutil.copytree(SRC, DIST, dirs_exist_ok=True)
 
     assets = DIST / "assets"
     assets.mkdir(exist_ok=True)

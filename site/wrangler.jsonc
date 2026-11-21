@@ -1,10 +1,24 @@
-// Cloudflare Worker that serves the built site (site/dist) as static assets.
-// The custom domain cosmosdata.ai is attached to this Worker in the Cloudflare dashboard.
+// Cloudflare Worker for cosmosdata.ai: static assets from site/dist, the www redirect and the contact form
+// endpoint (POST /api/contact) in worker/index.js, which mails messages through Email Routing.
 {
   "name": "cosmos-semantic-site",
+  "main": "worker/index.js",
   "compatibility_date": "2026-11-01",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "404-page"
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": true
+  },
+  "routes": [
+    { "pattern": "cosmosdata.ai", "custom_domain": true },
+    { "pattern": "www.cosmosdata.ai", "custom_domain": true }
+  ],
+  // Email Routing must be enabled on cosmosdata.ai, and CONTACT_TO must be an address it
+  // delivers to. run_worker_first lets the Worker redirect www to the apex for every path.
+  "send_email": [{ "name": "CONTACT_EMAIL" }],
+  "vars": {
+    "CONTACT_TO": "administrator@cosmosdata.ai",
+    "CONTACT_FROM": "website@cosmosdata.ai"
   }
 }
