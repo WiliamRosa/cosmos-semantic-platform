@@ -1,5 +1,5 @@
 """Importing models from other tools: dbt, Apache Ossie and Cube (phase 1), Power BI (phase 3),
-and exporting to Apache Ossie, Cube and dbt.
+and exporting to Apache Ossie, Cube, dbt and Databricks metric views.
 
 No conversion loses information silently: whatever has no equivalent becomes a warning in the
 report or is kept in ``custom_extensions``.
