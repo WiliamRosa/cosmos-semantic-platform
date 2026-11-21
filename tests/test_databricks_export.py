@@ -84,19 +84,25 @@ def test_structure(project):
         }
     ]
     dims = {d["name"]: d["expr"] for d in orders["dimensions"]}
-    assert dims["has_discount"] == "discount > 0"
+    # Bare columns of the view's own model are written `source.<col>`: `customer_id` is a
+    # column of `customers` too.
+    assert dims["has_discount"] == "source.discount > 0"
     assert dims["customers_segment"] == "customers.segment"
     measures = {m["name"]: m["expr"] for m in orders["measures"]}
     assert measures["order_count"] == "COUNT(*)"
-    assert measures["buyers"] == "COUNT(DISTINCT customer_id)"
-    assert measures["completed_revenue"] == "SUM(CASE WHEN status = 'completed' THEN amount END)"
-    assert measures["average_order_value"] == "CAST(SUM(amount) AS DOUBLE) / NULLIF(COUNT(*), 0)"
-    assert measures["net_revenue"] == "(SUM(amount) - SUM(discount))"
+    assert measures["buyers"] == "COUNT(DISTINCT source.customer_id)"
+    assert measures["completed_revenue"] == (
+        "SUM(CASE WHEN source.status = 'completed' THEN source.amount END)"
+    )
+    assert measures["average_order_value"] == (
+        "CAST(SUM(source.amount) AS DOUBLE) / NULLIF(COUNT(*), 0)"
+    )
+    assert measures["net_revenue"] == "(SUM(source.amount) - SUM(source.discount))"
     assert measures["orders_per_buyer"] == (
-        "(CAST(COUNT(*) AS DOUBLE) / NULLIF(COUNT(DISTINCT customer_id), 0))"
+        "(CAST(COUNT(*) AS DOUBLE) / NULLIF(COUNT(DISTINCT source.customer_id), 0))"
     )
     avg = {m["name"]: m["expr"] for m in views["order_items"]["measures"]}["avg_quantity"]
-    assert avg == "AVG(CAST(quantity AS DOUBLE))"
+    assert avg == "AVG(CAST(source.quantity AS DOUBLE))"
     exported = {m["name"] for v in views.values() for m in v["measures"]}
     assert not exported & REFUSED
     names = {m.name for m in project.metrics} | {
@@ -143,26 +149,64 @@ def test_filter_refusals(project):
         {"name": "by_month", "type": "simple", "measure": "revenue",
          "filter": "{ordered_at__month} = DATE '2024-01-01'"},
         {"name": "by_rule", "type": "simple", "measure": "revenue",
+         "filter": "{rule.order_size_band} = 'Large'"},
+        {"name": "by_band", "type": "simple", "measure": "revenue",
+         "filter": "{order_size_band} = 'Large'"},
+        {"name": "by_band_qualified", "type": "simple", "measure": "revenue",
+         "filter": "{orders.order_size_band} = 'Large'"},
+        {"name": "active", "type": "simple", "measure": "customer_count",
+         "filter": "{active_customer}"},
+        {"name": "missing_rule", "type": "simple", "measure": "revenue",
          "filter": "{rule.completed_orders}"},
+        {"name": "last_30_days", "type": "simple", "measure": "revenue",
+         "filter": "{ordered_at} >= CURRENT_DATE - INTERVAL '30' DAY"},
         {"name": "bare", "type": "derived", "expr": "{revenue} + amount"},
         {"name": "uses_refused", "type": "ratio", "numerator": "by_segment",
          "denominator": "order_count"},
         {"name": "fine", "type": "ratio", "numerator": "revenue", "denominator": "order_count",
          "filter": "{has_discount}"},
     ]  # fmt: skip
+    # A model dimension with the name the export gives a joined one.
+    orders = next(m for m in data["semantic_models"] if m["name"] == "orders")
+    orders["dimensions"].append({"name": "customers_segment", "type": "categorical"})
     views, warnings = metric_views(
         Project.model_validate(data), allow_policy_loss=True, allow_metric_loss=True
     )
     joined = "\n".join(warnings)
+    # A business rule is a dimension of its models too; under every spelling it is refused,
+    # since the planner reads the version in effect on rules_as_of with the clock at as_of.
+    for name, ref in [
+        ("by_rule", "rule.order_size_band"),
+        ("by_band", "order_size_band"),
+        ("by_band_qualified", "orders.order_size_band"),
+    ]:
+        assert f"metrics.{name}: its filter uses the business rule `order_size_band` (`{ref}`)" in (
+            joined
+        )
+    assert (
+        "metrics.active: its filter uses the business rule `active_customer` (`active_customer`)"
+        in joined
+    )
+    assert "metrics.missing_rule: its filter reference `rule.completed_orders` does not" in joined
+    exported = {m["name"] for v in views.values() for m in v["measures"]}
+    assert not exported & {"by_rule", "by_band", "by_band_qualified", "active", "missing_rule"}
+    # A filter reading the clock is exported, with a warning.
+    assert "metrics.last_30_days: its filter reads the clock" in joined
+    assert "last_30_days" in exported
+    assert (
+        "semantic_models.orders: the dimension `customers_segment` has the name of one of the "
+        "model's own dimensions in its metric view; dimension skipped"
+    ) in joined
+    segment = [d for d in views["orders"]["dimensions"] if d["name"] == "customers_segment"]
+    assert segment == [{"name": "customers_segment", "expr": "source.customers_segment"}]
     assert "metrics.by_segment: its filter uses `customers.segment` from another model" in joined
     assert "metrics.by_month: its filter uses a time grain" in joined
-    assert "metrics.by_rule: its filter uses the business rule `rule.completed_orders`" in joined
     assert "metrics.bare: its expression uses bare columns (amount)" in joined
     assert "metrics.uses_refused: it uses `by_segment`, which is not exported" in joined
     fine = {m["name"]: m["expr"] for m in views["orders"]["measures"]}["fine"]
     assert fine == (
-        "CAST(SUM(CASE WHEN discount > 0 THEN amount END) AS DOUBLE) / "
-        "NULLIF(COUNT(CASE WHEN discount > 0 THEN 1 END), 0)"
+        "CAST(SUM(CASE WHEN source.discount > 0 THEN source.amount END) AS DOUBLE) / "
+        "NULLIF(COUNT(CASE WHEN source.discount > 0 THEN 1 END), 0)"
     )
 
 

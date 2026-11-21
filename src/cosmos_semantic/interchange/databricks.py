@@ -23,12 +23,11 @@ from __future__ import annotations
 
 from typing import Any
 
-import sqlglot
 import yaml
 from sqlglot import exp
 
 from cosmos_semantic.errors import QueryError
-from cosmos_semantic.expressions import parse_template, portable, qualify, ref_index, substitute
+from cosmos_semantic.expressions import parse_template, qualify, ref_index, substitute
 from cosmos_semantic.interchange import ExportResult
 from cosmos_semantic.interchange.cube import _plural, refuse_policy_loss
 from cosmos_semantic.spec import (
@@ -52,8 +51,30 @@ class _NotExported(Exception):
     """A metric the Databricks export cannot carry; the message is the reason."""
 
 
-def _parse(text: str) -> exp.Expression:
-    return portable(sqlglot.parse_one(text, read=DIALECT))
+def _own(text: str) -> exp.Expression:
+    """A column expression of the view's own model, each bare column written ``source.<col>``,
+    so it cannot be confused with a joined model's column of the same name."""
+    return qualify(text, SOURCE, DIALECT)
+
+
+# Functions that read the clock: in a metric view they follow the warehouse's clock, while the
+# planner pins them to the query's as_of.
+_CLOCK = (
+    exp.CurrentDate,
+    exp.CurrentDatetime,
+    exp.CurrentTime,
+    exp.CurrentTimestamp,
+    exp.CurrentTimestampLTZ,
+)
+_CLOCK_NAMES = {"NOW", "GETDATE", "SYSDATE", "SYSTIMESTAMP", "CURDATE", "LOCALTIMESTAMP"}
+
+
+def _reads_clock(tree: exp.Expression) -> bool:
+    return any(
+        isinstance(node, _CLOCK)
+        or (isinstance(node, exp.Anonymous) and str(node.this).upper() in _CLOCK_NAMES)
+        for node in tree.walk()
+    )
 
 
 def _sql(tree: exp.Expression) -> str:
@@ -162,6 +183,7 @@ class _Writer:
         self.graph = graph
         self.warnings = warnings
         self.lost: dict[str, str] = {}
+        self.current = ""  # the metric being built, for the warnings of its filters
         # model -> measures written on its view, as (name, aggregate expression)
         self.measures: dict[str, list[tuple[str, exp.Expression]]] = {m: [] for m in graph.models}
         for node in graph.models.values():
@@ -169,6 +191,7 @@ class _Writer:
                 tree, _ = self._expr(measure.name, None, set())
                 self.measures[node.name].append((measure.name, tree))
         for metric in graph.project.metrics:
+            self.current = metric.name
             try:
                 tree, models = self._expr(metric.name, None, set())
             except _NotExported as exc:
@@ -202,15 +225,20 @@ class _Writer:
                 view["joins"] = joins
             taken = {name for name, _ in measures}
             own = [
-                {"name": d.name, "expr": _sql(_parse(d.expr or d.name))}
-                for d in node.spec.dimensions
+                {"name": d.name, "expr": _sql(_own(d.expr or d.name))} for d in node.spec.dimensions
             ]
+            own_names = {d["name"] for d in own}
             view["dimensions"] = []
             for dim in [*own, *dims]:
                 if dim["name"] in taken:
+                    clash = (
+                        "one of the model's own dimensions"
+                        if dim not in own and dim["name"] in own_names
+                        else "a measure"
+                    )
                     self.warnings.append(
                         f"semantic_models.{node.name}: the dimension `{dim['name']}` has the "
-                        "name of a measure in its metric view; dimension skipped"
+                        f"name of {clash} in its metric view; dimension skipped"
                     )
                     continue
                 taken.add(dim["name"])
@@ -252,7 +280,7 @@ class _Writer:
                     "name for its own source; join skipped"
                 )
                 continue
-            local = _sql(qualify(edge.source_expr, SOURCE, DIALECT))
+            local = _sql(_own(edge.source_expr))
             remote = _sql(qualify(edge.target_expr, edge.target, DIALECT))
             source = _table(target.table, catalog)
             joins.append({"name": edge.target, "source": source, "on": f"{local} = {remote}"})
@@ -333,7 +361,7 @@ class _Writer:
             if cond is None:
                 return exp.Count(this=exp.Star())
             return exp.Count(this=exp.Case(ifs=[exp.If(this=cond, true=exp.Literal.number(1))]))
-        value = _parse(measure.expr or measure.name)
+        value = _own(measure.expr or measure.name)
         if cond is not None:
             value = exp.Case(ifs=[exp.If(this=cond, true=value)])
         if measure.agg == "count":
@@ -352,22 +380,30 @@ class _Writer:
         node = self.graph.models[model]
 
         def resolve(ref: str) -> exp.Expression:
-            if ref.startswith("rule."):
-                raise _NotExported(f"its filter uses the business rule `{ref}`")
             try:
                 dim = self.graph.resolve_dimension(ref, context=model)
             except QueryError as exc:
                 raise _NotExported(
                     f"its filter reference `{ref}` does not resolve ({exc})"
                 ) from None
+            if dim.model in self.graph.rule_models.get(dim.name, ()):
+                # A rule is a dimension of its models too; the planner reads the version in
+                # effect on rules_as_of, with the clock pinned to as_of.
+                raise _NotExported(f"its filter uses the business rule `{dim.name}` (`{ref}`)")
             if dim.model != model:
                 raise _NotExported(f"its filter uses `{ref}` from another model ({dim.model})")
             if dim.grain:
                 raise _NotExported(f"its filter uses a time grain (`{ref}`)")
             spec = node.dimensions[dim.name]
-            return _parse(spec.expr or spec.name)
+            return _own(spec.expr or spec.name)
 
-        return substitute(template, resolve)
+        tree = substitute(template, resolve)
+        if _reads_clock(tree):
+            self.warnings.append(
+                f"metrics.{self.current}: its filter reads the clock (such as CURRENT_DATE); in "
+                "the metric view it follows the warehouse's clock, not the query's as_of"
+            )
+        return tree
 
 
 def _table(name: str, catalog: str | None) -> str:
