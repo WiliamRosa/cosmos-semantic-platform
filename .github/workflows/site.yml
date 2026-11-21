@@ -1,0 +1,47 @@
+name: site
+
+# Builds the project website (site/) and deploys it to Cloudflare Pages, served at cosmosdata.ai.
+# Needs the repository secrets CLOUDFLARE_API_TOKEN (Cloudflare Pages: Edit) and
+# CLOUDFLARE_ACCOUNT_ID; without them the build still runs and the deploy is skipped.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/assets/**"
+      - "marketing/linkedin/posts/**"
+      - ".github/workflows/site.yml"
+  pull_request:
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python site/build.py
+      - name: Deploy to Cloudflare Pages
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "Cloudflare secrets not set; skipping the deploy."
+            exit 0
+          fi
+          npx --yes wrangler@3 pages deploy site/dist --project-name cosmos-semantic-site --branch main
