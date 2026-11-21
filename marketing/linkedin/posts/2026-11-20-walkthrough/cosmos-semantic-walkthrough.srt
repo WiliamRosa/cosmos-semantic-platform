@@ -1,0 +1,55 @@
+1
+00:00:00,400 --> 00:00:07,143
+This is Cosmos Semantic: an open-source semantic layer that makes AI agents get the number right, and prove it.
+
+2
+00:00:07,555 --> 00:00:11,594
+Getting started is one command: pip install cosmos-semantic.
+
+3
+00:00:13,025 --> 00:00:16,680
+Install it with the drivers for the databases you already use.
+
+4
+00:00:17,086 --> 00:00:23,528
+Create a project with the example model, and load synthetic e-commerce data into a local DuckDB file.
+
+5
+00:00:23,946 --> 00:00:31,329
+Ask for a governed metric. The answer carries its evidence: the formula, the reference date, the source, and fingerprints to reproduce it.
+
+6
+00:00:31,743 --> 00:00:39,962
+Now, five real databases running in Docker: PostgreSQL, SQL Server, MySQL, MariaDB and Oracle.
+
+7
+00:00:40,368 --> 00:00:45,649
+Each one is just a line in connections.yml. The semantic model does not change.
+
+8
+00:00:46,055 --> 00:00:48,097
+Load the same data into all of them.
+
+9
+00:00:49,102 --> 00:00:57,402
+Same question, six engines, the same number. Cosmos writes the SQL for each dialect, and the test suite checks it on every change.
+
+10
+00:00:57,805 --> 00:01:04,410
+And when an AI agent asks for customer emails, the request is refused. Personal data never reaches an agent.
+
+11
+00:01:06,977 --> 00:01:13,082
+For the people who decide, there is a console. Can we trust the numbers? Every governed metric, with its health and its owner.
+
+12
+00:01:14,461 --> 00:01:20,671
+Every answer an agent received is audited: the rules applied, the row filters, and the exact SQL.
+
+13
+00:01:21,930 --> 00:01:26,062
+Business processes become a graph, from source systems to metrics.
+
+14
+00:01:27,164 --> 00:01:32,782
+Cosmos Semantic. Open source, Apache 2.0. Try the live demo, no install needed.

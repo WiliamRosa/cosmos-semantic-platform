@@ -249,7 +249,7 @@ class EvidenceBuilder:
                 "concepts": concepts,
             }
         metric = g.metrics[name]
-        return {
+        entry = {
             "name": name,
             "type": metric.type,
             "description": metric.description,
@@ -257,6 +257,12 @@ class EvidenceBuilder:
             "measures": [self._measure(m) for m in sorted(self._leaf_measures(name))],
             "concepts": concepts,
         }
+        if metric.reconciliation is not None:
+            # The tolerance reconciliation and check runs use for this metric (DEC-39). Only
+            # present when the metric declares one, so other envelopes keep their shape.
+            abs_tol, rel_tol = metric.reconciliation.tolerances()
+            entry["reconciliation"] = {"abs_tolerance": abs_tol, "rel_tolerance": rel_tol}
+        return entry
 
     def time(
         self, name: str, request: QueryRequest, trace: QueryTrace | None = None

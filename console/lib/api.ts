@@ -329,4 +329,93 @@ export const endpoints = {
     return api<RunsPage>(`/v1/console/runs${query({ offset, limit })}`);
   },
   usage: () => api<Record<string, unknown> & { available: boolean }>("/v1/console/usage"),
+  // The query explorer uses the public API, with the same credential, row filters and audit.
+  members: () => api<Members>("/v1/members"),
+  dimensionValues: (name: string) =>
+    api<DimensionValues>(`/v1/dimensions/${encodeURIComponent(name)}/values`),
+  query: (request: QueryRequest) =>
+    api<QueryResult>("/v1/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+  sql: (request: QueryRequest) =>
+    api<SqlPreview>("/v1/sql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }),
 };
+
+/** `GET /v1/members`: what a request can ask for. */
+export interface Members {
+  metrics: { name: string; type: string; description: string | null; model?: string }[];
+  dimensions: {
+    name: string;
+    type: "categorical" | "time" | "boolean" | "number" | string;
+    description: string | null;
+    sensitivity?: string;
+    rule?: string;
+  }[];
+  rules: { name: string; kind: string; models: string[]; filter: string | null; description: string | null }[];
+}
+
+export interface DimensionValues {
+  values?: { value: unknown; count: number }[];
+  [key: string]: unknown;
+}
+
+/** The body of `POST /v1/query` and `POST /v1/sql` (QueryRequest in planner.py). */
+export interface QueryRequest {
+  metrics: string[];
+  dimensions?: string[];
+  filters?: string[];
+  order_by?: string[];
+  limit?: number;
+}
+
+export interface SqlPreview {
+  sql: string;
+  dialect: string;
+  data_source: string | null;
+}
+
+/** The evidence envelope (evidence.py); only the parts the explorer shows are typed. */
+export interface Evidence {
+  query_id: string;
+  generated_at: string;
+  engine_version: string;
+  model_hash: string;
+  as_of: string | null;
+  rules_as_of: string | null;
+  timezone: string;
+  data_source: { name: string | null; dialect: string };
+  principal: { subject: string | null; channel: string; user_context: Record<string, unknown> };
+  metrics: { name: string; type: string; description: string | null; formula: string | null }[];
+  rules: {
+    name: string;
+    kind: string;
+    used_as: string[];
+    owner: string | null;
+    effective_from: string | null;
+    current_version: boolean;
+    logic: string;
+    tests: { status: string; passed: number; total: number };
+  }[];
+  policies: {
+    row_filters: { model: string; name: string; filter: string; user_fields: Record<string, unknown> }[];
+    sensitive_data_blocked_for_agents: boolean;
+  };
+  sql: { text: string; hash: string };
+  result: { row_count: number; columns: string[]; hash: string };
+  caveats: string[];
+  [key: string]: unknown;
+}
+
+export interface QueryResult {
+  columns: { name: string; kind: "dimension" | "metric"; member: string }[];
+  rows: Record<string, unknown>[];
+  row_count: number;
+  truncated: boolean;
+  evidence: Evidence;
+}

@@ -1,4 +1,4 @@
-# Monday 2026-11-23: launch
+# Friday 2026-11-20: launch
 
 The page's first post: what Cosmos Semantic is, for people who have never heard of it.
 
@@ -28,7 +28,5 @@ https://github.com/WiliamRosa/cosmos-semantic-platform
 
 ## Publish
 
-- **When:** Monday 2026-11-23, 09:00 São Paulo.
-- **Attach:** [`docs/assets/social-preview.png`](../../../../docs/assets/social-preview.png) (the console under "Verifiable numbers for AI agents").
-- **As:** Cosmos Semantic (check the author before posting).
-- After posting, share it from your personal profile with one line of your own: the page has no followers yet.
+- **Published:** Friday 2026-11-20, by the maintainer, as Cosmos Semantic.
+- **Attached:** [`docs/assets/social-preview.png`](../../../../docs/assets/social-preview.png) (the console under "Verifiable numbers for AI agents").

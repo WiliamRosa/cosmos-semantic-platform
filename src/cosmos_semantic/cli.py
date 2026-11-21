@@ -623,9 +623,18 @@ def _print_reconciliation(report: dict) -> None:
     typer.echo(f"  governed {report['cosmos']['formula']}  (as of {report['cosmos']['as_of']})")
     if report["legacy"].get("formula"):
         typer.echo(f"  other    {report['legacy']['formula']}")
-    for example in report["examples"][:5]:
+    tol = report["tolerance"]
+    typer.echo(
+        f"  tolerance abs {tol['abs_tolerance']:g}, rel {tol['rel_tolerance']:g} ({tol['source']})"
+        + (f", {rows['within_tolerance']} rows within it" if rows["within_tolerance"] else "")
+    )
+    shown = [("example", e) for e in report["examples"][:5]]
+    shown += [("within", e) for e in report["tolerated"][:5]]
+    for label, example in shown:
+        diff = example["difference"]
         typer.echo(
-            f"  example  {example['key']}: governed {example['cosmos']} / legacy {example['legacy']}"
+            f"  {label:8} {example['key']}: governed {example['cosmos']} / "
+            f"legacy {example['legacy']}" + (f" (difference {diff:+g})" if diff is not None else "")
         )
     for cause in report["causes"]:
         typer.secho(f"  cause    [{cause['code']}] {cause['summary']}", fg=typer.colors.CYAN)
@@ -1100,7 +1109,9 @@ def export_dbt_cmd(
         typer.Option(
             "--allow-metric-loss",
             help=(
-                "Export even though metrics dbt cannot carry here are dropped: cumulative "
+                "Export even though metrics dbt cannot carry here are dropped: running "
+                "totals other than to-date sums and counts, windows not in days, offsets "
+                "over a model without a time dimension, cumulative metrics inside other "
                 "metrics, metrics filtered by a time dimension, a business rule or $user, "
                 "derived metrics over bare columns, ratio and derived metrics over a filtered "
                 "count, filtered ratios over a count across models or over nested metrics, "

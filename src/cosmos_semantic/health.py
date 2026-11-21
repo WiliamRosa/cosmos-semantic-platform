@@ -17,6 +17,11 @@ rule tests), ISO timestamps or null. With ``health.max_age`` in the project, a m
 last reconciliation matched but is older than that needs ``attention``
 (``reconciliation_stale``). Rule tests run again each time health is computed, so they are
 never stale.
+
+A reconciliation passes or fails within the tolerance its metric declares (DEC-39). When that
+tolerance is the metric's own, the ``reconciled`` and ``reconciliation_failed`` reasons carry
+it (``tolerance: {abs_tolerance, rel_tolerance, source: "metric"}``); under the default
+tolerance they are unchanged.
 """
 
 from __future__ import annotations
@@ -44,6 +49,16 @@ def _parse_at(value: Any) -> dt.datetime | None:
     except (TypeError, ValueError):
         return None
     return at if at.tzinfo else at.replace(tzinfo=dt.UTC)
+
+
+def _declared_tolerance(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    """``{"tolerance": ...}`` when a case ran under the metric's own tolerance (DEC-39), else
+    nothing, so reasons under the default tolerance keep their shape."""
+    for case in cases:
+        tolerance = case.get("tolerance")
+        if isinstance(tolerance, dict) and tolerance.get("source") == "metric":
+            return {"tolerance": tolerance}
+    return {}
 
 
 class Health:
@@ -122,11 +137,15 @@ class Health:
                         "title": c["title"],
                         "at": at,
                     }
+                    | _declared_tolerance([c])
                     for c in bad
                 ]
                 states[member] = {"state": "failing", "reasons": reasons, "last_reconciled_at": at}
             else:
-                reasons = [{"code": "reconciled", "count": len(cases), "at": at}]
+                reasons = [
+                    {"code": "reconciled", "count": len(cases), "at": at}
+                    | _declared_tolerance(cases)
+                ]
                 state = "healthy"
                 if max_age is not None:
                     when = _parse_at(at)
