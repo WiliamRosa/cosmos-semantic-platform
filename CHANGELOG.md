@@ -29,6 +29,21 @@ format or the API; such changes are listed under **Changed**.
   carry it when it is the metric's own, and query evidence lists it under the metric. Each
   tolerance must be a non-negative, finite number, and unknown keys are refused. Without the
   field nothing changes: same results, same model hash, same SQL and evidence.
+- `deploy/azure/`: a first slice packaging Cosmos Semantic as an Azure Marketplace Managed
+  Application offer (ADR 0015), whose resources deploy into the customer's own subscription
+  rather than a publisher-run SaaS. A Dockerfile builds `cosmos serve` from source with the
+  e-commerce example and a baked-in DuckDB demo dataset (no external database needed to try
+  it), `entrypoint.sh` falls back to `--allow-anonymous` until `COSMOS_OIDC_ISSUER` is set, and
+  `main.bicep` provisions a scale-to-zero Container App, a Key Vault, and a user-assigned
+  managed identity with "Key Vault Secrets User" on it. `createUiDefinition.json` adds one
+  wizard step for Microsoft Entra ID wiring. Validated end-to-end in a real subscription
+  (ADR 0015's 2026-11-21 update): image build and push, Bicep deploy, and the actual wizard and
+  post-deploy overview/side-menu chrome via a private Service Catalog Managed Application. Fixed
+  along the way: the `AcrPull` role assignment now targets the registry's own resource group
+  through `acr-pull-role.bicep` (a module; it previously defaulted to the deployment's own
+  resource group, granting nothing useful), and a new `.dockerignore` keeps the build context
+  from including `.venv`. Not done: a production `connections.yml` wired to Key Vault secrets,
+  and the Partner Center listing itself.
 - `cosmos export dbt` and `cosmos import dbt` carry offsets as MetricFlow's `offset_window`
   (DEC-36). The export writes a derived metric's `inputs: [{metric, offset}]` as the input's
   `offset_window` in the largest unit that holds the offset (`7 days` as `1 week`, `3 months` as
