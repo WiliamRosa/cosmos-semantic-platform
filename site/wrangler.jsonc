@@ -1,0 +1,10 @@
+// Cloudflare Worker that serves the built site (site/dist) as static assets.
+// The custom domain cosmosdata.ai is attached to this Worker in the Cloudflare dashboard.
+{
+  "name": "cosmos-semantic-site",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page"
+  }
+}
