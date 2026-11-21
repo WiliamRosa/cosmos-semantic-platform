@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>bash</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #020617; }
+  .win { position: absolute; inset: 22px 28px 22px 28px; border-radius: 14px; overflow: hidden;
+         background: #0b1220; border: 1px solid #1e293b; box-shadow: 0 30px 80px rgba(0,0,0,.6); display: flex; flex-direction: column; }
+  .bar { height: 38px; flex: none; display: flex; align-items: center; gap: 9px; padding: 0 16px; background: #111a2e; border-bottom: 1px solid #1e293b;
+         font: 600 14px "JetBrains Mono", ui-monospace, monospace; color: #94a3b8; }
+  .bar i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .bar .t { margin-left: 14px; }
+  #out { flex: 1; overflow: hidden; padding: 16px 22px 120px; font: 17px/1.5 "JetBrains Mono", ui-monospace, monospace;
+         color: #e2e8f0; white-space: pre-wrap; word-break: break-all; }
+  .p { color: #38bdf8; } .c { color: #f8fafc; font-weight: 600; } .ok { color: #34d399; } .err { color: #fb7185; }
+  .dim { color: #64748b; } .hl { color: #fbbf24; } .num { color: #7dd3fc; }
+  .cur { display: inline-block; width: 10px; height: 20px; background: #38bdf8; vertical-align: -3px; animation: b 1s steps(1) infinite; }
+  @keyframes b { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+<div class="win">
+  <div class="bar"><i style="background:#fb7185"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i><span class="t" id="title">bash</span></div>
+  <div id="out"></div>
+</div>
+<script>
+const out = document.getElementById('out');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function colorize(line) {
+  const e = esc(line);
+  if (/^error|Traceback|refused/i.test(line)) return `<span class="err">${e}</span>`;
+  if (/^(data loaded|Successfully installed|\s+created)/.test(line)) return `<span class="ok">${e}</span>`;
+  if (/^-- /.test(line)) return `<span class="hl">${e}</span>`;
+  if (/^(evidence|  model|  as of|  who|  metric|  lineage|  sql|  note)/.test(line)) return e.replace(/^(\s*\w+(?: of)?)/, '<span class="num">$1</span>');
+  if (/^(next steps|NAMES|-{3,}|orders__status)/.test(line)) return `<span class="dim">${e}</span>`;
+  return e;
+}
+function scroll() { out.scrollTop = out.scrollHeight; }
+window.term = {
+  title(t) { document.getElementById('title').textContent = t; },
+  clear() { out.innerHTML = ''; },
+  async run(cmd, lines, opt = {}) {
+    const typeMs = opt.typeMs ?? 28, lineMs = opt.lineMs ?? 18;
+    const row = document.createElement('div');
+    row.innerHTML = `<span class="p">${esc(opt.prompt ?? '~/shop $')}</span> <span class="c"></span><span class="cur"></span>`;
+    out.appendChild(row); scroll();
+    const c = row.querySelector('.c');
+    for (const ch of cmd) { c.textContent += ch; await sleep(typeMs); }
+    await sleep(opt.pauseMs ?? 350);
+    row.querySelector('.cur').remove();
+    for (const l of lines) {
+      const d = document.createElement('div'); d.innerHTML = colorize(l) || '&nbsp;'; out.appendChild(d); scroll();
+      await sleep(lineMs);
+    }
+    const blank = document.createElement('div'); blank.innerHTML = '&nbsp;'; out.appendChild(blank); scroll();
+  },
+};
+</script>
+</body>
+</html>

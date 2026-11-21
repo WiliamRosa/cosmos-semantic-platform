@@ -16,6 +16,7 @@ import {
   Moon,
   Search,
   Sun,
+  Telescope,
   Workflow,
   X,
 } from "lucide-react";
@@ -34,6 +35,7 @@ const NAV: { href: string; key: Key; icon: typeof Activity }[] = [
   { href: "/processes/", key: "nav.processes", icon: Workflow },
   { href: "/catalog/", key: "nav.catalog", icon: BookOpen },
   { href: "/answers/", key: "nav.answers", icon: MessageSquareText },
+  { href: "/explore/", key: "nav.explore", icon: Telescope },
   { href: "/health/", key: "nav.health", icon: Activity },
   { href: "/usage/", key: "nav.usage", icon: CircleDollarSign },
 ];
