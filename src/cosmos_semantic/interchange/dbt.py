@@ -904,7 +904,10 @@ class _DbtWriter:
                 f"its expression uses bare columns ({', '.join(bare)}), and a dbt derived "
                 "metric references metrics only"
             )
-        names = [self._use(ref) for ref in refs]
+        # An alias (DEC-44) stays the name in the expression, as MetricFlow's input `alias`.
+        aliases = metric.aliases()
+        names = [ref if ref in aliases else self._use(ref) for ref in refs]
+        used = {alias: self._use(target) for alias, target in aliases.items()}
         if tree.find(exp.Div):
             # Division as the planner computes it: real, and null on a zero denominator.
             text = re.sub(
@@ -917,9 +920,11 @@ class _DbtWriter:
         windows = {ref: _dbt_offset_window(offset) for ref, offset in metric.offsets().items()}
         inputs = []
         for name in dict.fromkeys(names):
-            item: dict[str, Any] = {"name": name}
+            item: dict[str, Any] = {"name": used.get(name, name)}
             if name in windows:
                 item["offset_window"] = windows[name]
+            if name in aliases:
+                item["alias"] = name
             inputs.append(item)
         if windows:
             self._warn_offsets(metric, windows)
@@ -931,7 +936,7 @@ class _DbtWriter:
         ``metric_time`` and where MetricFlow's numbers differ from the engine's."""
         times = []
         for ref in windows:
-            for owner in sorted(self._leaves(ref)):
+            for owner in sorted(self._leaves(metric.target(ref))):
                 spec = self.graph.models[owner].spec
                 first = next((d.name for d in spec.dimensions if d.type == "time"), None)
                 if first is None:
@@ -942,8 +947,11 @@ class _DbtWriter:
                 times.append(f"`{owner}.{first}`")
         times = list(dict.fromkeys(times))
         offsets = metric.offsets()
+        aliases = metric.aliases()
         reads = ", ".join(
-            f"`{ref}` by `{offsets[ref]}` (`offset_window: {window}`)"
+            f"`{metric.target(ref)}`"
+            + (f" (as `{ref}`)" if ref in aliases else "")
+            + f" by `{offsets[ref]}` (`offset_window: {window}`)"
             for ref, window in windows.items()
         )
         # The grains the engine accepts for every offset of the metric.
@@ -969,7 +977,7 @@ class _DbtWriter:
         if isinstance(metric, RatioMetric):
             return self._measures(metric.numerator) | self._measures(metric.denominator)
         if isinstance(metric, DerivedMetric):
-            refs = REF_RE.findall(metric.expr)
+            refs = [metric.target(r) for r in REF_RE.findall(metric.expr)]
             return set().union(*(self._measures(r.split(".")[-1]) for r in refs))
         return {metric.measure}
 

@@ -456,15 +456,18 @@ class Planner:
                 if ref not in shifted:
                     return self._metric_expr(ref, groups, stack, extra_filter, offset)
                 text = shifted[ref]
+                # An alias reads its input's metric (DEC-44); the CTE is the metric's model's
+                # at that offset, so an unshifted read of the same metric stays apart.
+                read = metric.target(ref)
                 problem = offset_problem(text)
                 if problem:
                     raise QueryError(f"`{name}`: {problem}")
-                for under in metrics_under(g, ref):
-                    problem = offset_input_problem(g.metrics[under], ref)
+                for under in metrics_under(g, read):
+                    problem = offset_input_problem(g.metrics[under], read)
                     if problem:
                         raise QueryError(f"`{name}`: {problem}")
-                self._offset_uses.append(_OffsetUse(name, ref, text))
-                return self._metric_expr(ref, groups, stack, extra_filter, parse_offset(text))
+                self._offset_uses.append(_OffsetUse(name, read, text))
+                return self._metric_expr(read, groups, stack, extra_filter, parse_offset(text))
 
             return exp.Paren(this=substitute(template, resolve))
         if isinstance(metric, CumulativeMetric):

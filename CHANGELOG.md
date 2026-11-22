@@ -26,6 +26,19 @@ format or the API; such changes are listed under **Changed**.
   exactly the SQL, and so the `sql_hash`, of `14 days` or `12 months`; the evidence keeps the
   offset as written. Reference cases with hand-written SQL check `1 year` by month and by year
   and `2 weeks` by day on every database.
+- Growth in one metric (DEC-44): an offset input of a derived metric takes an `alias`, so the
+  expression reads the same metric both shifted and unshifted, such as
+  `expr: ({revenue} - {revenue_year_before}) / {revenue_year_before}` with
+  `inputs: [{metric: revenue, offset: 12 months, alias: revenue_year_before}]`; no helper
+  metric is needed. Several aliases can read one metric at different offsets. Validation
+  refuses an alias that is not used in `expr`, names two inputs or is the name of a measure or
+  metric, and a metric listed twice in `inputs` without aliases. The evidence's `time.shifts`
+  entry names the `alias`, the catalog and formula expand it, and `cosmos export dbt` writes it
+  as MetricFlow's input `alias`. The SQL of every existing request is unchanged (13,688
+  request-dialect pairs compared with the previous version), and so is the hash of a model
+  without aliases. New example metric `revenue_yoy_growth` and reference cases A49 to A51
+  (year-over-year growth by month and by year, and beside month-over-month growth by status
+  with a filter).
 - BigQuery as a data source (DEC-40, [ADR 0016](docs/decisions/0016-bigquery-as-a-data-source.md)):
   `type: bigquery` with the `bigquery` extra (`google-cloud-bigquery`). It logs in with
   Application Default Credentials or a service account key (`options.credentials_file`),

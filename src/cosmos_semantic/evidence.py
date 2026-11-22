@@ -312,9 +312,9 @@ class EvidenceBuilder:
 
     def _shifts(self, name: str, seen: frozenset[str] = frozenset()) -> list[dict[str, str]]:
         """The inputs read at an earlier period under ``name`` (DEC-18), each with the metric
-        that reads it, the input and the offset: ``name``'s own shifts first, in ``expr``
-        order, then those of the metrics it references, depth-first in ``expr`` order, each
-        listed once."""
+        that reads it, the input and the offset, and the alias ``expr`` reads it by when it
+        has one (DEC-44): ``name``'s own shifts first, in ``expr`` order, then those of the
+        metrics it references, depth-first in ``expr`` order, each listed once."""
         g = self.graph
         if name in seen or name in g.measure_owner or name not in g.metrics:
             return []
@@ -325,13 +325,16 @@ class EvidenceBuilder:
         if isinstance(metric, RatioMetric):
             refs = [metric.numerator, metric.denominator]
         elif isinstance(metric, DerivedMetric):
-            refs = list(dict.fromkeys(REF_RE.findall(metric.expr)))
+            used = list(dict.fromkeys(REF_RE.findall(metric.expr)))
             offsets = metric.offsets()
+            aliases = metric.aliases()
             own = [
-                {"metric": name, "input": ref, "offset": offsets[ref]}
-                for ref in refs
+                {"metric": name, "input": metric.target(ref), "offset": offsets[ref]}
+                | ({"alias": ref} if ref in aliases else {})
+                for ref in used
                 if ref in offsets
             ]
+            refs = list(dict.fromkeys(metric.target(ref) for ref in used))
         out = own
         for ref in refs:
             for shift in self._shifts(ref, seen):
@@ -363,7 +366,7 @@ class EvidenceBuilder:
         elif isinstance(metric, RatioMetric):
             refs = [metric.numerator, metric.denominator]
         elif isinstance(metric, DerivedMetric):
-            refs = REF_RE.findall(metric.expr)
+            refs = [metric.target(ref) for ref in REF_RE.findall(metric.expr)]
         out: set[str] = set()
         for ref in refs:
             out |= self._leaf_measures(ref, seen | {name})
@@ -400,7 +403,7 @@ class EvidenceBuilder:
 
             def part(match) -> str:
                 ref = match.group(1)
-                inner = f"({self.formula(ref, seen)})"
+                inner = f"({self.formula(metric.target(ref), seen)})"
                 if ref in offsets:
                     return f"{inner} {offsets[ref]} earlier"
                 return inner

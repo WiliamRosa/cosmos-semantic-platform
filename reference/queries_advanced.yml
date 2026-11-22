@@ -1131,3 +1131,135 @@ cases:
         JOIN public.orders o
           ON o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
         GROUP BY d.dd
+
+  # -- The same input read shifted and unshifted, through an alias (DEC-44) --------------
+  # `revenue_yoy_growth` reads `revenue` at the same period and, as `revenue_year_before`, 12
+  # months earlier, in one metric. The hand-written SQL pairs periods by a period number, never
+  # by date arithmetic, as in A35 to A37.
+  - id: A49
+    category: tempo
+    phase: 3
+    title: Revenue and year-over-year growth by month, from one metric with an aliased offset input
+    request:
+      metrics: [revenue, revenue_yoy_growth]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      WITH monthly AS (
+        SELECT DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM public.orders
+        GROUP BY DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+             CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
+               AS revenue_yoy_growth
+      FROM monthly cur
+      LEFT JOIN monthly prev ON prev.k = cur.k - 12
+    sql_by_dialect:
+      tsql: |
+        WITH monthly AS (
+          SELECT DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
+                 SUM(amount) AS revenue
+          FROM public.orders
+          GROUP BY DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+               CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
+                 AS revenue_yoy_growth
+        FROM monthly cur
+        LEFT JOIN monthly prev ON prev.k = cur.k - 12
+
+  - id: A50
+    category: tempo
+    phase: 3
+    title: Year-over-year growth by year (12 months is one year)
+    request:
+      metrics: [revenue, revenue_yoy_growth]
+      dimensions: [orders.ordered_at__year]
+    sql: |
+      WITH yearly AS (
+        SELECT DATE_TRUNC('year', ordered_at) AS yr, EXTRACT(YEAR FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM public.orders
+        GROUP BY DATE_TRUNC('year', ordered_at), EXTRACT(YEAR FROM ordered_at)
+      )
+      SELECT cur.yr AS orders__ordered_at__year, cur.revenue AS revenue,
+             CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
+               AS revenue_yoy_growth
+      FROM yearly cur
+      LEFT JOIN yearly prev ON prev.k = cur.k - 1
+    sql_by_dialect:
+      tsql: |
+        WITH yearly AS (
+          SELECT DATETRUNC(year, ordered_at) AS yr, YEAR(ordered_at) AS k,
+                 SUM(amount) AS revenue
+          FROM public.orders
+          GROUP BY DATETRUNC(year, ordered_at), YEAR(ordered_at)
+        )
+        SELECT cur.yr AS orders__ordered_at__year, cur.revenue AS revenue,
+               CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
+                 AS revenue_yoy_growth
+        FROM yearly cur
+        LEFT JOIN yearly prev ON prev.k = cur.k - 1
+
+  # Month-over-month growth (through the helper metric `revenue_prev_month`) and
+  # year-over-year growth (through an alias) side by side, by status, with a filter that
+  # removes facts before the shift: the earlier periods are read from the filtered facts too.
+  - id: A51
+    category: tempo
+    phase: 3
+    title: Month-over-month and year-over-year growth by status and month, without canceled orders
+    request:
+      metrics: [revenue, revenue_mom_growth, revenue_yoy_growth]
+      dimensions: [orders.status, orders.ordered_at__month]
+      filters:
+        - "{orders.status} <> 'canceled'"
+    sql: |
+      WITH monthly AS (
+        SELECT status, DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM public.orders
+        WHERE status <> 'canceled'
+        GROUP BY status, DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.status AS orders__status, cur.mon AS orders__ordered_at__month,
+             cur.revenue AS revenue,
+             CAST(cur.revenue - m.revenue AS DOUBLE PRECISION) / NULLIF(m.revenue, 0)
+               AS revenue_mom_growth,
+             CAST(cur.revenue - y.revenue AS DOUBLE PRECISION) / NULLIF(y.revenue, 0)
+               AS revenue_yoy_growth
+      FROM monthly cur
+      LEFT JOIN monthly m
+        ON (m.status = cur.status OR (m.status IS NULL AND cur.status IS NULL))
+        AND m.k = cur.k - 1
+      LEFT JOIN monthly y
+        ON (y.status = cur.status OR (y.status IS NULL AND cur.status IS NULL))
+        AND y.k = cur.k - 12
+    sql_by_dialect:
+      tsql: |
+        WITH monthly AS (
+          SELECT status, DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
+                 SUM(amount) AS revenue
+          FROM public.orders
+          WHERE status <> 'canceled'
+          GROUP BY status, DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT cur.status AS orders__status, cur.mon AS orders__ordered_at__month,
+               cur.revenue AS revenue,
+               CAST(cur.revenue - m.revenue AS FLOAT) / NULLIF(m.revenue, 0)
+                 AS revenue_mom_growth,
+               CAST(cur.revenue - y.revenue AS FLOAT) / NULLIF(y.revenue, 0)
+                 AS revenue_yoy_growth
+        FROM monthly cur
+        LEFT JOIN monthly m
+          ON (m.status = cur.status OR (m.status IS NULL AND cur.status IS NULL))
+          AND m.k = cur.k - 1
+        LEFT JOIN monthly y
+          ON (y.status = cur.status OR (y.status IS NULL AND cur.status IS NULL))
+          AND y.k = cur.k - 12
