@@ -279,7 +279,24 @@ def test_grain_fit():
     assert parse_offset("1 month") == (1, "month")
     assert parse_offset(" 12 Months ") == (12, "month")
     assert parse_offset("1 day") == parse_offset("1 days") == (1, "day")
-    for text in ("0 months", "2 weeks", "1 year", "month", "-1 day", "1.5 months", ""):
+    # Weeks are 7 days and years 12 months (DEC-46), singular and plural.
+    assert parse_offset("1 week") == parse_offset("1 weeks") == (7, "day")
+    assert parse_offset(" 2 Weeks ") == parse_offset("14 days") == (14, "day")
+    assert parse_offset("1 year") == parse_offset("1 years") == (12, "month")
+    assert parse_offset("2 years") == parse_offset("24 months") == (24, "month")
+    for text in (
+        "0 months",
+        "0 weeks",
+        "0 years",
+        "1 quarter",
+        "1 hour",
+        "month",
+        "year",
+        "-1 day",
+        "1.5 months",
+        "1.5 years",
+        "",
+    ):
         assert parse_offset(text) is None, text
     # The grains each offset is a whole number of periods of; every other grain is refused.
     fits = {
@@ -292,6 +309,10 @@ def test_grain_fit():
         "3 days": {"day"},
         "7 days": {"day", "week"},
         "14 days": {"day", "week"},
+        "1 week": {"day", "week"},
+        "2 weeks": {"day", "week"},
+        "1 year": {"month", "quarter", "year"},
+        "2 years": {"month", "quarter", "year"},
     }
     for text, grains in fits.items():
         for grain in ("hour", "day", "week", "month", "quarter", "year", None):
@@ -301,10 +322,10 @@ def test_grain_fit():
 INVALID = (
     MODEL
     + """
-  - name: in_weeks
+  - name: in_quarters
     type: derived
     expr: "{amount}"
-    inputs: [{metric: amount, offset: 2 weeks}]
+    inputs: [{metric: amount, offset: 1 quarter}]
   - name: zero
     type: derived
     expr: "{amount}"
@@ -325,6 +346,16 @@ INVALID = (
     type: derived
     expr: "{amount_growth}"
     inputs: [{metric: amount_growth, offset: 1 month}]
+  - name: days_and_months
+    type: derived
+    expr: "{amount} - {lines}"
+    inputs: [{metric: amount, offset: 1 year}, {metric: lines, offset: 2 weeks}]
+  - name: mixed_through_metrics
+    type: derived
+    expr: "{amount_prev_month} - {amount_week_before}"
+  - name: above_the_mix
+    type: derived
+    expr: "{mixed_through_metrics} * 2"
 """
 )
 
@@ -338,14 +369,24 @@ def test_validation_refuses_what_the_slice_does_not_cover():
         if issue.severity == "error":
             errors.setdefault(issue.location.split(".")[1], []).append(issue.message)
     assert set(errors) == {
-        "in_weeks",
+        "in_quarters",
+        "days_and_months",
+        "mixed_through_metrics",
         "zero",
         "unreferenced",
         "twice",
         "running_shifted",
         "shifted_twice",
     }
-    assert "offset `2 weeks` is not supported" in errors["in_weeks"][0]
+    assert "offset `1 quarter` is not supported" in errors["in_quarters"][0]
+    # Days (or weeks) and months (or years) under one metric: no grain answers it (DEC-46).
+    # The error is on the metric where the mix appears, not on the metrics above it.
+    assert errors["days_and_months"] == [
+        "`days_and_months` reads inputs `2 weeks` and `1 year` earlier; an offset in days or "
+        "weeks runs by day or week and one in months or years by month, quarter or year, so "
+        "no grain can answer it"
+    ]
+    assert "reads inputs `7 days` and `1 month` earlier" in errors["mixed_through_metrics"][0]
     assert "offset `0 months` is not supported" in errors["zero"][0]
     assert errors["unreferenced"] == ["input `lines` is not referenced in `expr`"]
     assert errors["twice"] == [
@@ -356,7 +397,8 @@ def test_validation_refuses_what_the_slice_does_not_cover():
     assert "which has offsets of its own" in errors["shifted_twice"][0]
     # The planner refuses them too, for graphs compiled without `strict`.
     for metric, message in [
-        ("in_weeks", "offset `2 weeks` is not supported"),
+        ("in_quarters", "offset `1 quarter` is not supported"),
+        ("days_and_months", "an offset of `2 weeks` cannot be applied by month"),
         ("running_shifted", "uses the cumulative metric `amount_running`"),
         ("shifted_twice", "which has offsets of its own"),
     ]:
@@ -567,7 +609,7 @@ BAD_ALIASES = (
   - name: alias_bad_offset
     type: derived
     expr: "{amount} - {amount_before}"
-    inputs: [{metric: amount, offset: 2 weeks, alias: amount_before}]
+    inputs: [{metric: amount, offset: 1 quarter, alias: amount_before}]
   - name: alias_of_a_running_total
     type: derived
     expr: "{running_before}"
@@ -595,8 +637,8 @@ def test_alias_validation():
         "alias_unused": ["alias `amount_before` (input `amount`) is not referenced in `expr`"],
         "alias_of_nothing": ["reference `missing` is neither a measure nor a metric"],
         "alias_bad_offset": [
-            "offset `2 weeks` is not supported; use a whole number of days or months, such as "
-            "`7 days` or `1 month`"
+            "offset `1 quarter` is not supported; use a whole number of days, weeks, months or "
+            "years, such as `7 days`, `2 weeks`, `1 month` or `1 year`"
         ],
         "alias_of_a_running_total": [
             "`amount_running` is read with an offset, and it uses the cumulative metric "
@@ -610,6 +652,48 @@ def test_alias_validation():
         Planner(graph, "duckdb").plan(
             QueryRequest(metrics=["alias_of_a_running_total"], dimensions=[MONTH])
         )
+
+
+def test_aliases_in_weeks_and_years():
+    """Aliases take the DEC-46 units: an aliased `1 week` and an aliased `1 year` of the same
+    metric mix days and months, which no grain answers, and are refused; an aliased `1 year`
+    alone validates and reads `amount` 12 months earlier."""
+    mixed = (
+        MODEL
+        + """
+  - name: week_and_year_before
+    type: derived
+    expr: "{amount} - {amount_week_before_a} - {amount_year_before_a}"
+    inputs:
+      - {metric: amount, offset: 1 week, alias: amount_week_before_a}
+      - {metric: amount, offset: 1 year, alias: amount_year_before_a}
+"""
+    )
+    graph = _graph(mixed, strict=False)
+    errors = [i.message for i in graph.issues if i.location == "metrics.week_and_year_before"]
+    assert errors == [
+        "`week_and_year_before` reads inputs `1 week` and `1 year` earlier; an offset in days "
+        "or weeks runs by day or week and one in months or years by month, quarter or year, "
+        "so no grain can answer it"
+    ]
+    with pytest.raises(ModelError, match="no grain can answer it"):
+        _graph(mixed)
+
+    yearly = (
+        MODEL
+        + """
+  - name: amount_yoy
+    type: derived
+    expr: "{amount} - {amount_year_before_a}"
+    inputs: [{metric: amount, offset: 1 year, alias: amount_year_before_a}]
+"""
+    )
+    graph = _graph(yearly)
+    assert not [i for i in graph.issues if i.severity == "error"]
+    compiled = Planner(graph, "duckdb").plan(
+        QueryRequest(metrics=["amount_yoy"], dimensions=["sales.sold_at__year"])
+    )
+    assert "sales_agg_offset_12_month" in compiled.sql
 
 
 @pytest.mark.parametrize("alias", ["Revenue_Prev", "revenue-prev", "1st", "a" * 65, ""])

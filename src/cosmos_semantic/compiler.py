@@ -23,6 +23,7 @@ from cosmos_semantic.spec import (
     cumulative_agg_problem,
     input_problems,
     offset_problem,
+    parse_offset,
     window_agg_refusal,
 )
 
@@ -409,6 +410,39 @@ def _check_offsets(g: SemanticGraph, err) -> None:
                 problem = offset_input_problem(g.metrics[name], item.metric)
                 if problem:
                     err(loc, problem)
+    _check_offset_units(g, err)
+
+
+def offset_units(g: SemanticGraph, name: str) -> dict[str, str]:
+    """Base unit (``day`` or ``month``) -> the first offset written in it, among the offsets
+    ``name`` reads its inputs with, directly or through other metrics. Weeks count as days
+    and years as months (DEC-46)."""
+    units: dict[str, str] = {}
+    for under in metrics_under(g, name):
+        metric = g.metrics[under]
+        if isinstance(metric, DerivedMetric):
+            for item in metric.inputs:
+                parsed = parse_offset(item.offset)
+                if parsed:
+                    units.setdefault(parsed[1], item.offset)
+    return units
+
+
+def _check_offset_units(g: SemanticGraph, err) -> None:
+    """A metric whose offsets mix days (or weeks) and months (or years) cannot be queried at
+    any grain: days fit a day or a week, months a month, a quarter or a year (DEC-46). The
+    error goes on the metric where the mix appears, not on every metric above it."""
+    mixed = {name for name in g.metrics if len(offset_units(g, name)) > 1}
+    for name in sorted(mixed):
+        if any(ref in mixed for ref in metric_refs(g.metrics[name])):
+            continue
+        units = offset_units(g, name)
+        err(
+            f"metrics.{name}",
+            f"`{name}` reads inputs `{units['day']}` and `{units['month']}` earlier; an offset "
+            "in days or weeks runs by day or week and one in months or years by month, "
+            "quarter or year, so no grain can answer it",
+        )
 
 
 def offset_input_problem(metric: Metric, read: str) -> str | None:

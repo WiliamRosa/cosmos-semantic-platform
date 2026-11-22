@@ -41,9 +41,9 @@ h3 { font-size: 1.1rem; font-weight: 600; }
   border-bottom: 1px solid var(--line);
 }
 .header-inner { display: flex; align-items: center; gap: 24px; height: 64px; }
-.brand { display: flex; align-items: center; gap: 10px; color: var(--ink); font-weight: 800; }
-.brand:hover { text-decoration: none; }
-.brand-logo { width: 30px; height: 30px; color: var(--muted); }
+.brand { display: flex; align-items: center; }
+.brand-logo { height: 36px; width: auto; }
+.footer-brand { display: flex; align-items: center; gap: 10px; }
 .nav { display: flex; gap: 22px; margin-left: auto; }
 .nav a { color: var(--muted); font-size: .95rem; }
 .nav a:hover { color: var(--ink); text-decoration: none; }
