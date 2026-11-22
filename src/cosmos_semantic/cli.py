@@ -1110,9 +1110,9 @@ def export_dbt_cmd(
             "--allow-metric-loss",
             help=(
                 "Export even though metrics dbt cannot carry here are dropped: running "
-                "totals other than to-date sums and counts, windows not in days, offsets "
-                "over a model without a time dimension, cumulative metrics inside other "
-                "metrics, metrics filtered by a time dimension, a business rule or $user, "
+                "totals other than to-date sums and counts, windows not in days or weeks, "
+                "offsets over a model without a time dimension, cumulative metrics inside "
+                "other metrics, metrics filtered by a time dimension, a business rule or $user, "
                 "derived metrics over bare columns, ratio and derived metrics over a filtered "
                 "count, filtered ratios over a count across models or over nested metrics, "
                 "and metrics that use one of these."

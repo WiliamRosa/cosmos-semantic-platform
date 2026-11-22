@@ -295,6 +295,28 @@ def input_problems(metric: DerivedMetric, refs: set[str], taken: set[str]) -> li
     return problems
 
 
+# Units a rolling window may be written in, as days per unit: weeks are read as 7 days
+# (DEC-27), as offsets read them (DEC-46).
+WINDOW_UNITS = {"day": 1, "week": 7}
+
+
+def window_parts(text: str | None) -> tuple[int, str] | None:
+    """``(N, unit)`` for a rolling window of ``N days`` or ``N weeks`` (singular too), with the
+    unit as written (``2 weeks`` is ``(2, "week")``); None for anything else, such as `1 month`
+    or `0 days`. The exports write a window in its own unit; the planner reads its days."""
+    match = re.fullmatch(r"\s*(\d+)\s+(day|week)s?\s*", text or "", re.IGNORECASE)
+    if not match or int(match.group(1)) <= 0:
+        return None
+    return int(match.group(1)), match.group(2).lower()
+
+
+def parse_window(text: str | None) -> int | None:
+    """The days of a rolling window of ``N days`` or ``N weeks`` (``2 weeks`` is 14); None
+    for anything else."""
+    parts = window_parts(text)
+    return parts[0] * WINDOW_UNITS[parts[1]] if parts else None
+
+
 # Aggregations whose per-period values combine over a rolling window or a running (to-date)
 # cumulative metric (DEC-21, DEC-22): sums and counts add up, minima and maxima take the
 # extreme. An average or a distinct count cannot be rebuilt from per-period values.
@@ -320,7 +342,7 @@ class CumulativeMetric(_MetricBase):
         None,
         description=(
             "Rolling window, such as `7 days`: the value on day D aggregates the measure over "
-            "the days D - (N - 1) to D. Only windows in days, queried at day grain, for now."
+            "the days D - (N - 1) to D. In days or weeks (7 days), queried at day grain."
         ),
     )
 
@@ -331,9 +353,11 @@ class CumulativeMetric(_MetricBase):
         return self
 
     def window_days(self) -> int | None:
-        """N for a `window` of `N days` (or `1 day`); None for any other window."""
-        match = re.fullmatch(r"\s*(\d+)\s+days?\s*", self.window or "", re.IGNORECASE)
-        return int(match.group(1)) if match and int(match.group(1)) > 0 else None
+        """N for a `window` of `N days` (or `1 day`), 7N for one of `N weeks` (or `1 week`,
+        DEC-27); None for any other window. The planner and the exports read only these days,
+        so a window in weeks compiles to the SQL of its days; evidence and messages keep the
+        window as written."""
+        return parse_window(self.window)
 
 
 def cumulative_agg_problem(metric: CumulativeMetric, agg: str) -> str | None:

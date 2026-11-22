@@ -1263,3 +1263,6 @@ cases:
         LEFT JOIN monthly y
           ON (y.status = cur.status OR (y.status IS NULL AND cur.status IS NULL))
           AND y.k = cur.k - 12
+
+  # A52 to A54 (rolling windows in weeks, DEC-27) are in tests/test_reference.py: they need
+  # metrics the example does not have. The next case here is A55.
