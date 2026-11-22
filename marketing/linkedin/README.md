@@ -69,7 +69,7 @@ marketing/linkedin/
   page.md          the page's copy (tagline, overview, specialties, button), the source of truth
   render.py        renders a pack's card.html to card.png
   video/           the narrated demo video generator (dark mode, captions, narration)
-  brand/           logo, banner and the HTML they are rendered from
+  brand/           page logo and cover, rendered by render_brand.py from brand.html (the logo comes from ../brand)
   posts/
     2026-11-20-launch/
       post.md      the text to paste, sources, publish notes
