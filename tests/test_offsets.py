@@ -609,7 +609,7 @@ BAD_ALIASES = (
   - name: alias_bad_offset
     type: derived
     expr: "{amount} - {amount_before}"
-    inputs: [{metric: amount, offset: 2 weeks, alias: amount_before}]
+    inputs: [{metric: amount, offset: 1 quarter, alias: amount_before}]
   - name: alias_of_a_running_total
     type: derived
     expr: "{running_before}"
@@ -637,8 +637,8 @@ def test_alias_validation():
         "alias_unused": ["alias `amount_before` (input `amount`) is not referenced in `expr`"],
         "alias_of_nothing": ["reference `missing` is neither a measure nor a metric"],
         "alias_bad_offset": [
-            "offset `2 weeks` is not supported; use a whole number of days or months, such as "
-            "`7 days` or `1 month`"
+            "offset `1 quarter` is not supported; use a whole number of days, weeks, months or "
+            "years, such as `7 days`, `2 weeks`, `1 month` or `1 year`"
         ],
         "alias_of_a_running_total": [
             "`amount_running` is read with an offset, and it uses the cumulative metric "
