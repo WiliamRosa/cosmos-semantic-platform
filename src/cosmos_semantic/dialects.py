@@ -73,7 +73,9 @@ def trunc(value: exp.Expression, unit: str, dialect: str) -> exp.Expression:
         unit = "ISOWEEK"  # BigQuery's WEEK starts on Sunday; ISOWEEK starts on Monday
     if unit in _TIME_OF_DAY_UNITS and dialect == "trino":
         # Trino refuses DATE_TRUNC('hour', date); a date read as a time is midnight.
-        value = exp.Cast(this=value, to=exp.DataType.build("TIMESTAMP"))
+        # TIMESTAMP(6), not TIMESTAMP (= timestamp(3)): Trino rounds when a cast lowers
+        # the precision, which would move 10:59:59.9996 on a timestamp(6) column to 11:00.
+        value = exp.Cast(this=value, to=exp.DataType.build("TIMESTAMP(6)", dialect="trino"))
     return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit))
 
 

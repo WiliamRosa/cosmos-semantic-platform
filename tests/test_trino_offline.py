@@ -131,7 +131,7 @@ def test_hour_grain_truncates_a_timestamp():
 
     column = exp.column("created_at", table="customers")
     sql = dialects.trunc(column, "hour", "trino").sql("trino")
-    assert sql == "DATE_TRUNC('HOUR', CAST(customers.created_at AS TIMESTAMP))"
+    assert sql == "DATE_TRUNC('HOUR', CAST(customers.created_at AS TIMESTAMP(6)))"
     assert dialects.trunc(column, "day", "trino").sql("trino") == (
         "DATE_TRUNC('DAY', customers.created_at)"
     )
@@ -141,7 +141,7 @@ def test_hour_grain_in_a_planned_query(graph):
     sql = _plan(
         graph, QueryRequest(metrics=["order_count"], dimensions=["orders.ordered_at__hour"])
     )
-    assert "DATE_TRUNC('HOUR', CAST(orders.ordered_at AS TIMESTAMP))" in sql
+    assert "DATE_TRUNC('HOUR', CAST(orders.ordered_at AS TIMESTAMP(6)))" in sql
 
 
 def test_date_minus_interval_becomes_date_add():
