@@ -150,25 +150,33 @@ class RatioMetric(_MetricBase):
 
 # Query grains each offset unit fits (DEC-18), with how many units make one period of the
 # grain: an offset must be a whole number of periods, so a shifted period start is the start
-# of another period. Only days and months, for now.
+# of another period. Offsets are in days or months; weeks and years are read as 7 days and
+# 12 months (DEC-46).
 OFFSET_GRAINS = {"day": {"day": 1, "week": 7}, "month": {"month": 1, "quarter": 3, "year": 12}}
+
+# Units an offset may be written in, as (base unit, how many base units one of them is).
+OFFSET_UNITS = {"day": ("day", 1), "week": ("day", 7), "month": ("month", 1), "year": ("month", 12)}
 
 
 def parse_offset(text: str) -> tuple[int, str] | None:
-    """``(N, unit)`` for an offset of ``N days`` or ``N months`` (singular too); None for
-    anything else."""
-    match = re.fullmatch(r"\s*(\d+)\s+(day|month)s?\s*", text or "", re.IGNORECASE)
+    """``(N, unit)`` for an offset of ``N days`` or ``N months`` (singular too), with weeks
+    read as 7 days and years as 12 months (``2 weeks`` is ``(14, "day")``, ``1 year`` is
+    ``(12, "month")``); None for anything else. The planner works on this normalized form
+    only, so an offset in weeks or years compiles to the SQL of its days or months; evidence
+    and messages keep the offset as written."""
+    match = re.fullmatch(r"\s*(\d+)\s+(day|week|month|year)s?\s*", text or "", re.IGNORECASE)
     if not match or int(match.group(1)) <= 0:
         return None
-    return int(match.group(1)), match.group(2).lower()
+    unit, size = OFFSET_UNITS[match.group(2).lower()]
+    return int(match.group(1)) * size, unit
 
 
 def offset_problem(text: str) -> str | None:
     """Why an offset cannot be read; None when it can. Validation and the planner agree."""
     if parse_offset(text) is None:
         return (
-            f"offset `{text}` is not supported; use a whole number of days or months, "
-            "such as `7 days` or `1 month`"
+            f"offset `{text}` is not supported; use a whole number of days, weeks, months or "
+            "years, such as `7 days`, `2 weeks`, `1 month` or `1 year`"
         )
     return None
 
@@ -200,7 +208,7 @@ class OffsetInput(_Base):
         description=(
             "How far back, such as `1 month` or `7 days`: the value for a period is the "
             "input's value for the period that starts that much earlier, at the query's time "
-            "grain. Only days and months, for now."
+            "grain. In days, weeks (7 days), months or years (12 months)."
         )
     )
 

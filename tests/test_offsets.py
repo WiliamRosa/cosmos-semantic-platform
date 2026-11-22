@@ -273,7 +273,24 @@ def test_grain_fit():
     assert parse_offset("1 month") == (1, "month")
     assert parse_offset(" 12 Months ") == (12, "month")
     assert parse_offset("1 day") == parse_offset("1 days") == (1, "day")
-    for text in ("0 months", "2 weeks", "1 year", "month", "-1 day", "1.5 months", ""):
+    # Weeks are 7 days and years 12 months (DEC-46), singular and plural.
+    assert parse_offset("1 week") == parse_offset("1 weeks") == (7, "day")
+    assert parse_offset(" 2 Weeks ") == parse_offset("14 days") == (14, "day")
+    assert parse_offset("1 year") == parse_offset("1 years") == (12, "month")
+    assert parse_offset("2 years") == parse_offset("24 months") == (24, "month")
+    for text in (
+        "0 months",
+        "0 weeks",
+        "0 years",
+        "1 quarter",
+        "1 hour",
+        "month",
+        "year",
+        "-1 day",
+        "1.5 months",
+        "1.5 years",
+        "",
+    ):
         assert parse_offset(text) is None, text
     # The grains each offset is a whole number of periods of; every other grain is refused.
     fits = {
@@ -286,6 +303,10 @@ def test_grain_fit():
         "3 days": {"day"},
         "7 days": {"day", "week"},
         "14 days": {"day", "week"},
+        "1 week": {"day", "week"},
+        "2 weeks": {"day", "week"},
+        "1 year": {"month", "quarter", "year"},
+        "2 years": {"month", "quarter", "year"},
     }
     for text, grains in fits.items():
         for grain in ("hour", "day", "week", "month", "quarter", "year", None):
@@ -295,10 +316,10 @@ def test_grain_fit():
 INVALID = (
     MODEL
     + """
-  - name: in_weeks
+  - name: in_quarters
     type: derived
     expr: "{amount}"
-    inputs: [{metric: amount, offset: 2 weeks}]
+    inputs: [{metric: amount, offset: 1 quarter}]
   - name: zero
     type: derived
     expr: "{amount}"
@@ -319,6 +340,16 @@ INVALID = (
     type: derived
     expr: "{amount_growth}"
     inputs: [{metric: amount_growth, offset: 1 month}]
+  - name: days_and_months
+    type: derived
+    expr: "{amount} - {lines}"
+    inputs: [{metric: amount, offset: 1 year}, {metric: lines, offset: 2 weeks}]
+  - name: mixed_through_metrics
+    type: derived
+    expr: "{amount_prev_month} - {amount_week_before}"
+  - name: above_the_mix
+    type: derived
+    expr: "{mixed_through_metrics} * 2"
 """
 )
 
@@ -332,14 +363,24 @@ def test_validation_refuses_what_the_slice_does_not_cover():
         if issue.severity == "error":
             errors.setdefault(issue.location.split(".")[1], []).append(issue.message)
     assert set(errors) == {
-        "in_weeks",
+        "in_quarters",
+        "days_and_months",
+        "mixed_through_metrics",
         "zero",
         "unreferenced",
         "twice",
         "running_shifted",
         "shifted_twice",
     }
-    assert "offset `2 weeks` is not supported" in errors["in_weeks"][0]
+    assert "offset `1 quarter` is not supported" in errors["in_quarters"][0]
+    # Days (or weeks) and months (or years) under one metric: no grain answers it (DEC-46).
+    # The error is on the metric where the mix appears, not on the metrics above it.
+    assert errors["days_and_months"] == [
+        "`days_and_months` reads inputs `2 weeks` and `1 year` earlier; an offset in days or "
+        "weeks runs by day or week and one in months or years by month, quarter or year, so "
+        "no grain can answer it"
+    ]
+    assert "reads inputs `7 days` and `1 month` earlier" in errors["mixed_through_metrics"][0]
     assert "offset `0 months` is not supported" in errors["zero"][0]
     assert errors["unreferenced"] == ["input `lines` is not referenced in `expr`"]
     assert "`amount` is listed more than once in `inputs`" in errors["twice"]
@@ -347,7 +388,8 @@ def test_validation_refuses_what_the_slice_does_not_cover():
     assert "which has offsets of its own" in errors["shifted_twice"][0]
     # The planner refuses them too, for graphs compiled without `strict`.
     for metric, message in [
-        ("in_weeks", "offset `2 weeks` is not supported"),
+        ("in_quarters", "offset `1 quarter` is not supported"),
+        ("days_and_months", "an offset of `2 weeks` cannot be applied by month"),
         ("running_shifted", "uses the cumulative metric `amount_running`"),
         ("shifted_twice", "which has offsets of its own"),
     ]:

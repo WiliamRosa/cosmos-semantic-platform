@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "basics": [],
+    "steps": [
+      {
+        "name": "identity",
+        "label": "Identity",
+        "elements": [
+          {
+            "name": "identityInfo",
+            "type": "Microsoft.Common.TextBlock",
+            "options": {
+              "text": "Cosmos Semantic authenticates every API and MCP call. Wire it to your own Microsoft Entra ID tenant, or leave these fields empty to deploy in anonymous/test mode (no login required; use this only to try the product, never for real data)."
+            }
+          },
+          {
+            "name": "oidcIssuer",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Microsoft Entra ID issuer URL (optional)",
+            "toolTip": "Example: https://login.microsoftonline.com/<tenant-id>/v2.0. Leave empty for anonymous/test mode.",
+            "defaultValue": "",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^https://login\\.microsoftonline\\.com/.+$",
+              "validationMessage": "Must be empty, or a URL starting with https://login.microsoftonline.com/"
+            }
+          },
+          {
+            "name": "oidcAudience",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Application (client) ID or API audience (optional)",
+            "toolTip": "The application ID URI or client ID of the Microsoft Entra ID app registration that represents this API. Leave empty for anonymous/test mode.",
+            "defaultValue": "",
+            "constraints": {
+              "required": false
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "location": "[location()]",
+      "oidcIssuer": "[steps('identity').oidcIssuer]",
+      "oidcAudience": "[steps('identity').oidcAudience]"
+    }
+  }
+}

@@ -1,9 +1,11 @@
 <!doctype html><html><head><meta charset="utf-8">
+<!-- Rendered by render_brand.py into logo-400.png and banner-1128x191.png. The logo comes from marketing/brand. -->
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#0b1220;--bg2:#0f1a2e;--ink:#f8fafc;--muted:#94a3b8;--sky:#38bdf8;--sky2:#0ea5e9;--green:#34d399}
 body{margin:0;background:#222;font-family:Inter,system-ui,sans-serif}
-.logo{width:400px;height:400px;display:flex;align-items:center;justify-content:center;background:#0f172a}
+.logo{width:400px;height:400px}
+.logo img{display:block}
 .banner{width:1128px;height:191px;position:relative;overflow:hidden;color:var(--ink);
  background:radial-gradient(600px 300px at 85% 10%,rgba(56,189,248,.22),transparent 60%),linear-gradient(120deg,var(--bg) 0%,var(--bg2) 100%)}
 .banner .grid{position:absolute;inset:0;background-image:linear-gradient(rgba(148,163,184,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(148,163,184,.07) 1px,transparent 1px);background-size:28px 28px}
@@ -13,14 +15,12 @@ body{margin:0;background:#222;font-family:Inter,system-ui,sans-serif}
 .banner p{margin:10px 0 0;font-size:15px;color:var(--muted)}
 .chips{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
 .chips span{font:500 12px "JetBrains Mono",monospace;color:var(--ink);border:1px solid rgba(56,189,248,.35);background:rgba(56,189,248,.08);padding:4px 9px;border-radius:999px}
-.orbit{position:absolute;right:-60px;top:-70px;width:340px;height:340px;opacity:.35}
+.orbit{position:absolute;right:-60px;top:-75px;width:340px;height:340px;opacity:.13}
 </style></head><body>
-<div class="logo" id="logo"><svg viewBox="3 3 26 26" width="330" height="330"><circle cx="16" cy="16" r="5.5" fill="#38bdf8"/>
-<ellipse cx="16" cy="16" rx="11" ry="4.2" transform="rotate(-24 16 16)" fill="none" stroke-width="1.6" stroke="#fff"/>
-<circle cx="25.4" cy="11.6" r="1.6" fill="#fff"/></svg></div>
+<div class="logo" id="logo"><img src="../../brand/cosmos-semantic-avatar.svg" alt="" width="400" height="400"></div>
 <div style="height:20px"></div>
 <div class="banner" id="banner"><div class="grid"></div>
-<svg class="orbit" viewBox="0 0 32 32"><ellipse cx="16" cy="16" rx="13" ry="5" transform="rotate(-24 16 16)" fill="none" stroke="#38bdf8" stroke-width=".35"/><ellipse cx="16" cy="16" rx="9" ry="3.4" transform="rotate(-24 16 16)" fill="none" stroke="#94a3b8" stroke-width=".25"/><circle cx="16" cy="16" r="2.4" fill="#38bdf8" opacity=".6"/></svg>
+<img class="orbit" src="../../brand/cosmos-semantic-mark-dark.svg" alt="">
 <div class="txt"><h1>The same number on every database, <b>with the proof in every answer.</b></h1>
 <p>Open-source semantic layer with an ontology at its core, built for AI agents.</p>
 <div class="chips"><span>MCP server</span><span>8 databases &amp; platforms</span><span>Verifiable numbers</span><span>Apache 2.0</span></div></div></div>
