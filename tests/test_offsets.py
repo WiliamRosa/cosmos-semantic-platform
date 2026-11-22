@@ -656,6 +656,48 @@ def test_alias_validation():
         )
 
 
+def test_aliases_in_weeks_and_years():
+    """Aliases take the DEC-46 units: an aliased `1 week` and an aliased `1 year` of the same
+    metric mix days and months, which no grain answers, and are refused; an aliased `1 year`
+    alone validates and reads `amount` 12 months earlier."""
+    mixed = (
+        MODEL
+        + """
+  - name: week_and_year_before
+    type: derived
+    expr: "{amount} - {amount_week_before_a} - {amount_year_before_a}"
+    inputs:
+      - {metric: amount, offset: 1 week, alias: amount_week_before_a}
+      - {metric: amount, offset: 1 year, alias: amount_year_before_a}
+"""
+    )
+    graph = _graph(mixed, strict=False)
+    errors = [i.message for i in graph.issues if i.location == "metrics.week_and_year_before"]
+    assert errors == [
+        "`week_and_year_before` reads inputs `1 week` and `1 year` earlier; an offset in days "
+        "or weeks runs by day or week and one in months or years by month, quarter or year, "
+        "so no grain can answer it"
+    ]
+    with pytest.raises(ModelError, match="no grain can answer it"):
+        _graph(mixed)
+
+    yearly = (
+        MODEL
+        + """
+  - name: amount_yoy
+    type: derived
+    expr: "{amount} - {amount_year_before_a}"
+    inputs: [{metric: amount, offset: 1 year, alias: amount_year_before_a}]
+"""
+    )
+    graph = _graph(yearly)
+    assert not [i for i in graph.issues if i.severity == "error"]
+    compiled = Planner(graph, "duckdb").plan(
+        QueryRequest(metrics=["amount_yoy"], dimensions=["sales.sold_at__year"])
+    )
+    assert "sales_agg_offset_12_month" in compiled.sql
+
+
 @pytest.mark.parametrize("alias", ["Revenue_Prev", "revenue-prev", "1st", "a" * 65, ""])
 def test_alias_must_be_a_name(alias):
     data = yaml.safe_load(MODEL)
