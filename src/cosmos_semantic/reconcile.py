@@ -1,12 +1,14 @@
 """Metric reconciliation (ADR 0008): compare a governed metric with an existing definition and
 explain why the numbers differ.
 
-Two comparisons are supported:
+Three comparisons are supported:
 
 - **Metric versus SQL:** a Cosmos request against a legacy SQL query that returns the same
   dimensions and one value column (matched by name, or by position).
 - **Model versus model:** the same request on two semantic models, for example an imported dbt
   or Cube model against the Cosmos model.
+- **Metric versus a report's numbers:** a CSV exported from a report (Excel, Power BI, a
+  finance close) with the request's dimension columns and the metric's column (DEC-38).
 
 When the numbers differ, the engine runs *probes*: variants of the governed query, each one
 reproducing a classic mistake. A probe that matches the other side on every row is reported as
@@ -23,8 +25,13 @@ operator tool (CLI), not an API or MCP feature.
 
 from __future__ import annotations
 
+import csv
+import datetime as dt
+import hashlib
+import io
 import itertools
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -148,6 +155,79 @@ def _align(records: list[dict[str, Any]], dim_names: list[str], value_name: str)
     return to_rows(records, len(dim_names))
 
 
+_YEAR_MONTH = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _csv_error(path: str, message: str) -> QueryError:
+    return QueryError(f"{path}: {message}")
+
+
+def _parse_number(text: str) -> float | None:
+    """A plain decimal number with a dot (``1820000.5``, ``-3``, ``1.2e6``), or None for an
+    empty cell. Thousands separators are refused: ``1,820`` could mean 1820 or 1.82."""
+    value = text.strip()
+    if value == "":
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        raise ValueError(
+            f"{text!r} is not a number (use a dot for decimals, no thousands separators)"
+        ) from None
+    if not math.isfinite(number):
+        raise ValueError(f"{text!r} is not a finite number")
+    return number
+
+
+def _parse_dimension(text: str, kind: str) -> Any:
+    """A CSV cell as the value the database returns for a dimension of this kind, so its key
+    lines up with the governed row's. An empty cell is the null group."""
+    if text.strip() == "":
+        return None
+    if kind == "categorical":
+        return text
+    value = text.strip()
+    if kind == "time":
+        if _YEAR_MONTH.match(value):
+            value += "-01"
+        try:
+            return dt.datetime.fromisoformat(value)
+        except ValueError:
+            raise ValueError(f"{text!r} is not an ISO date (YYYY-MM-DD) or date-time") from None
+    if kind == "boolean":
+        lowered = value.lower()
+        if lowered in ("true", "1", "yes"):
+            return True
+        if lowered in ("false", "0", "no"):
+            return False
+        raise ValueError(f"{text!r} is not a boolean (true/false, 1/0 or yes/no)")
+    try:
+        return int(value)
+    except ValueError:
+        return _parse_number(value)
+
+
+def read_expected_csv(path: str | Path) -> tuple[list[str], list[list[str]], str]:
+    """The header, the data rows and the SHA-256 of a report's CSV export: comma-separated
+    UTF-8, with or without the byte order mark Excel writes. Blank lines are skipped."""
+    path = Path(path)
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise _csv_error(str(path), f"cannot read the file ({exc.strerror})") from exc
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise _csv_error(str(path), "is not UTF-8 text") from None
+    try:
+        rows = [r for r in csv.reader(io.StringIO(text, newline="")) if r]
+    except csv.Error as exc:
+        raise _csv_error(str(path), f"is not valid CSV ({exc})") from exc
+    if not rows:
+        raise _csv_error(str(path), "is empty; it needs a header row")
+    return rows[0], rows[1:], hashlib.sha256(data).hexdigest()
+
+
 class Reconciler:
     def __init__(
         self,
@@ -186,6 +266,85 @@ class Reconciler:
         report = self._compare(request, cosmos, legacy, compiled)
         report["legacy"] = {"kind": "sql", "sql_hash": sql_hash(legacy_sql)}
         return report
+
+    def against_csv(self, request: QueryRequest, path: str | Path) -> dict[str, Any]:
+        """Compares the governed metric with the numbers a report shows, exported as CSV."""
+        header, records, file_hash = read_expected_csv(path)
+        request = self._prepare(request)
+        expected = self._expected_rows(request, header, records, str(path))
+        cosmos, compiled = self._run(request)
+        report = self._compare(request, cosmos, expected, compiled)
+        report["legacy"] = {
+            "kind": "csv",
+            "file": Path(path).name,
+            "file_hash": file_hash,
+            "rows": len(records),
+        }
+        return report
+
+    def _expected_rows(
+        self, request: QueryRequest, header: list[str], records: list[list[str]], path: str
+    ) -> Rows:
+        """Validates a report's CSV against the request and keys its rows like the governed
+        rows. A dimension column is named as the request names it (``orders.status``) or as
+        the query output names it (``orders__status``, the header of ``cosmos query --csv``);
+        the value column is named after the metric."""
+        compiled = self._planner().plan(request, self.principal)
+        dims = [c for c in compiled.columns if c.kind == "dimension"]
+        metric = request.metrics[0]
+        value_slot = len(dims)
+        slots: dict[str, int] = {}
+        for index, column in enumerate(dims):
+            slots[column.member] = slots[column.name] = index
+        for index, member in enumerate(request.dimensions):
+            slots[member] = index
+        slots[metric] = value_slot
+        expected_names = [*request.dimensions, metric]
+
+        header = [h.strip() for h in header]
+        positions: list[int] = []
+        for name in header:
+            if name not in slots:
+                hint = (
+                    " The file looks semicolon-separated; export it with commas."
+                    if len(header) == 1 and ";" in name
+                    else ""
+                )
+                raise _csv_error(
+                    path, f"unknown column `{name}`; expected the columns {expected_names}.{hint}"
+                )
+            if slots[name] in positions:
+                raise _csv_error(path, f"column `{name}` appears twice (or under two names)")
+            positions.append(slots[name])
+        missing = [n for i, n in enumerate(expected_names) if i not in positions]
+        if missing:
+            what = "the metric column" if metric in missing else "the dimension column"
+            raise _csv_error(
+                path, f"missing {what} {missing}; expected the columns {expected_names}"
+            )
+
+        kinds = [self.graph.dimension(self.graph.resolve_dimension(c.member)).type for c in dims]
+        out: Rows = {}
+        for line, record in enumerate(records, start=2):
+            if len(record) != len(header):
+                raise _csv_error(
+                    path, f"line {line} has {len(record)} fields; the header has {len(header)}"
+                )
+            values: list[Any] = [None] * (value_slot + 1)
+            for name, slot, text in zip(header, positions, record, strict=True):
+                try:
+                    values[slot] = (
+                        _parse_number(text)
+                        if slot == value_slot
+                        else _parse_dimension(text, kinds[slot])
+                    )
+                except ValueError as exc:
+                    raise _csv_error(path, f"line {line}, column `{name}`: {exc}") from None
+            key = _key(values[:value_slot])
+            if key in out:
+                raise _csv_error(path, f"line {line} repeats the row {list(key)}")
+            out[key] = values[value_slot]
+        return out
 
     def against_model(self, request: QueryRequest, other: SemanticGraph) -> dict[str, Any]:
         request = self._prepare(request)
@@ -617,6 +776,16 @@ def reconcile_sql(
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     return Reconciler(graph, connector, principal).against_sql(request, legacy_sql)
+
+
+def reconcile_csv(
+    graph: SemanticGraph,
+    connector: Connector,
+    request: QueryRequest,
+    path: str | Path,
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    return Reconciler(graph, connector, principal).against_csv(request, path)
 
 
 def reconcile_models(

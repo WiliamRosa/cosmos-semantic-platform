@@ -146,6 +146,7 @@ The result hash is the same on DuckDB, Postgres and SQL Server for the same requ
 
 - **Metric versus SQL** (`--sql legacy.sql`): the legacy query returns the request's dimensions and one value column, matched by name or by position.
 - **Model versus model** (`--other-model path`): the same request on another semantic model, such as an imported dbt or Cube model.
+- **Metric versus a report's numbers** (`--expected report.csv`, DEC-38): the numbers a report shows, exported as CSV from Excel, Power BI or a finance close, when the SQL behind them is not at hand. See [the expected CSV](#the-expected-csv) below.
 
 The report gives matched and differing rows, keys found on one side only, totals with the difference in percent, examples with the difference on each row, the governed formula and `as_of`, and the `tolerance` that decided which rows agree: the default (equal up to float noise) or the one the metric declares, such as `reconciliation: {abs_tolerance: 0.01}` for a report rounded to cents ([reconciliation tolerance](semantic-model.md#reconciliation-tolerance)). Rows that agree only within a declared tolerance are counted in `rows.within_tolerance` and listed in `tolerated`. When the numbers differ, the engine runs **probes**: variants of the governed query, each reproducing a classic mistake. A probe that matches the other side on every row is reported as a likely cause:
 
@@ -163,7 +164,26 @@ The report gives matched and differing rows, keys found on one side only, totals
 
 Probes are evidence, not proof: when two causes produce the same numbers, both are listed. The [divergence zoo](../examples/ecommerce/divergence_zoo.yml) plants each mistake in legacy SQL and is diagnosed on DuckDB, Postgres and SQL Server in the tests (`cosmos reconcile --cases examples/ecommerce/divergence_zoo.yml` runs it as a demo).
 
-Legacy SQL can read anything the database user can, bypassing row filters, so reconciliation is an operator tool in the CLI; it is not exposed through the REST API or MCP. The governed side uses the database server's date as `as_of`, so both sides agree on "today".
+Legacy SQL can read anything the database user can, bypassing row filters, so reconciliation is an operator tool in the CLI; it is not exposed through the REST API or MCP. The governed side uses the database server's date as `as_of`, so both sides agree on "today"; against a report, pass the report's date with `--as-of` when it is not today's.
+
+### The expected CSV
+
+```bash
+cosmos reconcile net_revenue --by orders.status --expected finance_close.csv
+```
+
+```csv
+orders.status,net_revenue
+completed,3619000
+pending,376000
+canceled,561000
+```
+
+- **Columns.** One column per `--by` dimension and one for the metric, in any order. A dimension column is named as the request names it (`orders.status`, `orders.ordered_at__month`) or as the query output names it (`orders__status`), so the output of `cosmos query --csv` is accepted as is. Each row is one combination of the dimensions.
+- **Values.** The metric column holds plain numbers with a dot for decimals (`1820000.5`, `-3`, `1.2e6`); thousands separators are refused, since `1,820` could mean either 1820 or 1.82. A time dimension takes ISO dates or date-times (`2026-04-01`), or `YYYY-MM` for a month; a boolean takes `true`/`false`, `1`/`0` or `yes`/`no`; a number dimension takes a number. An empty cell is null: in a dimension, the null group; in the metric column, a report that shows no value.
+- **File.** UTF-8, comma-separated, with or without the byte order mark Excel writes.
+- **Errors.** An unknown column, a missing dimension or metric column, a column given twice, a value that is not a number (or not a date, for a time dimension), a line with the wrong number of fields and a row repeated are refused with the file, line and column; nothing is compared.
+- **Report.** The same report as against SQL, with the same tolerance and probes: rows that agree, agree within the metric's tolerance, differ, or are found on one side only (`only_in_cosmos`, `only_in_legacy`, where "legacy" is the report). `legacy` is `{"kind": "csv", "file", "file_hash", "rows"}`, with the SHA-256 of the file.
 
 ## Impact analysis
 
