@@ -16,7 +16,9 @@ format or the API; such changes are listed under **Changed**.
   rows that agree, agree within tolerance, differ or are on one side only, totals, examples
   and the likely-cause probes. The report's `legacy` is `{"kind": "csv", "file", "file_hash",
   "rows"}`. Dimension columns are named as the request names them or as `cosmos query --csv`
-  writes them; time dimensions take ISO dates or `YYYY-MM`. Unknown or missing columns,
+  writes them; time dimensions take ISO dates or `YYYY-MM`, and a categorical cell matches a
+  number the database returns (such as a `customer_id`) only when it is that number's exact
+  text. Unknown or missing columns,
   non-numeric values, thousands separators, ragged lines and repeated rows are refused with
   the file, line and column. The SQL the engine generates and the output of `--sql`,
   `--other-model` and `--cases` are unchanged. Reconciliation cases in `cosmos check` do not

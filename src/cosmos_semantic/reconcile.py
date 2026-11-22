@@ -207,6 +207,41 @@ def _parse_dimension(text: str, kind: str) -> Any:
         return _parse_number(value)
 
 
+def _align_categorical(expected: Rows, cosmos: Rows, kinds: list[str]) -> Rows:
+    """A categorical dimension over a number column (``customer_id``) comes back from the
+    database as a number, but a CSV cell is text. A cell takes the governed value whose text
+    is exactly the cell (``"1"`` is ``1``; ``"01"`` and ``"1.0"`` stay text and so stay
+    unmatched), and only when no two governed values share that text, so no row can pair
+    with the wrong one."""
+    lookups: dict[int, dict[str, Any]] = {}
+    for index, kind in enumerate(kinds):
+        if kind != "categorical":
+            continue
+        seen: dict[str, Any] = {}
+        ambiguous: set[str] = set()
+        for key in cosmos:
+            value = key[index]
+            if value is None or isinstance(value, str):
+                continue
+            text = str(value)
+            if text in seen and seen[text] != value:
+                ambiguous.add(text)
+            seen[text] = value
+        lookup = {t: v for t, v in seen.items() if t not in ambiguous}
+        if lookup:
+            lookups[index] = lookup
+    if not lookups:
+        return expected
+    out: Rows = {}
+    for key, value in expected.items():
+        parts = list(key)
+        for index, lookup in lookups.items():
+            if isinstance(parts[index], str):
+                parts[index] = lookup.get(parts[index], parts[index])
+        out[tuple(parts)] = value
+    return out
+
+
 def read_expected_csv(path: str | Path) -> tuple[list[str], list[list[str]], str]:
     """The header, the data rows and the SHA-256 of a report's CSV export: comma-separated
     UTF-8, with or without the byte order mark Excel writes. Blank lines are skipped."""
@@ -271,8 +306,9 @@ class Reconciler:
         """Compares the governed metric with the numbers a report shows, exported as CSV."""
         header, records, file_hash = read_expected_csv(path)
         request = self._prepare(request)
-        expected = self._expected_rows(request, header, records, str(path))
+        expected, kinds = self._expected_rows(request, header, records, str(path))
         cosmos, compiled = self._run(request)
+        expected = _align_categorical(expected, cosmos, kinds)
         report = self._compare(request, cosmos, expected, compiled)
         report["legacy"] = {
             "kind": "csv",
@@ -284,9 +320,9 @@ class Reconciler:
 
     def _expected_rows(
         self, request: QueryRequest, header: list[str], records: list[list[str]], path: str
-    ) -> Rows:
+    ) -> tuple[Rows, list[str]]:
         """Validates a report's CSV against the request and keys its rows like the governed
-        rows. A dimension column is named as the request names it (``orders.status``) or as
+        rows; returns them with each dimension's type. A dimension column is named as the request names it (``orders.status``) or as
         the query output names it (``orders__status``, the header of ``cosmos query --csv``);
         the value column is named after the metric."""
         compiled = self._planner().plan(request, self.principal)
@@ -344,7 +380,7 @@ class Reconciler:
             if key in out:
                 raise _csv_error(path, f"line {line} repeats the row {list(key)}")
             out[key] = values[value_slot]
-        return out
+        return out, kinds
 
     def against_model(self, request: QueryRequest, other: SemanticGraph) -> dict[str, Any]:
         request = self._prepare(request)

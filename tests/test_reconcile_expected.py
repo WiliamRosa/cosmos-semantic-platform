@@ -159,6 +159,37 @@ def test_time_dimension_from_a_monthly_report(graph, duckdb_connector, tmp_path)
     assert report["rows"]["matched"] == len(by_month)
 
 
+def test_categorical_dimension_over_an_integer_column(graph, duckdb_connector, tmp_path):
+    """The database returns `customer_id` as an integer and the CSV holds text: `"7"` is the
+    customer 7, while `"07"` is not taken for it and stays on the report's side only."""
+    data = graph.project.model_dump(mode="json")
+    orders = next(m for m in data["semantic_models"] if m["name"] == "orders")
+    orders["dimensions"].append(
+        {"name": "customer_code", "type": "categorical", "expr": "customer_id"}
+    )
+    with_code = compile_project(Project.model_validate(data))
+    by_customer = hand_rows(
+        duckdb_connector,
+        "SELECT customer_id, SUM(amount - discount) FROM public.orders GROUP BY customer_id",
+    )
+    assert all(isinstance(c, int) for c in by_customer)
+    request = QueryRequest(metrics=["net_revenue"], dimensions=["orders.customer_code"])
+    rows = [[str(c), repr(v)] for c, v in by_customer.items()]
+    path = write_csv(tmp_path / "customers.csv", ["orders.customer_code", "net_revenue"], rows)
+    report = reconcile_csv(with_code, duckdb_connector, request, path)
+    assert report["status"] == "match", report["examples"]
+    assert report["rows"]["matched"] == len(by_customer)
+
+    first = min(by_customer)
+    rows = [[f"0{c}" if c == first else str(c), repr(v)] for c, v in by_customer.items()]
+    path = write_csv(tmp_path / "padded.csv", ["orders.customer_code", "net_revenue"], rows)
+    report = reconcile_csv(with_code, duckdb_connector, request, path)
+    assert report["rows"]["matched"] == len(by_customer) - 1
+    assert report["rows"]["only_in_cosmos"] == 1 and report["rows"]["only_in_legacy"] == 1
+    sides = {tuple(e["key"]): e["legacy"] is None for e in report["examples"]}
+    assert sides == {(first,): True, (f"0{first}",): False}
+
+
 @pytest.mark.parametrize(
     ("content", "message"),
     [
