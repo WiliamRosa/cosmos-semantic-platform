@@ -56,8 +56,41 @@ class ReferenceCase(BaseModel):
             from cosmos_semantic import dialects
 
             tree = dialects.adapt(sqlglot.parse_one(self.sql, read="postgres"), dialect)
+            if dialect == "bigquery":
+                tree = _rename_ctes(tree)
             return tree.sql(dialect=dialect)
         return self.sql
+
+
+def _rename_ctes(tree):
+    """Gives each CTE a name no column has. In BigQuery a name that is both a table (or CTE)
+    and a column resolves to the table's whole row, so ``WITH m AS (SELECT ... AS m) SELECT m
+    FROM m`` reads a STRUCT, not the column."""
+    from sqlglot import exp
+
+    # Only a CTE named like one of its own columns and read unqualified; its references keep
+    # no alias, so the outer query reads the CTE's columns.
+    # A query that qualifies the CTE's columns (`m.status`) already reads them right.
+    qualified = {c.table for c in tree.find_all(exp.Column) if c.table}
+    names = {
+        cte.alias_or_name
+        for cte in tree.find_all(exp.CTE)
+        if cte.alias_or_name in cte.this.named_selects and cte.alias_or_name not in qualified
+    }
+    if not names:
+        return tree
+
+    def fix(node):
+        if isinstance(node, exp.CTE) and node.alias_or_name in names:
+            node.set("alias", exp.TableAlias(this=exp.to_identifier(f"{node.alias_or_name}_cte")))
+        elif isinstance(node, exp.Table) and not node.db and node.name in names:
+            renamed = exp.to_table(f"{node.name}_cte")
+            if node.args.get("alias"):
+                renamed.set("alias", node.args["alias"].copy())
+            return renamed
+        return node
+
+    return tree.transform(fix)
 
 
 @dataclass
