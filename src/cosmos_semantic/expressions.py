@@ -46,7 +46,14 @@ def parse_template(text: str, dialect: str, *, error: type[Exception] = ModelErr
     try:
         tree = sqlglot.parse_one(masked, read=dialect)
     except ParseError as exc:
-        raise error(f"invalid expression `{text}`: {exc}") from exc
+        if dialect != "bigquery":
+            raise error(f"invalid expression `{text}`: {exc}") from exc
+        # Model expressions are standard SQL, where a quote inside a string is doubled
+        # ('O''Brien'); BigQuery escapes it with a backslash and reads '' as two literals.
+        try:
+            tree = sqlglot.parse_one(masked, read="postgres")
+        except ParseError:
+            raise error(f"invalid expression `{text}`: {exc}") from exc
     if isinstance(tree, exp.Query):
         raise error(f"invalid expression `{text}`: queries are not allowed")
     return Template(text=text, tree=portable(tree), refs=refs, user_fields=users)

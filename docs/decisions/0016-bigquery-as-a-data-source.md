@@ -45,5 +45,9 @@ The proposal is DEC-40 in [daily #83](https://github.com/WiliamRosa/cosmos-seman
 
   CI does not run them, as it does not run Databricks and Snowflake.
 - On the emulator, 58 reference queries return the same numbers as DuckDB, the A06 Monday weeks and the A48 window up to noon among them. Rolling windows over a range join (A26) need a real project.
-- A first live run on a BigQuery project is still required. Until it passes, BigQuery is documented as *preview*.
+- **Live run (2026-11-21):** 160 tests passed on a BigQuery sandbox project, with 1 skipped. They include the 66 reference queries, the divergence zoo, the randomized same-number test against DuckDB, bootstrap, packs, the Power BI import and the dbt, Cube and Ossie exports. The skipped test is the evidence replay, which changes data with `UPDATE`, and the sandbox refuses DML.
+- **What the live run found that the emulator did not:**
+  - `DATE - DATE` is an `INTERVAL` in BigQuery; the dialect now writes `DATE_DIFF(..., DAY)`.
+  - In hand-written reference SQL, a CTE named like one of its own columns resolves to the whole row; the BigQuery translation renames such a CTE.
+  - A model expression with a doubled quote (`'O''Brien'`, standard SQL) did not parse in the BigQuery dialect; it is now read as standard SQL and written with BigQuery's escape.
 - `deploy/bigquery-setup.md` gives the least-privilege setup for a sandbox project: a dataset and a service account with `roles/bigquery.jobUser` on the project and `roles/bigquery.dataEditor` on the dataset only.
