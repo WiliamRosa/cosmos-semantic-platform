@@ -2557,9 +2557,10 @@ def test_dbt_export_rolling_windows_same_numbers(graph, tmp_path, source, reques
     assert refused == 6 * len(names)
 
 
-# Rolling windows in weeks (DEC-27): both exports keep the unit, which Cube and MetricFlow
-# read as 7N days (an interval subtracted from the end of the bucket), and the imports read it
-# back as the same window.
+# Rolling windows in weeks (DEC-27): the dbt export keeps the unit, which MetricFlow reads as
+# 7N days, and its import reads it back as the same window. The Cube export writes the days
+# (`trailing: 7N day`): Cube's Oracle query drops a `week` interval, so a Cube round trip gives
+# `7N days`, with the same numbers.
 WEEK_WINDOWS = {"revenue_rolling_2_weeks": "2 weeks", "payment_count_rolling_1_week": "1 week"}
 
 
@@ -2577,9 +2578,9 @@ def _week_window_metrics(project: Project) -> Project:
 @pytest.mark.parametrize("source", SOURCES)
 @pytest.mark.parametrize("target", ["cube", "dbt"])
 def test_export_windows_in_weeks_same_numbers(graph, tmp_path, source, target, request):
-    """A window in weeks is exported in weeks (`trailing: 2 week`, `window: 2 weeks`), comes
-    back as the same window, and returns the numbers of the same window in days, by day and
-    with a filter the window reads back before; both models refuse it by week."""
+    """A window in weeks is exported to dbt in weeks (`window: 2 weeks`) and to Cube in days
+    (`trailing: 14 day`), comes back as `2 weeks` and `14 days`, and returns the same numbers,
+    by day and with a filter the window reads back before; both models refuse it by week."""
     connector = request.getfixturevalue(source)
     project = _week_window_metrics(graph.project)
     full = compile_project(project)
@@ -2593,9 +2594,10 @@ def test_export_windows_in_weeks_same_numbers(graph, tmp_path, source, target, r
             if m["name"] in WEEK_WINDOWS
         }
         assert written == {
-            "revenue_rolling_2_weeks": {"trailing": "2 week", "offset": "end"},
-            "payment_count_rolling_1_week": {"trailing": "1 week", "offset": "end"},
+            "revenue_rolling_2_weeks": {"trailing": "14 day", "offset": "end"},
+            "payment_count_rolling_1_week": {"trailing": "7 day", "offset": "end"},
         }
+        expected = {"revenue_rolling_2_weeks": "14 days", "payment_count_rolling_1_week": "7 days"}
     else:
         exported, back = _dbt_round_trip(project, tmp_path, **LOSS_FLAGS)
         written = {
@@ -2604,8 +2606,9 @@ def test_export_windows_in_weeks_same_numbers(graph, tmp_path, source, target, r
             if m["name"] in WEEK_WINDOWS
         }
         assert written == {name: {"window": w} for name, w in WEEK_WINDOWS.items()}
+        expected = WEEK_WINDOWS
     back_metrics = {m.name: m for m in back.project.metrics}
-    for name, window in WEEK_WINDOWS.items():
+    for name, window in expected.items():
         assert back_metrics[name].window == window
     other = compile_project(back.project)
     since = f"DATE '{(dt.date.today() - dt.timedelta(days=200)).isoformat()}'"

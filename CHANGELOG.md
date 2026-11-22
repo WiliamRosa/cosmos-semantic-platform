@@ -23,10 +23,12 @@ format or the API; such changes are listed under **Changed**.
 - Rolling windows in weeks (DEC-27): a cumulative metric accepts `window: 1 week` or
   `2 weeks`, read as 7 days per week. It runs where the window in days runs (day grain only)
   and gives exactly the SQL, and so the `sql_hash`, of `7 days` or `14 days`; the evidence and
-  the catalog keep the window as written. `cosmos export cube` writes it as
-  `trailing: N week` and `cosmos export dbt` as `window: N weeks`, which Cube and MetricFlow
-  read as the same 7N days, and both imports read it back as `N weeks` (a Cube
-  `trailing: N week` was imported as a window queries refused). Reference cases with
+  the catalog keep the window as written. `cosmos export dbt` writes it as `window: N weeks`,
+  which MetricFlow reads as the same 7N days, and `cosmos import dbt` reads it back as
+  `N weeks`. `cosmos export cube` writes its days, `trailing: 7N day`, because Cube does not
+  render a `week` interval on every database (its Oracle query drops it), so a Cube round trip
+  turns `2 weeks` into `14 days`, with the same numbers. `cosmos import cube` reads a
+  `trailing: N week` as `window: N weeks` (it was imported as a window queries refused). Reference cases with
   hand-written SQL (A52 to A54, in `tests/test_reference.py`) check `1 week` and `2 weeks`
   against the 7 and 14-day windows on every database, and the refusal by week.
 - Offsets in weeks and years (DEC-46): a derived metric's `inputs` accept `offset: 1 week`,

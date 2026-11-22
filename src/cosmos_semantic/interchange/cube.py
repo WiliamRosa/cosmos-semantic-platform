@@ -22,8 +22,9 @@ are written (``=``, ``IN``, and ``<``, ``<=``, ``>``, ``>=`` on numbers, joined 
 other policy (it would grant more access than Cube did) unless the caller accepts the loss.
 Fourth slice (DEC-30): a ``window: N days`` over a ``sum``, ``count``, ``min`` or ``max``
 measure is a measure with ``rolling_window: {trailing: N day, offset: end}``, which
-``import_cube`` reads back as the same window; a ``window: N weeks`` (DEC-27) is
-``trailing: N week``, which Cube reads as 7N days.
+``import_cube`` reads back as the same window; a ``window: N weeks`` (DEC-27) is written as
+its days, ``trailing: 7N day``, because Cube does not render a ``week`` interval the same way
+on every database (its Oracle query drops it), so a round trip gives ``7N days``.
 The export fails closed on row filters it cannot express, and on metrics it cannot carry
 (running totals of other aggregations or without a period, metrics over a cumulative one,
 offsets, filters beyond the measure's own cube), unless the caller accepts the loss.
@@ -303,8 +304,9 @@ def _cube_filter(sql: str, dims: dict[str, str]) -> str:
 
 def _trailing_window(window: dict[str, Any]) -> tuple[int, str] | None:
     """``(N, unit)`` for a Cube rolling window with ``trailing: N day`` or ``N week`` (plural
-    too), None otherwise. Cube subtracts the interval from the end of the bucket, so a week is
-    7 days, as a Cosmos window in weeks (DEC-27)."""
+    too), None otherwise. A ``trailing: N week`` is read as the Cosmos ``window: N weeks``
+    (7N days, DEC-27), its meaning where Cube renders the interval; the export never writes
+    weeks, since Cube's Oracle query drops a ``week`` interval."""
     if window.get("type") not in (None, "fixed"):
         return None
     return window_parts(str(window.get("trailing", "")))
@@ -1115,11 +1117,12 @@ class _CubeWriter:
         ``sum``, ``count``, ``min`` or ``max`` measure (DEC-30): a measure with
         ``rolling_window: {trailing: N day, offset: end}``, which aggregates the rows after the
         end of the bucket minus N days, up to the end of the bucket; at day grain, the days
-        D - (N - 1) to D, as the planner's window. A ``window: N weeks`` (DEC-27) is
-        ``trailing: N week``: Cube subtracts the interval, so it is 7N days, as in the planner."""
+        D - (N - 1) to D, as the planner's window. A ``window: N weeks`` (DEC-27) is written as
+        its days, ``trailing: 7N day``: Cube's Oracle query drops a ``week`` interval and its
+        Presto and Trino queries render one that may not parse, so weeks are never written."""
         if metric.window:
-            parts = window_parts(metric.window)
-            if parts is None:
+            days = metric.window_days()
+            if days is None:
                 raise _NotExported(
                     f"it is cumulative over a rolling window (`{metric.window}`) that is not in "
                     "days or weeks, and the Cube export carries only windows in days or weeks"
@@ -1132,8 +1135,7 @@ class _CubeWriter:
                     "`count`, `min` and `max` measures only"
                 )
             item = self._measure(measure, name=metric.name)
-            count, unit = parts
-            item["rolling_window"] = {"trailing": f"{count} {unit}", "offset": "end"}
+            item["rolling_window"] = {"trailing": f"{days} day", "offset": "end"}
             return node.name, item, {node.name}
         if not metric.grain_to_date:
             raise _NotExported(
