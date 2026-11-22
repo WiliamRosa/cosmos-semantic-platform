@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100.00 100.00" width="100.00" height="100.00" role="img" aria-label="Cosmos Semantic">
+  <title>Cosmos Semantic</title>
+  <g transform="translate(-7.290 -6.273) scale(3.58064)">
+  <defs>
+    <clipPath id="front-m"><rect x="-8" y="16" width="48" height="24" transform="rotate(-24 16 16)"/></clipPath>
+    <mask id="planet-m" maskUnits="userSpaceOnUse" x="-8" y="-8" width="48" height="48">
+      <rect x="-8" y="-8" width="48" height="48" fill="#fff"/>
+      <g clip-path="url(#front-m)"><ellipse cx="16" cy="16" rx="11.4" ry="3.5" fill="none" stroke="#000" stroke-width="2.70" transform="rotate(-24 16 16)"/></g>
+    </mask>
+    <mask id="moon-m" maskUnits="userSpaceOnUse" x="-8" y="-8" width="48" height="48">
+      <rect x="-8" y="-8" width="48" height="48" fill="#fff"/>
+      <circle cx="25.299" cy="10.549" r="2.10" fill="#000"/>
+    </mask>
+  </defs>
+  <g mask="url(#moon-m)"><ellipse cx="16" cy="16" rx="11.4" ry="3.5" fill="none" stroke="#f8fafc" stroke-width="1.50" transform="rotate(-24 16 16)"/></g>
+  <circle cx="16" cy="16" r="6.0" fill="#38bdf8" mask="url(#planet-m)"/>
+  <g clip-path="url(#front-m)"><g mask="url(#moon-m)"><ellipse cx="16" cy="16" rx="11.4" ry="3.5" fill="none" stroke="#f8fafc" stroke-width="1.50" transform="rotate(-24 16 16)"/></g></g>
+  <circle cx="25.299" cy="10.549" r="1.5" fill="#34d399"/>
+  </g>
+</svg>
