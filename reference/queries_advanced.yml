@@ -1263,3 +1263,28 @@ cases:
         LEFT JOIN monthly y
           ON (y.status = cur.status OR (y.status IS NULL AND cur.status IS NULL))
           AND y.k = cur.k - 12
+
+  # Structured filters (DEC-50): objects {dimension, op, value}, whose values the engine writes
+  # as literals of each dialect. The `not in` list holds a quote and a backslash before a quote,
+  # which no segment carries: on every database it keeps exactly the non-null segments, and a
+  # literal escaped the wrong way would be a syntax error or a different filter.
+  - id: A52
+    category: filters
+    phase: 3
+    title: Revenue and orders by state, with structured filters holding quotes and backslashes
+    request:
+      metrics: [revenue, order_count]
+      dimensions: [customers.state]
+      filters:
+        - { dimension: orders.status, op: in, value: [completed, pending] }
+        - { dimension: customers.segment, op: not in, value: ["O'Brien", "a\\'b"] }
+        - { dimension: customers.segment, op: "!=", value: Enterprise }
+    user: { region: Midwest }
+    sql: |
+      SELECT c.state AS customers__state, SUM(o.amount) AS revenue, COUNT(*) AS order_count
+      FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+      WHERE o.status IN ('completed', 'pending')
+        AND c.segment IS NOT NULL
+        AND c.segment <> 'Enterprise'
+        AND c.region = 'Midwest'
+      GROUP BY c.state

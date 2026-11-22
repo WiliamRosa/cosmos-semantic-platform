@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from cosmos_semantic.checks import run_ok
 from cosmos_semantic.errors import PolicyError, QueryError
+from cosmos_semantic.expressions import describe_filter
 from cosmos_semantic.health import RANK, Health
 
 if TYPE_CHECKING:
@@ -421,7 +422,7 @@ def _answer_row(record: dict[str, Any]) -> dict[str, Any]:
         "channel": principal.get("channel"),
         "metrics": request.get("metrics", []),
         "dimensions": request.get("dimensions", []),
-        "filters": request.get("filters", []),
+        "filters": [describe_filter(f) for f in request.get("filters", [])],
         "as_of": request.get("as_of"),
         "data_source": record.get("data_source"),
         "rules": record.get("rules", []),

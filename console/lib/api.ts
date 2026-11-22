@@ -365,11 +365,18 @@ export interface DimensionValues {
   [key: string]: unknown;
 }
 
+/** A structured filter (DEC-50, Filter in planner.py): the server writes the value as a literal. */
+export interface StructuredFilter {
+  dimension: string;
+  op: "=" | "!=" | "<>" | "<" | "<=" | ">" | ">=" | "in" | "not in" | "is null" | "is not null";
+  value?: string | number | boolean | (string | number | boolean)[];
+}
+
 /** The body of `POST /v1/query` and `POST /v1/sql` (QueryRequest in planner.py). */
 export interface QueryRequest {
   metrics: string[];
   dimensions?: string[];
-  filters?: string[];
+  filters?: (string | StructuredFilter)[];
   order_by?: string[];
   limit?: number;
 }

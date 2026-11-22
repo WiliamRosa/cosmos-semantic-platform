@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import sqlglot
 from sqlglot import exp
@@ -233,3 +235,112 @@ def literal(value: object) -> exp.Expression:
     if isinstance(value, list | tuple):
         raise QueryError("list values are not supported in $user")
     return exp.Literal.string(str(value))
+
+
+# -- structured filters (DEC-50) ----------------------------------------------------------
+
+COMPARISONS: dict[str, type[exp.Binary]] = {
+    "=": exp.EQ,
+    "!=": exp.NEQ,
+    "<>": exp.NEQ,
+    "<": exp.LT,
+    "<=": exp.LTE,
+    ">": exp.GT,
+    ">=": exp.GTE,
+}
+LIST_OPS = ("in", "not in")
+NULL_OPS = ("is null", "is not null")
+FILTER_OPS = (*COMPARISONS, *LIST_OPS, *NULL_OPS)
+
+
+def value_literal(value: object) -> exp.Expression:
+    """A request value as a SQLGlot literal. The generator of each dialect writes it with that
+    dialect's quoting and escaping, so no caller quotes a value itself."""
+    if isinstance(value, bool):
+        return exp.Boolean(this=value)
+    if isinstance(value, int | float):
+        return exp.Literal.number(value)
+    if isinstance(value, str):
+        return exp.Literal.string(value)
+    raise QueryError(f"unsupported filter value of type {type(value).__name__}")
+
+
+_VALUE_PREFIX = "__cosmos_value_"
+
+
+def _filter_tree(op: str, value: object, dialect: str) -> exp.Expression:
+    """The operator is parsed by the dialect from a fixed skeleton (``ref op value``), so the
+    tree has the shape the dialect's parser gives an expression string (PostgreSQL reads
+    ``IS NOT NULL`` as one node, DuckDB as ``NOT ... IS NULL``); the values are then put in
+    as literals and never parsed."""
+    if op in COMPARISONS:
+        values = [value]
+        skeleton = f"{_REF_PREFIX}0 {'<>' if op == '!=' else op} {_VALUE_PREFIX}0"
+    elif op in LIST_OPS:
+        if not isinstance(value, list | tuple) or not value:
+            raise QueryError(f"`{op}` takes a non-empty list of values")
+        values = list(value)
+        items = ", ".join(f"{_VALUE_PREFIX}{i}" for i in range(len(values)))
+        skeleton = f"{_REF_PREFIX}0 {op.upper()} ({items})"
+    elif op in NULL_OPS:
+        values = []
+        skeleton = f"{_REF_PREFIX}0 {op.upper()}"
+    else:
+        raise QueryError(f"unknown filter operator `{op}`; use one of {', '.join(FILTER_OPS)}")
+    literals = [value_literal(v) for v in values]
+    tree = sqlglot.parse_one(skeleton, read=dialect)
+
+    def put(node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Column) and node.name.startswith(_VALUE_PREFIX):
+            return literals[int(node.name[len(_VALUE_PREFIX) :])].copy()
+        return node
+
+    return portable(tree.transform(put))
+
+
+def filter_text(dimension: str, op: str, value: object = None) -> str:
+    """A structured filter written as the expression a caller would send, in standard SQL
+    (quotes doubled): for the evidence, the audit views and error messages, never for the SQL."""
+    ref = f"{{{dimension}}}"
+    if op in NULL_OPS:
+        return f"{ref} {op.upper()}"
+    if op in LIST_OPS and isinstance(value, list | tuple):
+        items = ", ".join(value_literal(v).sql() for v in value)
+        return f"{ref} {op.upper()} ({items})"
+    return f"{ref} {op} {value_literal(value).sql()}"
+
+
+def describe_filter(item: Any) -> str:
+    """A request filter as text: an expression string as it is; a structured filter, as a
+    ``Filter`` or as the dict the audit log keeps, through ``filter_text``."""
+    if isinstance(item, str):
+        return item
+    fields = item if isinstance(item, dict) else vars(item)
+    try:
+        return filter_text(str(fields["dimension"]), str(fields["op"]), fields.get("value"))
+    except (KeyError, QueryError):
+        return json.dumps(item, default=str) if isinstance(item, dict) else str(item)
+
+
+def filter_refs(item: Any) -> list[str]:
+    """The members a request filter references (an expression string or a structured one)."""
+    if isinstance(item, str):
+        return REF_RE.findall(item)
+    if isinstance(item, dict):
+        dimension = item.get("dimension")
+        return [dimension] if isinstance(dimension, str) else []
+    return [item.dimension]
+
+
+def structured_template(dimension: str, op: str, value: object, dialect: str) -> Template:
+    """The template of a structured filter ``{dimension, op, value}`` (DEC-50).
+
+    The value never goes through a parser: SQLGlot writes it as a literal of the dialect. The
+    tree is the one ``parse_template`` builds from the equivalent expression string, hence the
+    same SQL and the same ``sql_hash``."""
+    if not REF_RE.fullmatch(f"{{{dimension}}}"):
+        raise QueryError(f"invalid dimension `{dimension}` in a filter; use `model.dimension`")
+    tree = _filter_tree(op, value, dialect)
+    return Template(
+        text=filter_text(dimension, op, value), tree=tree, refs=[dimension], user_fields=[]
+    )

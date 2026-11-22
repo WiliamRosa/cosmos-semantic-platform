@@ -94,7 +94,7 @@ The query explorer (`/console/explore/`) asks a governed metric by dimensions, a
 
 **Show SQL** calls `POST /v1/sql` and shows the SQL without running it.
 
-The explorer sends a structured request, never SQL. It uses the console's credential, so the same row filters apply as for any API client, and every run, and every refusal, is recorded in the audit log under the `api` channel. A refused request shows the server's reason. The public demo has no server, so the page explains that it needs `cosmos serve`.
+The explorer sends a structured request, never SQL. Each filter goes as an object (`{"dimension", "op", "value"}`, DEC-50), with the value typed as a number, a boolean or text: the server writes the literal for the data source's dialect, so the console never quotes or escapes a value, and a value with quotes or backslashes stays a value on MySQL, MariaDB and Databricks too. It uses the console's credential, so the same row filters apply as for any API client, and every run, and every refusal, is recorded in the audit log under the `api` channel. A refused request shows the server's reason. The public demo has no server, so the page explains that it needs `cosmos serve`.
 
 ## Public demo
 
