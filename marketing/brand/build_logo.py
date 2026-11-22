@@ -217,7 +217,13 @@ def export_pngs(svgs: list[Path]) -> None:
         old.unlink()
     jobs = []
     for path in svgs:
-        if any(k in path.stem for k in ("-mark-", "-icon", "-avatar")):
+        if path.stem.endswith("-icon"):
+            # 48 and 216: Azure Marketplace; 180: apple-touch-icon; 512: PWA and stores.
+            jobs += [(path, f"{path.stem}-{n}.png", n) for n in (48, 180, 216, 512, 1024, 2048)]
+        elif path.stem.endswith("-avatar"):
+            # 400: LinkedIn page logo.
+            jobs += [(path, f"{path.stem}-{n}.png", n) for n in (400, 1024, 2048)]
+        elif "-mark-" in path.stem:
             jobs += [(path, f"{path.stem}-1024.png", 1024), (path, f"{path.stem}-2048.png", 2048)]
         else:
             jobs += [(path, f"{path.stem}-2000w.png", 2000), (path, f"{path.stem}-4000w.png", 4000)]

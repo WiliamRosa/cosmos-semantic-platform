@@ -1,7 +1,7 @@
 """Build the project website (cosmosdata.ai) into site/dist.
 
-The pages live in site/src. Media is copied from where the repository already keeps it
-(docs/assets and the published LinkedIn posts), so it is never committed twice.
+The pages live in site/src. Media and logos are copied from where the repository already keeps
+them (docs/assets, the published LinkedIn posts and marketing/brand), so nothing is committed twice.
 
 Usage: python site/build.py
 """
@@ -15,6 +15,14 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "site" / "src"
 DIST = ROOT / "site" / "dist"
 POSTS = ROOT / "marketing" / "linkedin" / "posts"
+BRAND = ROOT / "marketing" / "brand"
+
+# Published path under dist/ -> logo file; the logo's single source is marketing/brand.
+LOGOS = {
+    "favicon.svg": BRAND / "cosmos-semantic-icon.svg",
+    "assets/apple-touch-icon.png": BRAND / "png" / "cosmos-semantic-icon-180.png",
+    "assets/logo-horizontal-dark.svg": BRAND / "cosmos-semantic-horizontal-dark.svg",
+}
 
 # Published path under dist/assets -> source in the repository.
 MEDIA = {
@@ -38,11 +46,14 @@ def main() -> None:
 
     assets = DIST / "assets"
     assets.mkdir(exist_ok=True)
-    missing = [str(path.relative_to(ROOT)) for path in MEDIA.values() if not path.is_file()]
+    sources = list(MEDIA.values()) + list(LOGOS.values())
+    missing = [str(path.relative_to(ROOT)) for path in sources if not path.is_file()]
     if missing:
         raise SystemExit("missing media: " + ", ".join(missing))
     for name, path in MEDIA.items():
         shutil.copy2(path, assets / name)
+    for name, path in LOGOS.items():
+        shutil.copy2(path, DIST / name)
 
     size = sum(f.stat().st_size for f in DIST.rglob("*") if f.is_file())
     print(f"built {DIST.relative_to(ROOT)} ({size / 1_000_000:.1f} MB)")

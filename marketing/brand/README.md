@@ -13,8 +13,8 @@ All SVGs are self-contained: the wordmark is converted to outlines, so they need
 | Horizontal | The default: headers, slides, banners, sponsor walls | `cosmos-semantic-horizontal-<theme>.svg` | `png/…-2000w.png`, `png/…-4000w.png` |
 | Stacked | Square or tall spaces: posters, booth panels, end cards of videos | `cosmos-semantic-stacked-<theme>.svg` | `png/…-2000w.png`, `png/…-4000w.png` |
 | Mark | Where the name is already present, or space is tight | `cosmos-semantic-mark-<theme>.svg` | `png/…-1024.png`, `png/…-2048.png` |
-| Icon | App icons, favicons (rounded navy square) | `cosmos-semantic-icon.svg` | `png/…-1024.png`, `png/…-2048.png` |
-| Avatar | Social profile pictures (square navy; the platform crops it) | `cosmos-semantic-avatar.svg` | `png/…-1024.png`, `png/…-2048.png` |
+| Icon | App icons, favicons, the console and the website (rounded navy square) | `cosmos-semantic-icon.svg` | `png/…-48.png`, `-180`, `-216`, `-512`, `-1024`, `-2048` |
+| Avatar | Social profile pictures, the LinkedIn page logo (square navy; the platform crops it) | `cosmos-semantic-avatar.svg` | `png/…-400.png`, `-1024`, `-2048` |
 
 | Theme | Background | Colors |
 | --- | --- | --- |

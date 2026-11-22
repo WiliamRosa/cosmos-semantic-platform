@@ -91,6 +91,6 @@ Five PNGs at 1280x720 in `screenshots/`, captured from the public console demo o
 
 ## Still needed (not drafted here)
 
-- **Logo(s)**: Partner Center requires a small (48x48 or 216x216) and a large (216x216) PNG logo. Needs an actual design asset, not generated here.
+- **Logo(s)**: done — [`marketing/brand/png/cosmos-semantic-icon-48.png`](../../../marketing/brand/png/cosmos-semantic-icon-48.png) (small) and [`cosmos-semantic-icon-216.png`](../../../marketing/brand/png/cosmos-semantic-icon-216.png) (large), from the [brand kit](../../../marketing/brand/README.md).
 - **Video** (optional): not created.
 - A final decision on the publisher display name shown to customers (the CosmosData business entity, per the Partner Center enrollment in progress).
