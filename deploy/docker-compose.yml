@@ -76,5 +76,19 @@ services:
     ports:
       - "19050:9050"
 
+  # Optional: ... --profile trino up -d  (Trino with an in-memory catalog for tests; data is
+  # lost on restart). Listens on localhost only, without authentication.
+  trino:
+    image: trinodb/trino:484
+    profiles: [trino]
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - ./trino/catalog/memory.properties:/etc/trino/catalog/memory.properties:ro
+    healthcheck:
+      test: ["CMD", "/usr/lib/trino/bin/health-check"]
+      interval: 5s
+      retries: 60
+
 volumes:
   cosmos-pg:

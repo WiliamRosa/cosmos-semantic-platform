@@ -64,3 +64,12 @@ data_sources:
       # The local emulator (`--profile bigquery`); leave it empty for BigQuery itself.
       api_endpoint: ${COSMOS_BIGQUERY_ENDPOINT:-http://localhost:19050}
     schema_map: { public: "${COSMOS_BIGQUERY_DATASET:-cosmos}" }   # a schema is a dataset
+
+  trino:
+    type: trino
+    # The local container (`--profile trino`) has no password; for Starburst, use
+    # trino://user@host:443/catalog?http_scheme=https and set COSMOS_TRINO_PASSWORD.
+    uri: ${COSMOS_TRINO_URI:-trino://cosmos@localhost:18080/memory}
+    options:
+      password: ${COSMOS_TRINO_PASSWORD:-}
+    schema_map: { public: "${COSMOS_TRINO_SCHEMA:-cosmos}" }   # a schema of the catalog

@@ -38,7 +38,7 @@ class ReferenceCase(BaseModel):
 
     def sql_for(self, dialect: str) -> str | None:
         """The reference SQL for a dialect. The shared ``sql`` is written in PostgreSQL;
-        Databricks (Spark SQL), Snowflake, MySQL and Oracle reject some of its syntax, such as
+        Databricks (Spark SQL), Snowflake, MySQL, Oracle, BigQuery and Trino reject some of its syntax, such as
         ``DOUBLE PRECISION`` in Databricks or ``DATE_TRUNC`` in MySQL, so they get a SQLGlot
         translation unless the case spells a version for the dialect."""
         if dialect in self.sql_by_dialect:
@@ -49,6 +49,7 @@ class ReferenceCase(BaseModel):
             "mysql",
             "oracle",
             "bigquery",
+            "trino",
         ):
             import sqlglot
 

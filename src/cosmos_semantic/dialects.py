@@ -12,6 +12,10 @@ source cannot run before the tree is printed in that source's dialect:
 - **BigQuery:** ``WEEK`` truncates to Sunday, so weeks use ``ISOWEEK`` (Monday), as on the
   other sources. A time without a time zone is a ``DATETIME`` there (SQLGlot writes it for
   ``TIMESTAMP``), and ``TIMESTAMP_TRUNC`` and ``DATE_ADD`` accept it.
+- **Trino:** ``DATE_TRUNC('week', ...)`` already starts on Monday and ``/`` on integers
+  truncates as in PostgreSQL, so SQLGlot's translation stands. Interval literals have no
+  ``WEEK`` or ``QUARTER`` and a ``DATE`` takes no hours, so ``date ± INTERVAL`` becomes
+  ``DATE_ADD`` and a date that gets hours, minutes or seconds is read as a ``TIMESTAMP`` first.
 - **Date arithmetic:** ``add_days`` and ``shift`` build one ``DATE_ADD`` node that SQLGlot prints
   per dialect; Oracle gets ``+ NUMTODSINTERVAL``/``NUMTOYMINTERVAL`` here.
 """
@@ -67,6 +71,11 @@ def trunc(value: exp.Expression, unit: str, dialect: str) -> exp.Expression:
         unit = "ISO_WEEK"  # SQL Server weeks depend on DATEFIRST; ISO weeks start on Monday
     if unit == "WEEK" and dialect == "bigquery":
         unit = "ISOWEEK"  # BigQuery's WEEK starts on Sunday; ISOWEEK starts on Monday
+    if unit in _TIME_OF_DAY_UNITS and dialect == "trino":
+        # Trino refuses DATE_TRUNC('hour', date); a date read as a time is midnight.
+        # TIMESTAMP(6), not TIMESTAMP (= timestamp(3)): Trino rounds when a cast lowers
+        # the precision, which would move 10:59:59.9996 on a timestamp(6) column to 11:00.
+        value = exp.Cast(this=value, to=exp.DataType.build("TIMESTAMP(6)", dialect="trino"))
     return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit))
 
 
@@ -92,6 +101,11 @@ def adapt(tree: exp.Expression, dialect: str) -> exp.Expression:
 
         # date ± INTERVAL -> DateAdd first: in BigQuery a DATE plus an INTERVAL is a DATETIME.
         return portable(tree).transform(_bigquery)
+    if dialect == "trino":
+        from cosmos_semantic.expressions import portable
+
+        # date ± INTERVAL -> DateAdd: Trino's interval literals have no WEEK or QUARTER.
+        return portable(tree).transform(_trino)
     if dialect not in _TRUNC_TEMPLATES:
         return tree
     if dialect == "oracle":
@@ -176,6 +190,29 @@ def _bigquery(node: exp.Expression) -> exp.Expression:
             this=value, expression=node.expression.copy(), unit=exp.Var(this=node.text("unit"))
         )
     return node
+
+
+def _trino(node: exp.Expression) -> exp.Expression:
+    """Trino rewrites: units are singular (``INTERVAL '3 days'`` arrives as ``DAYS``, which
+    ``DATE_ADD`` refuses), and ``DATE_ADD('hour', n, date)`` fails (a ``DATE`` has no time of
+    day), so a date that gets hours, minutes or seconds is cast to ``TIMESTAMP`` first, which is
+    what PostgreSQL does implicitly for ``date + INTERVAL '3' HOUR``."""
+    if not (isinstance(node, exp.DateAdd | exp.TsOrDsAdd) and node.text("unit")):
+        return node
+    unit = node.text("unit").upper()
+    singular = unit[:-1] if unit.endswith("S") and unit[:-1] in _DATE_ADD_UNITS else unit
+    to_time = singular in _TIME_OF_DAY_UNITS and _is_date(node.this)
+    if singular == unit and not to_time:
+        return node
+    node = node.copy()
+    node.set("unit", exp.Var(this=singular))
+    if to_time:
+        node.set("this", exp.Cast(this=node.this, to=exp.DataType.build("TIMESTAMP")))
+    return node
+
+
+_TIME_OF_DAY_UNITS = ("HOUR", "MINUTE", "SECOND")
+_DATE_ADD_UNITS = ("YEAR", "QUARTER", "MONTH", "WEEK", "DAY", *_TIME_OF_DAY_UNITS)
 
 
 # SQLGlot writes TIMESTAMP (without a time zone) as BigQuery's DATETIME.

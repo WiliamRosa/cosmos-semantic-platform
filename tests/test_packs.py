@@ -27,6 +27,7 @@ SOURCES = [
     "mariadb_connector",
     "oracle_connector",
     "bigquery_connector",
+    "trino_connector",
 ]
 EXAMPLE = Path(__file__).parents[1] / "examples" / "ecommerce" / "semantic"
 MIDWEST = Principal(user={"region": "Midwest"})

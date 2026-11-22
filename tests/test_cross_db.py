@@ -43,6 +43,7 @@ SOURCES = [
     "mariadb_connector",
     "oracle_connector",
     "bigquery_connector",
+    "trino_connector",
 ]
 
 
@@ -127,7 +128,17 @@ def _requests(graph, count: int, seed: int):
 
 
 # Every dialect a connector can have: a drawn request must plan on all of them.
-DIALECTS = ["duckdb", "postgres", "tsql", "databricks", "snowflake", "mysql", "oracle", "bigquery"]
+DIALECTS = [
+    "duckdb",
+    "postgres",
+    "tsql",
+    "databricks",
+    "snowflake",
+    "mysql",
+    "oracle",
+    "bigquery",
+    "trino",
+]
 
 
 def _rolling_requests(graph, count: int, seed: int):
