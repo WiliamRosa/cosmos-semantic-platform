@@ -56,8 +56,20 @@ jobs:
       COSMOS_MARIADB_URI: mysql+pymysql://root:cosmos@127.0.0.1:3307/
       COSMOS_ORACLE_DSN: 127.0.0.1:1521/FREEPDB1
       COSMOS_ORACLE_PASSWORD: cosmos
+      COSMOS_TRINO_URI: trino://cosmos@localhost:18080/memory
     steps:
       - uses: actions/checkout@v4
+      - name: Start Trino (DEC-43)
+        # The native `services:` block cannot mount a volume, and the memory catalog needs
+        # deploy/trino/catalog/memory.properties, so this runs the container directly instead.
+        run: |
+          docker run -d --name trino -p 127.0.0.1:18080:8080 \
+            -v "${{ github.workspace }}/deploy/trino/catalog/memory.properties:/etc/trino/catalog/memory.properties:ro" \
+            trinodb/trino:484
+          for i in $(seq 1 60); do
+            docker exec trino /usr/lib/trino/bin/health-check && break
+            sleep 2
+          done
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-node@v4
         with:
