@@ -454,7 +454,7 @@ A request's `filters` (in `POST /v1/query`, `POST /v1/sql`, `POST /v1/dimensions
 - **Same SQL.** A structured filter and the equivalent expression string (written with the dialect's own quoting) produce the same SQL, and so the same `sql_hash`. The audit log keeps the object as sent, so a replay gets the same SQL; the console's answers and the evidence show it as the equivalent expression.
 - **Errors.** An unknown operator, a value of the wrong shape (a list for `=`, a value for `is null`) or an unknown field is refused before planning (HTTP 422, or an MCP tool error); an unknown dimension or a value that does not fit the dimension's type is a `QueryError` (HTTP 400). Personal data stays refused to agents, as with expression strings.
 
-Reference case A52 checks the numbers of a request with structured filters, among them a `not in` list holding a quote and a backslash before a quote, against hand-written SQL on every database.
+Reference case A55 checks the numbers of a request with structured filters, among them a `not in` list holding a quote and a backslash before a quote, against hand-written SQL on every database.
 
 ## Filters on metric values
 

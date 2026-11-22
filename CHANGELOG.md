@@ -20,7 +20,7 @@ format or the API; such changes are listed under **Changed**.
   dimension's type. `dimension_values` gains `filters` (the MCP argument, and
   `POST /v1/dimensions/{name}/values` with `{"limit", "filters"}`), so it counts only the rows
   they keep; its evidence lists them. The console's query explorer sends structured filters
-  instead of quoting values itself. Reference case A52 checks the numbers on every database.
+  instead of quoting values itself. Reference case A55 checks the numbers on every database.
 - Trino and Starburst as a data source, in preview (DEC-43): `type: trino` with the `trino`
   extra (the `trino` client). The connection is a `uri` such as
   `trino://user@host:443/catalog?http_scheme=https`, with `options` for the password (basic

@@ -3,7 +3,7 @@
 The engine builds the filter as a tree and SQLGlot writes the value as a literal of each
 dialect, so no caller quotes a value. An equivalent string and structured filter give the same
 SQL and `sql_hash`; values with quotes and backslashes stay values on every dialect. Reference
-case A52 checks the numbers against hand-written SQL on every database."""
+case A55 checks the numbers against hand-written SQL on every database."""
 
 from __future__ import annotations
 

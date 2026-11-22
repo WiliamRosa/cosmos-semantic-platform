@@ -1268,7 +1268,7 @@ cases:
   # as literals of each dialect. The `not in` list holds a quote and a backslash before a quote,
   # which no segment carries: on every database it keeps exactly the non-null segments, and a
   # literal escaped the wrong way would be a syntax error or a different filter.
-  - id: A52
+  - id: A55
     category: filters
     phase: 3
     title: Revenue and orders by state, with structured filters holding quotes and backslashes
