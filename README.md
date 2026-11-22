@@ -23,7 +23,7 @@ AI agents that write SQL over raw tables return numbers that look right and that
 
 | | |
 | --- | --- |
-| **Multi-database** | One model, the same number on Databricks, Snowflake, Oracle, SQL Server, Postgres, MySQL, MariaDB and DuckDB, checked by the test suite on every change; BigQuery and Trino (Starburst) in preview |
+| **Multi-database** | One model, the same number on Databricks, Snowflake, BigQuery, Oracle, SQL Server, Postgres, MySQL, MariaDB and DuckDB, checked by the test suite on every change; Trino (Starburst) in preview |
 | **Ontology** | A bilingual business glossary (SKOS), versioned business rules with owners and tests, and a knowledge graph of teams, systems and processes |
 | **Built for AI agents** | A native MCP server: agents find the concept, ask for a governed metric and get deterministic SQL; personal data never reaches them |
 | **Verifiable numbers** | Every answer carries the expanded formula, rules, row filters, reference date and hashes; `cosmos replay` tells whether a number changed and why |
