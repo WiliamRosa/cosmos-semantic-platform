@@ -9,6 +9,12 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Offsets in weeks and years (DEC-46): a derived metric's `inputs` accept `offset: 1 week`,
+  `2 weeks`, `1 year` or `2 years`, read as 7 days and 12 months. They run at the grains of
+  their days or months (`2 weeks` by day or week, `1 year` by month, quarter or year) and give
+  exactly the SQL, and so the `sql_hash`, of `14 days` or `12 months`; the evidence keeps the
+  offset as written. Reference cases with hand-written SQL check `1 year` by month and by year
+  and `2 weeks` by day on every database.
 - BigQuery as a data source, in preview (DEC-40, [ADR 0016](docs/decisions/0016-bigquery-as-a-data-source.md)):
   `type: bigquery` with the `bigquery` extra (`google-cloud-bigquery`). It logs in with
   Application Default Credentials or a service account key (`options.credentials_file`),
@@ -278,6 +284,11 @@ format or the API; such changes are listed under **Changed**.
 
 ### Changed
 
+- `cosmos validate` and `cosmos check` refuse a metric whose offsets mix days (or weeks) with
+  months (or years), its own or those of the metrics it uses (DEC-46): an offset in days runs
+  by day or week and one in months by month, quarter or year, so no grain can answer it. Such
+  a metric used to pass validation and fail on every query; the error now names both offsets
+  and sits on the metric where the mix appears.
 - Date filters no longer cut rolling windows short (DEC-34). A request filter on a rolling
   window's time dimension now chooses the output days, and each day's window still reads the
   N − 1 days before it, as in Power BI, Cube and MetricFlow; other filters (status, region, row
