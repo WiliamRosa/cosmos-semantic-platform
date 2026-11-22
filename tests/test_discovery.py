@@ -33,6 +33,7 @@ SOURCES = [
     "mariadb_connector",
     "oracle_connector",
     "bigquery_connector",
+    "trino_connector",
 ]
 
 

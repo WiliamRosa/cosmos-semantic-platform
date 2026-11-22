@@ -5,9 +5,13 @@ The project website, served at [cosmosdata.ai](https://cosmosdata.ai/) by the Cl
 page, no framework and no build dependencies.
 
 - `src/` holds the page, styles, script and the files Cloudflare reads (`_headers`, `404.html`).
-- `build.py` copies `src/` to `dist/` and adds the media the repository already keeps: the social
-  preview from `docs/assets/`, and the screenshots, slides and videos of the published LinkedIn
-  posts in `marketing/linkedin/posts/`. Media is never committed twice.
+- `build.py` copies `src/` to `dist/` and adds the media and logos the repository already keeps:
+  the logo from `marketing/brand/`, the social preview from `docs/assets/`, the console
+  screenshots and video from `media/`, and the slides and walkthrough of the published LinkedIn
+  posts. Media is never committed twice.
+- `media/capture.py` recaptures the console screenshots and video, the README GIF
+  (`docs/assets/console-tour.gif`) and the social preview (`docs/assets/social-preview.png`,
+  from `media/social-preview.html`) from the live demo. Run it after console changes deploy.
 
 ```bash
 python site/build.py

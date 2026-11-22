@@ -6,6 +6,7 @@ ADBC is the default path; SQLAlchemy is the fallback for sources without a matur
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from abc import ABC, abstractmethod
@@ -20,6 +21,8 @@ from sqlglot import exp
 
 from cosmos_semantic.errors import ConnectorError, ModelError
 
+log = logging.getLogger(__name__)
+
 _ENV_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
 
 DIALECTS = {
@@ -32,6 +35,7 @@ DIALECTS = {
     "mariadb": "mysql",  # SQLGlot has no MariaDB dialect; the MySQL one covers what we generate
     "oracle": "oracle",
     "bigquery": "bigquery",
+    "trino": "trino",
 }
 
 
@@ -59,13 +63,13 @@ class DataSourceConfig(BaseModel):
         "mariadb",
         "oracle",
         "bigquery",
+        "trino",
     ]
     driver: Literal["adbc", "sqlalchemy", "native"] | None = Field(
         None,
         description=(
-            "Default: adbc for postgres, native for duckdb, databricks, snowflake, oracle and "
-            "bigquery, "
-            "sqlalchemy for sqlserver, mysql and mariadb."
+            "Default: adbc for postgres, native for duckdb, databricks, snowflake, oracle, "
+            "bigquery and trino, sqlalchemy for sqlserver, mysql and mariadb."
         ),
     )
     uri: str | None = None
@@ -404,6 +408,137 @@ class BigQueryConnector(Connector):
         self._client.close()
 
 
+class TrinoConnector(Connector):
+    """Trino and Starburst through the official ``trino`` client.
+
+    ``uri``: ``trino://user@host:port/catalog`` (plain HTTP, as in the local container) or
+    ``trino://user:password@host:443/catalog?http_scheme=https``. ``options`` set or override
+    its parts: ``host``, ``port``, ``user``, ``password`` (basic authentication, over HTTPS
+    only), ``access_token`` (a JWT), ``catalog``, ``http_scheme``, ``verify`` (TLS
+    verification, or a CA bundle path), ``roles``, ``source`` and ``session_properties``. The
+    model's schemas are schemas of the catalog: map them with ``schema_map``, such as
+    ``public: cosmos``. A query stops after the source's timeout (``query_max_run_time``).
+    """
+
+    _OPTIONS = {
+        "host",
+        "port",
+        "user",
+        "password",
+        "access_token",
+        "catalog",
+        "http_scheme",
+        "verify",
+        "roles",
+        "source",
+        "session_properties",
+    }
+
+    def __init__(self, config: DataSourceConfig) -> None:
+        super().__init__(config)
+        import trino.auth
+        import trino.dbapi
+
+        opts = {**_trino_uri_options(config.uri)}
+        opts.update({k: v for k, v in config.options.items() if v not in (None, "")})
+        unknown = set(opts) - self._OPTIONS
+        if unknown:
+            raise ModelError(f"unknown trino options: {', '.join(sorted(unknown))}")
+        missing = [k for k in ("host", "user", "catalog") if not opts.get(k)]
+        if missing:
+            raise ModelError(f"a trino source needs {', '.join(missing)} (in `uri` or options)")
+        auth = None
+        if opts.get("access_token"):
+            auth = trino.auth.JWTAuthentication(opts["access_token"])
+        elif opts.get("password"):
+            auth = trino.auth.BasicAuthentication(opts["user"], opts["password"])
+        session = dict(opts.get("session_properties") or {})
+        if "query_max_run_time" in session:
+            raise ModelError(
+                "trino session_properties cannot set query_max_run_time; "
+                "use the source's timeout_seconds"
+            )
+        session["query_max_run_time"] = f"{int(config.timeout_seconds)}s"
+        verify = _trino_verify(opts.get("verify", True))
+        if verify is False:
+            log.warning("trino source: TLS certificate verification is disabled (verify: false)")
+        kwargs: dict[str, Any] = {
+            "host": opts["host"],
+            "user": opts["user"],
+            "catalog": opts["catalog"],
+            "session_properties": session,
+            "verify": verify,
+            "source": opts.get("source", "cosmos-semantic"),
+        }
+        for key in ("port", "http_scheme", "roles"):
+            if opts.get(key):
+                kwargs[key] = int(opts[key]) if key == "port" else opts[key]
+        if auth is not None:
+            kwargs["auth"] = auth
+        self._con = trino.dbapi.connect(**kwargs)
+
+    @property
+    def connection(self):
+        return self._con
+
+    def _run(self, sql: str, fetch_limit: int) -> pa.Table:
+        cur = self._con.cursor()
+        try:
+            cur.execute(sql)
+            rows = cur.fetchmany(fetch_limit)
+            names = _unique_names([d[0] for d in cur.description or []])
+        finally:
+            cur.close()  # cancels the query when rows past the limit are left on the server
+        if not rows:
+            return _empty_table(names)
+        return pa.table({n: [r[i] for r in rows] for i, n in enumerate(names)})
+
+    def run_script(self, sql: str) -> None:
+        cur = self._con.cursor()
+        try:
+            for statement in sqlglot.transpile(sql, read="trino", write="trino"):
+                cur.execute(statement)
+                cur.fetchall()  # a statement runs to the end only while its results are read
+        finally:
+            cur.close()
+
+    def close(self) -> None:
+        self._con.close()
+
+
+def _trino_uri_options(uri: str | None) -> dict[str, Any]:
+    """``trino://user[:password]@host[:port]/catalog[?http_scheme=https]`` -> options."""
+    if not uri:
+        return {}
+    from urllib.parse import parse_qsl, unquote, urlsplit
+
+    parts = urlsplit(uri)
+    if parts.scheme != "trino":
+        raise ModelError("a trino `uri` starts with trino://")
+    query = dict(parse_qsl(parts.query))
+    unknown = set(query) - {"http_scheme", "verify", "source"}
+    if unknown:
+        raise ModelError(f"unknown trino uri parameters: {', '.join(sorted(unknown))}")
+    out: dict[str, Any] = {
+        "host": parts.hostname,
+        "port": parts.port,
+        "user": unquote(parts.username) if parts.username else None,
+        "password": unquote(parts.password) if parts.password else None,
+        "catalog": parts.path.strip("/").split("/")[0] or None,
+        **query,
+    }
+    return {k: v for k, v in out.items() if v not in (None, "")}
+
+
+def _trino_verify(value: Any) -> bool | str:
+    """``verify`` from YAML or a URI: a boolean, or the path of a CA bundle."""
+    if isinstance(value, str) and value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    if isinstance(value, str):
+        return os.path.expanduser(value)
+    return bool(value)
+
+
 class OracleConnector(Connector):
     """Oracle Database through python-oracledb in thin mode: pure Python, no Instant Client.
 
@@ -617,6 +752,7 @@ def connect(config: DataSourceConfig) -> Connector:
             "snowflake": "native",
             "oracle": "native",
             "bigquery": "native",
+            "trino": "native",
             "sqlserver": "sqlalchemy",
             "mysql": "sqlalchemy",
             "mariadb": "sqlalchemy",
@@ -634,6 +770,8 @@ def connect(config: DataSourceConfig) -> Connector:
         return OracleConnector(config)
     if config.type == "bigquery":
         return BigQueryConnector(config)
+    if config.type == "trino":
+        return TrinoConnector(config)
     if driver == "sqlalchemy":
         return SQLAlchemyConnector(config)
     raise ModelError(f"unsupported combination: {config.type} with {driver}")

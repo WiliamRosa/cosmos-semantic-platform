@@ -20,16 +20,50 @@ format or the API; such changes are listed under **Changed**.
   filters on another model, a time grain, a rule or `$user` are refused until
   `--allow-metric-loss`, each with a warning. On DuckDB, 57 exported measure-and-grouping pairs
   return the planner's numbers; the same test runs on Databricks when its credentials are set.
-- BigQuery as a data source, in preview (DEC-40, [ADR 0016](docs/decisions/0016-bigquery-as-a-data-source.md)):
+- Trino and Starburst as a data source, in preview (DEC-43): `type: trino` with the `trino`
+  extra (the `trino` client). The connection is a `uri` such as
+  `trino://user@host:443/catalog?http_scheme=https`, with `options` for the password (basic
+  authentication), a JWT (`access_token`), TLS verification, roles and session properties; a
+  query stops after the source's `timeout_seconds` (`query_max_run_time`). The model's schemas
+  map to schemas of the catalog. Weeks start on Monday (Trino's `DATE_TRUNC` is ISO), interval
+  arithmetic becomes `DATE_ADD` (Trino's intervals have no `WEEK` or `QUARTER`), and a date
+  that gets hours is read as a `TIMESTAMP` first. `docker-compose.yml` has a `trino` profile
+  (Trino 484 with an in-memory catalog, on localhost); the comparative suites run on it when
+  `COSMOS_TRINO_URI` is set. Offline tests check that every reference query plans and parses
+  for Trino, and CI runs the suites against a Trino container.
+- Offsets in weeks and years (DEC-46): a derived metric's `inputs` accept `offset: 1 week`,
+  `2 weeks`, `1 year` or `2 years`, read as 7 days and 12 months. They run at the grains of
+  their days or months (`2 weeks` by day or week, `1 year` by month, quarter or year) and give
+  exactly the SQL, and so the `sql_hash`, of `14 days` or `12 months`; the evidence keeps the
+  offset as written. Reference cases with hand-written SQL check `1 year` by month and by year
+  and `2 weeks` by day on every database.
+- Growth in one metric (DEC-44): an offset input of a derived metric takes an `alias`, so the
+  expression reads the same metric both shifted and unshifted, such as
+  `expr: ({revenue} - {revenue_year_before}) / {revenue_year_before}` with
+  `inputs: [{metric: revenue, offset: 12 months, alias: revenue_year_before}]`; no helper
+  metric is needed. Several aliases can read one metric at different offsets. Validation
+  refuses an alias that is not used in `expr`, names two inputs or is the name of a measure or
+  metric, and a metric listed twice in `inputs` without aliases. The evidence's `time.shifts`
+  entry names the `alias`, the catalog and formula expand it, and `cosmos export dbt` writes it
+  as MetricFlow's input `alias`. The SQL of every existing request is unchanged (13,688
+  request-dialect pairs compared with the previous version), and so is the hash of a model
+  without aliases. New example metric `revenue_yoy_growth` and reference cases A49 to A51
+  (year-over-year growth by month and by year, and beside month-over-month growth by status
+  with a filter).
+- BigQuery as a data source (DEC-40, [ADR 0016](docs/decisions/0016-bigquery-as-a-data-source.md)):
   `type: bigquery` with the `bigquery` extra (`google-cloud-bigquery`). It logs in with
   Application Default Credentials or a service account key (`options.credentials_file`),
   `options.maximum_bytes_billed` stops a query that would scan more, and the model's schemas map
   to datasets (`schema_map: {public: cosmos_demo}`). Weeks start on Monday (`ISOWEEK`), times
   are `DATETIME` and date arithmetic on a time uses `DATETIME_ADD`, so the numbers match the
   other databases. `cosmos demo-data` loads with free load jobs (they work in the BigQuery
-  sandbox), and `cosmos bootstrap` reads the dataset's `INFORMATION_SCHEMA`. On the BigQuery
-  emulator, 58 reference queries return the same numbers as DuckDB; a live run on a BigQuery
-  project ([setup](deploy/bigquery-setup.md)) is the gate before it leaves preview.
+  sandbox), and `cosmos bootstrap` reads the dataset's `INFORMATION_SCHEMA`. On a BigQuery
+  sandbox project ([setup](deploy/bigquery-setup.md)), the BigQuery suites pass: 160 tests,
+  among them the 66 reference queries, the divergence zoo, the randomized same-number test
+  against DuckDB, bootstrap, packs, the Power BI import and the dbt, Cube and Ossie exports.
+  The live run found and fixed what the emulator did not: `DATE - DATE` is an `INTERVAL` in
+  BigQuery (now `DATE_DIFF`), a CTE named like its own column reads the whole row, and a model
+  expression with a doubled quote (`'O''Brien'`) did not parse in the BigQuery dialect.
 - A metric can declare its reconciliation tolerance (DEC-39):
   `reconciliation: {abs_tolerance: 0.01, rel_tolerance: 0.001}`. `cosmos reconcile`, the
   reconciliation cases of `cosmos check` and member health use it in place of the fixed default
@@ -40,6 +74,21 @@ format or the API; such changes are listed under **Changed**.
   carry it when it is the metric's own, and query evidence lists it under the metric. Each
   tolerance must be a non-negative, finite number, and unknown keys are refused. Without the
   field nothing changes: same results, same model hash, same SQL and evidence.
+- `deploy/azure/`: a first slice packaging Cosmos Semantic as an Azure Marketplace Managed
+  Application offer (ADR 0015), whose resources deploy into the customer's own subscription
+  rather than a publisher-run SaaS. A Dockerfile builds `cosmos serve` from source with the
+  e-commerce example and a baked-in DuckDB demo dataset (no external database needed to try
+  it), `entrypoint.sh` falls back to `--allow-anonymous` until `COSMOS_OIDC_ISSUER` is set, and
+  `main.bicep` provisions a scale-to-zero Container App, a Key Vault, and a user-assigned
+  managed identity with "Key Vault Secrets User" on it. `createUiDefinition.json` adds one
+  wizard step for Microsoft Entra ID wiring. Validated end-to-end in a real subscription
+  (ADR 0015's 2026-11-21 update): image build and push, Bicep deploy, and the actual wizard and
+  post-deploy overview/side-menu chrome via a private Service Catalog Managed Application. Fixed
+  along the way: the `AcrPull` role assignment now targets the registry's own resource group
+  through `acr-pull-role.bicep` (a module; it previously defaulted to the deployment's own
+  resource group, granting nothing useful), and a new `.dockerignore` keeps the build context
+  from including `.venv`. Not done: a production `connections.yml` wired to Key Vault secrets,
+  and the Partner Center listing itself.
 - `cosmos export dbt` and `cosmos import dbt` carry offsets as MetricFlow's `offset_window`
   (DEC-36). The export writes a derived metric's `inputs: [{metric, offset}]` as the input's
   `offset_window` in the largest unit that holds the offset (`7 days` as `1 week`, `3 months` as
@@ -274,6 +323,11 @@ format or the API; such changes are listed under **Changed**.
 
 ### Changed
 
+- `cosmos validate` and `cosmos check` refuse a metric whose offsets mix days (or weeks) with
+  months (or years), its own or those of the metrics it uses (DEC-46): an offset in days runs
+  by day or week and one in months by month, quarter or year, so no grain can answer it. Such
+  a metric used to pass validation and fail on every query; the error now names both offsets
+  and sits on the metric where the mix appears.
 - Date filters no longer cut rolling windows short (DEC-34). A request filter on a rolling
   window's time dimension now chooses the output days, and each day's window still reads the
   N − 1 days before it, as in Power BI, Cube and MetricFlow; other filters (status, region, row

@@ -38,6 +38,7 @@ REFUSED = {
     "smallest_order_rolling_7_days",
     "revenue_prev_month",
     "revenue_mom_growth",
+    "revenue_yoy_growth",
     "order_count_7_days_earlier",
     "collection_gap",
     "items_per_order",

@@ -6,6 +6,7 @@ import pytest
 
 from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.errors import ModelError
+from cosmos_semantic.evidence import EvidenceBuilder, sql_hash
 from cosmos_semantic.loader import load_project
 from cosmos_semantic.planner import Planner, QueryRequest
 from cosmos_semantic.reference import ReferenceCase, load_cases, run_case
@@ -78,6 +79,12 @@ def test_reference_bigquery(case, graph, bigquery_connector):
     _check(case, graph, bigquery_connector)
 
 
+@pytest.mark.trino
+@pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
+def test_reference_trino(case, graph, trino_connector):
+    _check(case, graph, trino_connector)
+
+
 def test_year_to_date_distinct_count_is_refused(duckdb_connector):
     """A year-to-date over a `count_distinct` measure cannot be in a valid model (validation
     refuses it, so it is not in the example and has no case in the YAML files); a model loaded
@@ -141,3 +148,185 @@ def test_offset_cases_cross_a_year_change_and_an_empty_month(graph, duckdb_conne
     for k in gaps:
         assert completed[k]["revenue_prev_month"] is None
         assert completed[k]["revenue_mom_growth"] is None
+
+
+# -- Offsets in weeks and years (DEC-46) ---------------------------------------------------
+# Not in the example (each export test counts its metrics), so these cases run here against
+# the example plus two metrics, on every database available. The hand-written SQL pairs
+# periods by a number (year * 12 + month, the year, or days since 2000-01-01), never by date
+# arithmetic, so the check is independent of the engine's interval SQL.
+WEEKS_YEARS_METRICS = [
+    {
+        "name": "revenue_prev_year",
+        "type": "derived",
+        "expr": "{revenue}",
+        "inputs": [{"metric": "revenue", "offset": "1 year"}],
+    },
+    {
+        "name": "order_count_2_weeks_earlier",
+        "type": "derived",
+        "expr": "{order_count}",
+        "inputs": [{"metric": "order_count", "offset": "2 weeks"}],
+    },
+]
+SOURCES = [
+    "duckdb_connector",
+    "postgres_connector",
+    "sqlserver_connector",
+    "databricks_connector",
+    "snowflake_connector",
+    "mysql_connector",
+    "mariadb_connector",
+    "oracle_connector",
+    "bigquery_connector",
+]
+DIALECTS = ("duckdb", "postgres", "tsql", "mysql", "oracle", "databricks", "snowflake", "bigquery")
+
+
+def _two_weeks(sql: str) -> str:
+    """A37's hand-written SQL (orders of the day 7 days before), 14 days back instead."""
+    assert sql.count("cur.k - 7") == 1 and sql.count("order_count_7_days_earlier") == 1
+    return sql.replace("cur.k - 7", "cur.k - 14").replace(
+        "order_count_7_days_earlier", "order_count_2_weeks_earlier"
+    )
+
+
+A37 = next(c for c in ADVANCED if c.id == "A37")
+WEEKS_YEARS_CASES = [
+    ReferenceCase(
+        id="DEC46-1-YEAR-BY-MONTH",
+        category="tempo",
+        phase=3,
+        title="Revenue and revenue of the same month one year before, by month",
+        request=QueryRequest(
+            metrics=["revenue", "revenue_prev_year"], dimensions=["orders.ordered_at__month"]
+        ),
+        sql="""
+WITH monthly AS (
+  SELECT DATE_TRUNC('month', ordered_at) AS mon,
+         EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+         SUM(amount) AS revenue
+  FROM public.orders
+  GROUP BY DATE_TRUNC('month', ordered_at),
+           EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+)
+SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+       prev.revenue AS revenue_prev_year
+FROM monthly cur
+LEFT JOIN monthly prev ON prev.k = cur.k - 12
+""",
+        sql_by_dialect={
+            "tsql": """
+WITH monthly AS (
+  SELECT DATETRUNC(month, ordered_at) AS mon,
+         YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
+         SUM(amount) AS revenue
+  FROM public.orders
+  GROUP BY DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+)
+SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+       prev.revenue AS revenue_prev_year
+FROM monthly cur
+LEFT JOIN monthly prev ON prev.k = cur.k - 12
+"""
+        },
+    ),
+    ReferenceCase(
+        id="DEC46-1-YEAR-BY-YEAR",
+        category="tempo",
+        phase=3,
+        title="Revenue of the year before, by status and year",
+        request=QueryRequest(
+            metrics=["revenue_prev_year"], dimensions=["orders.status", "orders.ordered_at__year"]
+        ),
+        sql="""
+WITH yearly AS (
+  SELECT status, DATE_TRUNC('year', ordered_at) AS yr, EXTRACT(YEAR FROM ordered_at) AS k,
+         SUM(amount) AS revenue
+  FROM public.orders
+  GROUP BY status, DATE_TRUNC('year', ordered_at), EXTRACT(YEAR FROM ordered_at)
+)
+SELECT cur.status AS orders__status, cur.yr AS orders__ordered_at__year,
+       prev.revenue AS revenue_prev_year
+FROM yearly cur
+LEFT JOIN yearly prev
+  ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
+  AND prev.k = cur.k - 1
+""",
+        sql_by_dialect={
+            "tsql": """
+WITH yearly AS (
+  SELECT status, DATETRUNC(year, ordered_at) AS yr, YEAR(ordered_at) AS k,
+         SUM(amount) AS revenue
+  FROM public.orders
+  GROUP BY status, DATETRUNC(year, ordered_at), YEAR(ordered_at)
+)
+SELECT cur.status AS orders__status, cur.yr AS orders__ordered_at__year,
+       prev.revenue AS revenue_prev_year
+FROM yearly cur
+LEFT JOIN yearly prev
+  ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
+  AND prev.k = cur.k - 1
+"""
+        },
+    ),
+    ReferenceCase(
+        id="DEC46-2-WEEKS-BY-DAY",
+        category="tempo",
+        phase=3,
+        title="Orders of the same day two weeks before, by day",
+        request=QueryRequest(
+            metrics=["order_count_2_weeks_earlier"], dimensions=["orders.ordered_at__day"]
+        ),
+        sql=_two_weeks(A37.sql),
+        sql_by_dialect={d: _two_weeks(s) for d, s in A37.sql_by_dialect.items()},
+    ),
+    ReferenceCase(
+        id="DEC46-1-YEAR-BY-WEEK",
+        category="tempo",
+        phase=3,
+        title="An offset of 1 year by week is refused (only by month, quarter or year)",
+        request=QueryRequest(metrics=["revenue_prev_year"], dimensions=["orders.ordered_at__week"]),
+        expect_error="QueryError",
+    ),
+]
+
+
+@pytest.fixture(scope="module")
+def weeks_years_graph():
+    data = load_project(EXAMPLE).model_dump(mode="json")
+    data["metrics"].extend(WEEKS_YEARS_METRICS)
+    return compile_project(Project.model_validate(data))
+
+
+@pytest.mark.parametrize("source", SOURCES)
+@pytest.mark.parametrize("case", WEEKS_YEARS_CASES, ids=lambda c: c.id)
+def test_reference_offsets_in_weeks_and_years(case, source, weeks_years_graph, request):
+    _check(case, weeks_years_graph, request.getfixturevalue(source))
+
+
+def test_offsets_in_weeks_and_years_compile_to_days_and_months(weeks_years_graph):
+    """`1 year` gives the SQL (and so the `sql_hash`) of `12 months`, and `2 weeks` that of
+    `14 days`, on every dialect: the planner reads only the normalized offset (DEC-46). The
+    evidence keeps the offset as written."""
+    data = weeks_years_graph.project.model_dump(mode="json")
+    normal = {"1 year": "12 months", "2 weeks": "14 days"}
+    for metric in data["metrics"]:
+        for item in metric.get("inputs") or []:
+            item["offset"] = normal.get(item["offset"], item["offset"])
+    normalized = compile_project(Project.model_validate(data))
+    cases = [c for c in WEEKS_YEARS_CASES if not c.expect_error]
+    for case in cases:
+        for dialect in DIALECTS:
+            written = Planner(weeks_years_graph, dialect).plan(case.request).sql
+            same = Planner(normalized, dialect).plan(case.request).sql
+            assert written == same, (case.id, dialect)
+            assert sql_hash(written) == sql_hash(same)
+    builder = EvidenceBuilder(weeks_years_graph)
+    assert builder.time("revenue_prev_year", cases[0].request)["shifts"] == [
+        {"metric": "revenue_prev_year", "input": "revenue", "offset": "1 year"}
+    ]
+    assert builder.time("order_count_2_weeks_earlier", cases[2].request)["shifts"] == [
+        {"metric": "order_count_2_weeks_earlier", "input": "order_count", "offset": "2 weeks"}
+    ]
+    assert "1 year earlier" in builder.formula("revenue_prev_year")

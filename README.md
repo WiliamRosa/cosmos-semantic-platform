@@ -1,4 +1,9 @@
-# Cosmos Semantic
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/WiliamRosa/cosmos-semantic-platform/main/marketing/brand/cosmos-semantic-horizontal-dark.svg">
+    <img src="https://raw.githubusercontent.com/WiliamRosa/cosmos-semantic-platform/main/marketing/brand/cosmos-semantic-horizontal-light.svg" alt="Cosmos Semantic" height="64">
+  </picture>
+</h1>
 
 [![PyPI](https://img.shields.io/pypi/v/cosmos-semantic)](https://pypi.org/project/cosmos-semantic/)
 [![Python](https://img.shields.io/pypi/pyversions/cosmos-semantic)](https://pypi.org/project/cosmos-semantic/)
@@ -10,7 +15,7 @@
 
 <!-- mcp-name: io.github.WiliamRosa/cosmos-semantic -->
 
-**[Live demo of the console](https://wiliamrosa.github.io/cosmos-semantic-platform/)** · [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) · [Docs](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs) · [Article](https://dev.to/wiliamrosa/cosmos-semantic-an-open-source-semantic-layer-that-makes-ai-agents-get-the-number-right-and-prove-1c06) ([em português](https://wiliamrosa.github.io/articles/cosmos-semantic-camada-semantica-numeros-verificaveis/))
+**[Live demo of the console](https://wiliamrosa.github.io/cosmos-semantic-platform/)** · [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) · [Website](https://cosmosdata.ai) · [Docs](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs) · [Article](https://dev.to/wiliamrosa/cosmos-semantic-an-open-source-semantic-layer-that-makes-ai-agents-get-the-number-right-and-prove-1c06) ([em português](https://wiliamrosa.github.io/articles/cosmos-semantic-camada-semantica-numeros-verificaveis/))
 
 [![The read-only console: metric health, a business process as a graph colored by health, and a metric that diverges from a legacy report](https://raw.githubusercontent.com/WiliamRosa/cosmos-semantic-platform/main/docs/assets/console-tour.gif)](https://wiliamrosa.github.io/cosmos-semantic-platform/)
 
@@ -18,7 +23,7 @@ AI agents that write SQL over raw tables return numbers that look right and that
 
 | | |
 | --- | --- |
-| **Multi-database** | One model, the same number on Databricks, Snowflake, Oracle, SQL Server, Postgres, MySQL, MariaDB and DuckDB, checked by the test suite on every change; BigQuery in preview |
+| **Multi-database** | One model, the same number on Databricks, Snowflake, Oracle, SQL Server, Postgres, MySQL, MariaDB and DuckDB, checked by the test suite on every change; BigQuery and Trino (Starburst) in preview |
 | **Ontology** | A bilingual business glossary (SKOS), versioned business rules with owners and tests, and a knowledge graph of teams, systems and processes |
 | **Built for AI agents** | A native MCP server: agents find the concept, ask for a governed metric and get deterministic SQL; personal data never reaches them |
 | **Verifiable numbers** | Every answer carries the expanded formula, rules, row filters, reference date and hashes; `cosmos replay` tells whether a number changed and why |
@@ -42,7 +47,7 @@ cosmos explain rule:active_customer
 That is a governed metric with its evidence (formula, rules, policies, `as_of` and hashes) in about
 a minute, on a local DuckDB file. The [quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) continues with business
 rules, row filters, personal data and connecting an AI agent over MCP. Extras: `duckdb`,
-`postgres`, `sqlserver`, `mysql` (MySQL and MariaDB), `oracle`, `databricks`, `snowflake`, `bigquery`, `server` (REST and MCP), `ai` (`cosmos suggest`), `testdata`.
+`postgres`, `sqlserver`, `mysql` (MySQL and MariaDB), `oracle`, `databricks`, `snowflake`, `bigquery`, `trino` (Trino and Starburst), `server` (REST and MCP), `ai` (`cosmos suggest`), `testdata`.
 
 ## Console
 
@@ -196,6 +201,8 @@ Databricks: set `DATABRICKS_HTTP_PATH` (SQL warehouse) and `DATABRICKS_TOKEN` wi
 
 Snowflake: set `SNOWFLAKE_ACCOUNT` (`<org>-<account>`), `SNOWFLAKE_USER` and `SNOWFLAKE_PRIVATE_KEY_FILE` (key-pair login), or `SNOWFLAKE_CONNECTION_NAME` with a connection from `~/.snowflake/connections.toml`; plus `SNOWFLAKE_ROLE` and `SNOWFLAKE_WAREHOUSE`. The tests load the example data into `SNOWFLAKE_DATABASE` (default `COSMOS_DEMO`). [deploy/snowflake-setup.sql](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/deploy/snowflake-setup.sql) creates the warehouse, database, role and service user they need.
 
+Trino and Starburst (preview): `type: trino` with the `trino` extra and a `uri` such as `trino://user@host:443/catalog?http_scheme=https`; the password goes in `options.password` from an environment variable (`${COSMOS_TRINO_PASSWORD}`), or a JWT in `options.access_token`. The model's schemas are schemas of the catalog (`schema_map: { public: sales }`), and a query stops after the source's `timeout_seconds`. Locally, `docker compose -p cosmos-semantic -f deploy/docker-compose.yml --profile trino up -d` starts Trino on `localhost:18080` with an in-memory catalog; set `COSMOS_TRINO_URI=trino://cosmos@localhost:18080/memory` to run the tests on it.
+
 Editors validate and autocomplete model files through the JSON Schema in [schema/](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/schema/), referenced on the first line of each file (`# yaml-language-server: $schema=...`). After changing `spec.py`, regenerate it with `uv run cosmos schema -o schema/cosmos-semantic.v1.schema.json`.
 
 ## Principles
@@ -219,7 +226,7 @@ Editors validate and autocomplete model files through the JSON Schema in [schema
 | [Interoperability](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/interoperability.md) | Mapping to Apache Ossie, dbt and Cube (import and export), Power BI import, and Databricks metric view export |
 | [Roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md) | Phases, MVP scope and exit criteria |
 | [Changelog](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md) | What changed in each release |
-| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source, 0011 adds MySQL, MariaDB and Oracle, 0012 adds the read-only console, 0013 sets up the supervised agent team, 0014 adds the social media agent, 0016 adds BigQuery (preview) |
+| [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source, 0011 adds MySQL, MariaDB and Oracle, 0012 adds the read-only console, 0013 sets up the supervised agent team, 0014 adds the social media agent, 0016 adds BigQuery |
 
 ## Repository layout
 
@@ -230,8 +237,8 @@ src/cosmos_semantic/
   compiler.py        validation and semantic graph, with joins inferred from entities
   expressions.py     {member} and $user references, and protection of caller filters
   planner.py         query plan and per-dialect SQL (SQLGlot)
-  connectors.py      DuckDB, Postgres (ADBC), Databricks, Snowflake, BigQuery, Oracle, SQL Server and MySQL/MariaDB, always Arrow
-  dialects.py        per-dialect rewrites SQLGlot does not cover (MySQL, Oracle, BigQuery)
+  connectors.py      DuckDB, Postgres (ADBC), Databricks, Snowflake, BigQuery, Trino, Oracle, SQL Server and MySQL/MariaDB, always Arrow
+  dialects.py        per-dialect rewrites SQLGlot does not cover (MySQL, Oracle, BigQuery, Trino)
   engine.py          model + connections -> executed queries
   ontology.py        business rules (virtual dimensions and tests) and SKOS glossary
   catalog.py         members, concept search and explanations

@@ -72,7 +72,7 @@ Redefined by [ADR 0009](decisions/0009-business-context-as-phase-3-differentiato
 - Result cache.
 - A Postgres-compatible SQL endpoint, for Power BI, Tableau and Excel.
 - Control plane: editor, playground, connections, users.
-- Managed hosting on Azure, SSO with Entra ID, auditing.
+- **Managed hosting on Azure — reframed, first slice done** ([ADR 0015](decisions/0015-azure-marketplace-managed-application.md)): not a self-run SaaS (still paused, same reasoning as ADR 0009), but an Azure Marketplace **Managed Application** offer, whose resources deploy and bill into the customer's own subscription. `deploy/azure/` has a working Dockerfile (`cosmos serve` plus the e-commerce example and a baked-in DuckDB dataset, no external database needed), a Bicep template (Container App, Key Vault, managed identity) that compiles cleanly (`az bicep build`, not yet deployed against a real subscription), and a one-step `createUiDefinition.json` wizard for Microsoft Entra ID wiring. Not done: a production `connections.yml` wired to Key Vault secrets, and the actual Partner Center listing, pricing and certification.
 
 ## On the radar
 

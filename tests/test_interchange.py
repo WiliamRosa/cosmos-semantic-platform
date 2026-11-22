@@ -74,6 +74,7 @@ SOURCES = [
     "mariadb_connector",
     "oracle_connector",
     "bigquery_connector",
+    "trino_connector",
 ]
 
 QUERIES = [
@@ -233,6 +234,7 @@ EXTENSION_ONLY = {
     "customers_rolling_30_days": "it is cumulative",
     "revenue_prev_month": "it reads an input at an earlier period",
     "revenue_mom_growth": "it uses `revenue_prev_month`, and it reads an input at an earlier period",
+    "revenue_yoy_growth": "it reads an input at an earlier period",
     "order_count_7_days_earlier": "it reads an input at an earlier period",
 }
 # A row filter that reads a business rule.
@@ -875,7 +877,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 68
+    assert len(REFERENCE) == 71
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -966,7 +968,7 @@ def test_cli_export_ossie(tmp_path, graph):
         app, ["export", "ossie", "-m", str(EXAMPLE), "-o", str(out), "-f", "json"]
     )
     assert result.exit_code == 0, result.output
-    assert "11 warnings" in result.stdout
+    assert "12 warnings" in result.stdout
     assert json.loads(out.read_text(encoding="utf-8"))["name"] == "ecommerce"
     back = import_model("ossie", out).project
     assert _policies(back) == _policies(graph.project)
@@ -999,7 +1001,12 @@ CUMULATIVE = (
     "smallest_order_rolling_7_days",
 )
 # Derived metrics that read an input at an earlier period (DEC-18): no export carries them.
-OFFSETS = ("revenue_prev_month", "revenue_mom_growth", "order_count_7_days_earlier")
+OFFSETS = (
+    "revenue_prev_month",
+    "revenue_mom_growth",
+    "revenue_yoy_growth",
+    "order_count_7_days_earlier",
+)
 # Running totals Cube carries as `to_date` rolling windows, rolling windows in days it carries
 # as `trailing` ones (DEC-30), and the cumulative metrics it does not.
 TO_DATE = ("revenue_year_to_date", "revenue_month_to_date")
@@ -1070,8 +1077,9 @@ def test_cube_export_fails_closed(graph, tmp_path):
     with pytest.raises(MetricLossError) as exc:
         export_cube(graph.project)
     assert str(exc.value).startswith(
-        "4 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
-        "order_count_7_days_earlier) would NOT be exported (max_order_value_year_to_date: it is "
+        "5 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
+        "revenue_yoy_growth, order_count_7_days_earlier) would NOT be exported "
+        "(max_order_value_year_to_date: it is "
         "cumulative over a measure that aggregates with `max`, and the Cube export carries "
         "running totals of `sum` and `count` measures only; revenue_prev_month:"
     )
@@ -1227,7 +1235,7 @@ def test_cube_export_round_trip(graph, tmp_path):
     ) in joined
     assert "timezone: not exported to Cube. Model timestamps are local time, so keep" in joined
     assert "relative dates such as today then follow UTC in Cube, not America/New_York" in joined
-    assert len(exported.warnings) == 13
+    assert len(exported.warnings) == 14
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -2067,8 +2075,8 @@ def test_cube_export_states_each_reason(graph):
     with pytest.raises(MetricLossError) as exc:
         export_cube(project)
     assert str(exc.value).startswith(
-        "15 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
-        "order_count_7_days_earlier, midwest_revenue, "
+        "16 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
+        "revenue_yoy_growth, order_count_7_days_earlier, midwest_revenue, "
     )
     warnings = export_cube(project, allow_metric_loss=True).warnings
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in warnings}
@@ -2132,8 +2140,8 @@ def test_cli_export_cube(tmp_path):
     assert refused.stdout == ""
     assert "row filter" not in refused.stderr
     assert (
-        "4 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
-        "order_count_7_days_earlier) would NOT be exported" in refused.stderr
+        "5 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
+        "revenue_yoy_growth, order_count_7_days_earlier) would NOT be exported" in refused.stderr
     )
     flags = ["--allow-metric-loss"]
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), *flags])
@@ -2144,7 +2152,7 @@ def test_cli_export_cube(tmp_path):
     out = tmp_path / "model" / "cubes.yml"
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "13 warnings" in result.stdout
+    assert "14 warnings" in result.stdout
     assert import_model("cube", out).warnings == []
 
 
@@ -2223,6 +2231,9 @@ def test_dbt_export_round_trip(graph, tmp_path):
         ),
         "metrics.revenue_prev_month: `revenue` is read `1 month` earlier (`offset_window: 1 "
         f"month`), queried by month. {differences}",
+        # dbt's aliased input of a metric also read unshifted comes back as a helper metric.
+        "metrics.revenue_yoy_growth__revenue_year_before: `revenue` is read `12 months` earlier "
+        f"(`offset_window: 1 year`), queried by month or quarter or year. {differences}",
         "metrics.order_count_7_days_earlier: `order_count` is read `7 days` earlier "
         f"(`offset_window: 1 week`), queried by day or week. {differences}",
     ]
@@ -2270,6 +2281,14 @@ def test_dbt_export_round_trip(graph, tmp_path):
         "expr": "(1e0 * (revenue - revenue_prev_month) / NULLIF(revenue_prev_month, 0))",
         "metrics": [{"name": "revenue"}, {"name": "revenue_prev_month"}],
     }
+    # An aliased offset input (DEC-44) is MetricFlow's input `alias`.
+    assert metrics["revenue_yoy_growth"]["type_params"] == {
+        "expr": "(1e0 * (revenue - revenue_year_before) / NULLIF(revenue_year_before, 0))",
+        "metrics": [
+            {"name": "revenue"},
+            {"name": "revenue", "offset_window": "1 year", "alias": "revenue_year_before"},
+        ],
+    }
 
     # Models, tables, owners, entities, dimensions and measures come back as they were (AVG
     # with a `1e0 *` factor, so it is real in dbt too).
@@ -2310,6 +2329,19 @@ def test_dbt_export_round_trip(graph, tmp_path):
         "(1e0 * ({revenue} - {revenue_prev_month}) / NULLIF({revenue_prev_month}, 0))"
     )
     assert want["revenue_prev_month"]["inputs"] == [{"metric": "revenue", "offset": "1 month"}]
+    # The import reads dbt's aliased input of a metric also read unshifted as a helper metric
+    # (DEC-36), with the same numbers (test_dbt_export_same_numbers).
+    helper = "revenue_yoy_growth__revenue_year_before"
+    want["revenue_yoy_growth"]["expr"] = (
+        f"(1e0 * ({{revenue}} - {{{helper}}}) / NULLIF({{{helper}}}, 0))"
+    )
+    want["revenue_yoy_growth"]["inputs"] = []
+    want[helper] = {
+        "name": helper,
+        "type": "derived",
+        "expr": "{revenue}",
+        "inputs": [{"metric": "revenue", "offset": "12 months"}],
+    }
     assert metric_shape(back.project) == want
 
     # Every loss is a warning: policies, a running maximum, the schema, and what a later slice
@@ -2356,6 +2388,11 @@ def test_dbt_export_round_trip(graph, tmp_path):
         "(`offset_window: 1 week`) on `metric_time`, which is `orders.ordered_at`; by that "
         "dimension at the grains the engine accepts (day, week) the periods"
     ) in joined
+    assert (
+        "metrics.revenue_yoy_growth: MetricFlow shifts `revenue` (as `revenue_year_before`) by "
+        "`12 months` (`offset_window: 1 year`) on `metric_time`, which is `orders.ordered_at`; "
+        "by that dimension at the grains the engine accepts (month, quarter, year) the periods"
+    ) in joined
     assert "metrics.revenue_mom_growth" not in joined
     assert "import with `cosmos import dbt --schema public`" in joined
     for name in ("products", "order_items"):
@@ -2364,7 +2401,7 @@ def test_dbt_export_round_trip(graph, tmp_path):
         assert f"{key}: not exported to dbt yet" in joined
     assert "user_context: region" in joined
     assert "not America/New_York" in joined
-    assert len(exported.warnings) == 22
+    assert len(exported.warnings) == 23
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -2377,8 +2414,10 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     cases = _cube_cases(graph.project, policies=False, lost=DBT_LOST)
     # The rolling windows, the running totals (DEC-31): year-to-date by month (A08) and
     # month-to-date by status and day from 45 days ago (A09), and the offsets (DEC-36).
-    assert {"A08", "A09", "A29", "A30", "A34", "A35", "A36", "A37"} <= {c.id for c in cases}
-    assert len(cases) == 37
+    assert {"A08", "A09", "A29", "A30", "A34", "A35", "A36", "A37", "A49", "A51"} <= {
+        c.id for c in cases
+    }
+    assert len(cases) == 40
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -2388,7 +2427,7 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     governed = compile_project(_with_policies(back.project, graph.project))
     cases = _cube_cases(graph.project, policies=True, lost=DBT_LOST)
     assert {"R17", "R18", "A32", "A33", "A38", "A39", "A40", "A41", "A42"} <= {c.id for c in cases}
-    assert len(cases) == 61
+    assert len(cases) == 64
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -3151,7 +3190,7 @@ def test_cli_export_dbt(tmp_path):
     out = tmp_path / "models" / "semantic_models.yml"
     result = runner.invoke(app, ["export", "dbt", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "22 warnings" in result.stdout
+    assert "23 warnings" in result.stdout
     assert (
-        len(import_model("dbt", out, schema="public").warnings) == len(ROLLING) + 2
-    )  # and the two offsets
+        len(import_model("dbt", out, schema="public").warnings) == len(ROLLING) + 3
+    )  # and the three offsets
