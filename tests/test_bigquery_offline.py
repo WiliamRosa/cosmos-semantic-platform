@@ -102,3 +102,26 @@ def test_a_date_read_as_a_time_uses_the_datetime_function():
     sql = _adapted("SELECT CAST(CAST('2026-11-20' AS DATE) AS TIMESTAMP) + INTERVAL '12' HOUR")
     assert "DATETIME(CAST('2026-11-20' AS DATE))" in sql
     assert "AS DATETIME)" not in sql
+
+
+def test_date_minus_date_is_a_day_count():
+    sql = _adapted("SELECT CAST(o.ordered_at AS DATE) - DATE '2000-01-01' FROM o")
+    assert sql.startswith("SELECT DATE_DIFF(CAST(o.ordered_at AS DATE), CAST('2000-01-01' AS DATE)")
+    assert sql.endswith(", DAY) FROM o")
+
+
+def test_a_doubled_quote_in_a_model_expression_is_read_as_standard_sql():
+    from cosmos_semantic.expressions import parse_template
+
+    template = parse_template("{segment} = 'O''Brien'", "bigquery")
+    from sqlglot import exp
+
+    literal = template.tree.find(exp.Literal)
+    assert literal is not None and literal.this == "O'Brien"
+
+
+def test_reference_ctes_never_share_a_name_with_a_column():
+    """BigQuery reads `m` as the CTE's whole row when a CTE and a column are both `m` (A08)."""
+    case = next(c for c in load_cases(CASES.with_name("queries_advanced.yml")) if c.id == "A08")
+    sql = case.sql_for("bigquery")
+    assert "WITH m_cte AS" in sql and "FROM m_cte" in sql

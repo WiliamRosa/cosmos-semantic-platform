@@ -96,7 +96,12 @@ def test_replay_detects_changed_data(graph, connector, tmp_path):
     def run(sql: str) -> None:
         connector.run_script(remap_sql(sql, connector.dialect, connector.config.schema_map))
 
-    run("UPDATE public.orders SET amount = amount + 1 WHERE order_id = 1")
+    try:
+        run("UPDATE public.orders SET amount = amount + 1 WHERE order_id = 1")
+    except Exception as exc:  # BigQuery's free sandbox refuses DML
+        if "billingNotEnabled" in str(exc) or "free tier" in str(exc):
+            pytest.skip("DML is not allowed in the BigQuery sandbox")
+        raise
     try:
         report = service.replay(query_id)
     finally:

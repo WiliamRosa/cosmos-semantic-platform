@@ -159,6 +159,11 @@ def _bigquery(node: exp.Expression) -> exp.Expression:
         node = node.copy()
         node.set("unit", exp.Var(this="ISOWEEK"))
         return node
+    if isinstance(node, exp.Sub) and _is_date(node.this) and _is_date(node.expression):
+        # DATE - DATE is an INTERVAL in BigQuery; elsewhere it is a number of days.
+        return exp.DateDiff(
+            this=node.this.copy(), expression=node.expression.copy(), unit=exp.Var(this="DAY")
+        )
     if isinstance(node, exp.DateAdd | exp.TsOrDsAdd) and node.text("unit"):
         if _is_date(node.this) and node.text("unit").upper() not in ("HOUR", "MINUTE", "SECOND"):
             return node
