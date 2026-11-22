@@ -1,0 +1,43 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 1200px; height: 627px; background: #0b1220; font-family: Inter, sans-serif; color: #f8fafc; overflow: hidden; position: relative; }
+  .glow { position: absolute; inset: 0; background:
+      radial-gradient(600px 420px at 88% 18%, rgba(102,157,246,.20), transparent 70%),
+      radial-gradient(520px 380px at 8% 92%, rgba(56,189,248,.14), transparent 70%); }
+  .grid { position: absolute; inset: 0; opacity: .07;
+      background-image: linear-gradient(#94a3b8 1px, transparent 1px), linear-gradient(90deg, #94a3b8 1px, transparent 1px);
+      background-size: 48px 48px; }
+  .wrap { position: relative; padding: 56px 72px; height: 100%; display: flex; flex-direction: column; }
+  .logos { display: flex; align-items: center; gap: 34px; }
+  .logos .cosmos { height: 78px; }
+  .plus { font-size: 44px; font-weight: 500; color: #64748b; line-height: 1; }
+  .bq { display: flex; align-items: center; gap: 16px; }
+  .bq .tile { width: 72px; height: 72px; border-radius: 18px; background: #ffffff; display: grid; place-items: center; box-shadow: 0 6px 24px rgba(102,157,246,.35); }
+  .bq .tile img { width: 44px; height: 44px; }
+  .bq span { font-size: 34px; font-weight: 600; letter-spacing: -.5px; }
+  h1 { margin-top: 64px; font-size: 62px; line-height: 1.08; font-weight: 800; letter-spacing: -1.6px; max-width: 1000px; }
+  h1 em { font-style: normal; color: #669DF6; }
+  .sub { margin-top: 22px; font-size: 25px; color: #cbd5e1; font-weight: 400; max-width: 960px; line-height: 1.4; }
+  .sub b { color: #34d399; font-weight: 600; }
+  .foot { margin-top: auto; display: flex; justify-content: space-between; align-items: center; font-size: 20px; color: #94a3b8; }
+  .pill { font-family: ui-monospace, Consolas, monospace; background: rgba(148,163,184,.12); border: 1px solid rgba(148,163,184,.25); color: #e2e8f0; padding: 9px 16px; border-radius: 10px; font-size: 20px; }
+</style></head>
+<body>
+  <div class="glow"></div><div class="grid"></div>
+  <div class="wrap">
+    <div class="logos">
+      <img class="cosmos" src="assets/cosmos-dark.svg" alt="Cosmos Semantic">
+      <div class="plus">+</div>
+      <div class="bq"><div class="tile"><img src="assets/bigquery-mark.svg" alt=""></div><span>BigQuery</span></div>
+    </div>
+    <h1><em>BigQuery</em> is now a fully supported platform in Cosmos Semantic</h1>
+    <p class="sub">Define a metric once. AI agents get the same governed number on BigQuery, Snowflake and Databricks, <b>with the evidence to prove it</b>.</p>
+    <div class="foot">
+      <span class="pill">github.com/WiliamRosa/cosmos-semantic-platform</span>
+      <span>Open source · Apache 2.0</span>
+    </div>
+  </div>
+</body></html>

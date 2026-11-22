@@ -48,6 +48,7 @@ uv run pytest -q
 
 - **Databricks:** set `DATABRICKS_HTTP_PATH` and `DATABRICKS_CONFIG_PROFILE` (or `DATABRICKS_TOKEN` with `DATABRICKS_SERVER_HOSTNAME`). Run it weekly, and whenever SQL generation, dialects, connectors or the bootstrap change. On Git Bash for Windows, also set `MSYS_NO_PATHCONV=1`.
 - **Snowflake:** not run by agents (ADR 0013); the test account is a trial.
+- **BigQuery:** not run by agents; the cloud environment has no Google Cloud credentials. A change to the BigQuery dialect, connector or loader needs the maintainer's live run on the sandbox project before merge (ADR 0016, [deploy/bigquery-setup.md](deploy/bigquery-setup.md)). The emulator (`--profile bigquery`) is only a smoke check.
 - **Console:** in `console/`, run `npm ci && npm run typecheck && npm run build`. CI does the same.
 - **DuckDB file lock:** `cosmos check` cannot run against a DuckDB file while `cosmos serve` holds it.
 

@@ -10,7 +10,7 @@ You guard the project's core promise: **the same question returns the same numbe
 ## What you check
 
 1. **Scope:** list what the change touches (`spec.py`, `compiler.py`, `planner.py`, `dialects.py`, `expressions.py`, `connectors.py`, `evidence.py`, `reconcile.py`, `ontology.py`, `examples/`, `reference/`) and which databases it can affect.
-2. **Equivalence:** run the suites below on DuckDB and on every containerized database that applies (Postgres, SQL Server, MySQL, MariaDB, Oracle). Add Databricks when SQL generation, dialects, connectors or the bootstrap changed. Never Snowflake (ADR 0013).
+2. **Equivalence:** run the suites below on DuckDB and on every containerized database that applies (Postgres, SQL Server, MySQL, MariaDB, Oracle). Add Databricks when SQL generation, dialects, connectors or the bootstrap changed. Never Snowflake (ADR 0013) or BigQuery: when a change touches the BigQuery dialect, connector or loader, say in the review that it needs the maintainer's live run (ADR 0016).
    - `tests/test_reference.py`: the reference queries;
    - `tests/test_reconcile.py`: the divergence zoo;
    - `tests/test_cross_db.py`: the randomized test.
