@@ -21,3 +21,11 @@ build/
 /console/out-demo/
 .wrangler/
 .dev.vars
+
+# Azure Marketplace Managed Application package (ADR 0010): mainTemplate.json
+# is compiled from main.bicep (`az bicep build`) and the .zip is assembled for
+# Partner Center at publish time, neither is a source file.
+/deploy/azure/mainTemplate.json
+/deploy/azure/mainTemplate.generated.json
+/deploy/azure/mainTemplate.demo.json
+/deploy/azure/*.zip

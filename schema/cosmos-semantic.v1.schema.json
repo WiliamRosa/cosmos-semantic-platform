@@ -677,7 +677,7 @@
           "type": "string"
         },
         "offset": {
-          "description": "How far back, such as `1 month` or `7 days`: the value for a period is the input's value for the period that starts that much earlier, at the query's time grain. Only days and months, for now.",
+          "description": "How far back, such as `1 month` or `7 days`: the value for a period is the input's value for the period that starts that much earlier, at the query's time grain. In days, weeks (7 days), months or years (12 months).",
           "title": "Offset",
           "type": "string"
         }

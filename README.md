@@ -1,4 +1,9 @@
-# Cosmos Semantic
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/WiliamRosa/cosmos-semantic-platform/main/marketing/brand/cosmos-semantic-horizontal-dark.svg">
+    <img src="https://raw.githubusercontent.com/WiliamRosa/cosmos-semantic-platform/main/marketing/brand/cosmos-semantic-horizontal-light.svg" alt="Cosmos Semantic" height="64">
+  </picture>
+</h1>
 
 [![PyPI](https://img.shields.io/pypi/v/cosmos-semantic)](https://pypi.org/project/cosmos-semantic/)
 [![Python](https://img.shields.io/pypi/pyversions/cosmos-semantic)](https://pypi.org/project/cosmos-semantic/)
@@ -10,7 +15,7 @@
 
 <!-- mcp-name: io.github.WiliamRosa/cosmos-semantic -->
 
-**[Live demo of the console](https://wiliamrosa.github.io/cosmos-semantic-platform/)** · [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) · [Docs](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs) · [Article](https://dev.to/wiliamrosa/cosmos-semantic-an-open-source-semantic-layer-that-makes-ai-agents-get-the-number-right-and-prove-1c06) ([em português](https://wiliamrosa.github.io/articles/cosmos-semantic-camada-semantica-numeros-verificaveis/))
+**[Live demo of the console](https://wiliamrosa.github.io/cosmos-semantic-platform/)** · [Quickstart](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/quickstart.md) · [Website](https://cosmosdata.ai) · [Docs](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs) · [Article](https://dev.to/wiliamrosa/cosmos-semantic-an-open-source-semantic-layer-that-makes-ai-agents-get-the-number-right-and-prove-1c06) ([em português](https://wiliamrosa.github.io/articles/cosmos-semantic-camada-semantica-numeros-verificaveis/))
 
 [![The read-only console: metric health, a business process as a graph colored by health, and a metric that diverges from a legacy report](https://raw.githubusercontent.com/WiliamRosa/cosmos-semantic-platform/main/docs/assets/console-tour.gif)](https://wiliamrosa.github.io/cosmos-semantic-platform/)
 
