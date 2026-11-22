@@ -90,6 +90,8 @@ def test_replay_of_an_unchanged_query_is_identical(graph, connector, tmp_path):
 
 
 def test_replay_detects_changed_data(graph, connector, tmp_path):
+    if connector.dialect == "trino":
+        pytest.skip("Trino's memory connector does not support UPDATE")
     service = make_service(graph, connector, tmp_path)
     request = QueryRequest(metrics=["revenue"], dimensions=["orders.status"])
     query_id = service.query(request, SUDESTE)["evidence"]["query_id"]
