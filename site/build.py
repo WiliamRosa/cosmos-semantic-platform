@@ -16,6 +16,7 @@ SRC = ROOT / "site" / "src"
 DIST = ROOT / "site" / "dist"
 POSTS = ROOT / "marketing" / "linkedin" / "posts"
 BRAND = ROOT / "marketing" / "brand"
+MEDIA_DIR = ROOT / "site" / "media"
 
 # Published path under dist/ -> logo file; the logo's single source is marketing/brand.
 LOGOS = {
@@ -27,11 +28,13 @@ LOGOS = {
 # Published path under dist/assets -> source in the repository.
 MEDIA = {
     "social-preview.png": ROOT / "docs" / "assets" / "social-preview.png",
-    "console-overview.png": POSTS / "2026-11-20-carousel" / "assets" / "overview-clean.png",
-    "console-answer.png": POSTS / "2026-11-20-carousel" / "assets" / "answer.png",
-    "console-process.png": POSTS / "2026-11-20-carousel" / "assets" / "process.png",
+    # Current console, captured from the live demo by site/media/capture.py.
+    "console-overview.png": MEDIA_DIR / "console-overview.png",
+    "console-answer.png": MEDIA_DIR / "console-answer.png",
+    "console-process.png": MEDIA_DIR / "console-process.png",
+    "console-demo.mp4": MEDIA_DIR / "console-demo.mp4",
+    # As published on LinkedIn.
     "cosmos-semantic-carousel.pdf": POSTS / "2026-11-20-carousel" / "cosmos-semantic-carousel.pdf",
-    "console-demo.mp4": POSTS / "2026-11-20-demo" / "cosmos-semantic-demo.mp4",
     "walkthrough.mp4": POSTS / "2026-11-20-walkthrough" / "cosmos-semantic-walkthrough.mp4",
 }
 

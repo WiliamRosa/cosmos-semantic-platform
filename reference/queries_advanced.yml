@@ -829,6 +829,14 @@ cases:
         SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
         FROM daily cur
         LEFT JOIN daily prev ON prev.k = cur.k - 7
+      trino: |
+        WITH daily AS (
+          SELECT DATE_TRUNC('day', ordered_at) AS dd, DATE_DIFF('day', DATE '2000-01-01', CAST(ordered_at AS DATE)) AS k, COUNT(*) AS n
+          FROM public.orders GROUP BY DATE_TRUNC('day', ordered_at), DATE_DIFF('day', DATE '2000-01-01', CAST(ordered_at AS DATE))
+        )
+        SELECT cur.dd AS orders__ordered_at__day, prev.n AS order_count_7_days_earlier
+        FROM daily cur
+        LEFT JOIN daily prev ON prev.k = cur.k - 7
 
   - id: A38
     category: tempo

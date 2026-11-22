@@ -79,6 +79,12 @@ def test_reference_bigquery(case, graph, bigquery_connector):
     _check(case, graph, bigquery_connector)
 
 
+@pytest.mark.trino
+@pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c.id)
+def test_reference_trino(case, graph, trino_connector):
+    _check(case, graph, trino_connector)
+
+
 def test_year_to_date_distinct_count_is_refused(duckdb_connector):
     """A year-to-date over a `count_distinct` measure cannot be in a valid model (validation
     refuses it, so it is not in the example and has no case in the YAML files); a model loaded

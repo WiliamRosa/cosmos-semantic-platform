@@ -23,6 +23,7 @@ SOURCES = [
     "mariadb_connector",
     "oracle_connector",
     "bigquery_connector",
+    "trino_connector",
 ]
 SUDESTE = Principal(user={"region": "Northeast"}, channel="api", subject="ana@example.com")
 REQUEST = QueryRequest(
@@ -89,6 +90,8 @@ def test_replay_of_an_unchanged_query_is_identical(graph, connector, tmp_path):
 
 
 def test_replay_detects_changed_data(graph, connector, tmp_path):
+    if connector.dialect == "trino":
+        pytest.skip("Trino's memory connector does not support UPDATE")
     service = make_service(graph, connector, tmp_path)
     request = QueryRequest(metrics=["revenue"], dimensions=["orders.status"])
     query_id = service.query(request, SUDESTE)["evidence"]["query_id"]
@@ -96,7 +99,12 @@ def test_replay_detects_changed_data(graph, connector, tmp_path):
     def run(sql: str) -> None:
         connector.run_script(remap_sql(sql, connector.dialect, connector.config.schema_map))
 
-    run("UPDATE public.orders SET amount = amount + 1 WHERE order_id = 1")
+    try:
+        run("UPDATE public.orders SET amount = amount + 1 WHERE order_id = 1")
+    except Exception as exc:  # BigQuery's free sandbox refuses DML
+        if "billingNotEnabled" in str(exc) or "free tier" in str(exc):
+            pytest.skip("DML is not allowed in the BigQuery sandbox")
+        raise
     try:
         report = service.replay(query_id)
     finally:

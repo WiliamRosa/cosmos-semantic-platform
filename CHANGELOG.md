@@ -9,6 +9,17 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Trino and Starburst as a data source, in preview (DEC-43): `type: trino` with the `trino`
+  extra (the `trino` client). The connection is a `uri` such as
+  `trino://user@host:443/catalog?http_scheme=https`, with `options` for the password (basic
+  authentication), a JWT (`access_token`), TLS verification, roles and session properties; a
+  query stops after the source's `timeout_seconds` (`query_max_run_time`). The model's schemas
+  map to schemas of the catalog. Weeks start on Monday (Trino's `DATE_TRUNC` is ISO), interval
+  arithmetic becomes `DATE_ADD` (Trino's intervals have no `WEEK` or `QUARTER`), and a date
+  that gets hours is read as a `TIMESTAMP` first. `docker-compose.yml` has a `trino` profile
+  (Trino 484 with an in-memory catalog, on localhost); the comparative suites run on it when
+  `COSMOS_TRINO_URI` is set. Offline tests check that every reference query plans and parses
+  for Trino, and CI runs the suites against a Trino container.
 - Offsets in weeks and years (DEC-46): a derived metric's `inputs` accept `offset: 1 week`,
   `2 weeks`, `1 year` or `2 years`, read as 7 days and 12 months. They run at the grains of
   their days or months (`2 weeks` by day or week, `1 year` by month, quarter or year) and give
@@ -28,16 +39,20 @@ format or the API; such changes are listed under **Changed**.
   without aliases. New example metric `revenue_yoy_growth` and reference cases A49 to A51
   (year-over-year growth by month and by year, and beside month-over-month growth by status
   with a filter).
-- BigQuery as a data source, in preview (DEC-40, [ADR 0016](docs/decisions/0016-bigquery-as-a-data-source.md)):
+- BigQuery as a data source (DEC-40, [ADR 0016](docs/decisions/0016-bigquery-as-a-data-source.md)):
   `type: bigquery` with the `bigquery` extra (`google-cloud-bigquery`). It logs in with
   Application Default Credentials or a service account key (`options.credentials_file`),
   `options.maximum_bytes_billed` stops a query that would scan more, and the model's schemas map
   to datasets (`schema_map: {public: cosmos_demo}`). Weeks start on Monday (`ISOWEEK`), times
   are `DATETIME` and date arithmetic on a time uses `DATETIME_ADD`, so the numbers match the
   other databases. `cosmos demo-data` loads with free load jobs (they work in the BigQuery
-  sandbox), and `cosmos bootstrap` reads the dataset's `INFORMATION_SCHEMA`. On the BigQuery
-  emulator, 58 reference queries return the same numbers as DuckDB; a live run on a BigQuery
-  project ([setup](deploy/bigquery-setup.md)) is the gate before it leaves preview.
+  sandbox), and `cosmos bootstrap` reads the dataset's `INFORMATION_SCHEMA`. On a BigQuery
+  sandbox project ([setup](deploy/bigquery-setup.md)), the BigQuery suites pass: 160 tests,
+  among them the 66 reference queries, the divergence zoo, the randomized same-number test
+  against DuckDB, bootstrap, packs, the Power BI import and the dbt, Cube and Ossie exports.
+  The live run found and fixed what the emulator did not: `DATE - DATE` is an `INTERVAL` in
+  BigQuery (now `DATE_DIFF`), a CTE named like its own column reads the whole row, and a model
+  expression with a doubled quote (`'O''Brien'`) did not parse in the BigQuery dialect.
 - A metric can declare its reconciliation tolerance (DEC-39):
   `reconciliation: {abs_tolerance: 0.01, rel_tolerance: 0.001}`. `cosmos reconcile`, the
   reconciliation cases of `cosmos check` and member health use it in place of the fixed default

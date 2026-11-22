@@ -217,6 +217,8 @@ class Bootstrapper:
                 f"AND k.table_name = c.table_name WHERE c.constraint_type = 'PRIMARY KEY' "
                 f"AND c.table_schema = {schema}"
             )
+        if dialect == "trino":
+            keys_sql = None  # Trino's information_schema has no key constraints
         rows = self._query(columns_sql)
         tables: dict[str, Table] = {}
         for row in rows:
@@ -230,7 +232,7 @@ class Bootstrapper:
         if not tables:
             raise QueryError(f"no tables found in schema `{self.physical_schema}`")
         try:
-            keys = self._query(keys_sql)
+            keys = self._query(keys_sql) if keys_sql else []
         except CosmosError:
             keys = []
         per_table: dict[str, list[str]] = {}
