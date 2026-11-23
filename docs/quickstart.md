@@ -126,7 +126,7 @@ OIDC provider instead of development keys.
 
 - Point `connections.yml` at Postgres, SQL Server, MySQL, MariaDB, Oracle, Databricks,
   Snowflake, BigQuery or Trino/Starburst (extras `postgres`, `sqlserver`, `mysql`, `oracle`,
-  `databricks`, `snowflake`, `bigquery`, `trino`; BigQuery and Trino are in preview) and
+  `databricks`, `snowflake`, `bigquery`, `trino`; Trino is in preview) and
   run the same model there.
 - Draft a model of your own database with `cosmos bootstrap`, or import one with
   `cosmos import dbt|cube|ossie|powerbi`.
