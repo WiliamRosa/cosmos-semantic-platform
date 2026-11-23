@@ -22,7 +22,9 @@ are written (``=``, ``IN``, and ``<``, ``<=``, ``>``, ``>=`` on numbers, joined 
 other policy (it would grant more access than Cube did) unless the caller accepts the loss.
 Fourth slice (DEC-30): a ``window: N days`` over a ``sum``, ``count``, ``min`` or ``max``
 measure is a measure with ``rolling_window: {trailing: N day, offset: end}``, which
-``import_cube`` reads back as the same window.
+``import_cube`` reads back as the same window; a ``window: N weeks`` (DEC-27) is written as
+its days, ``trailing: 7N day``, because Cube does not render a ``week`` interval the same way
+on every database (its Oracle query drops it), so a round trip gives ``7N days``.
 The export fails closed on row filters it cannot express, and on metrics it cannot carry
 (running totals of other aggregations or without a period, metrics over a cumulative one,
 offsets, filters beyond the measure's own cube), unless the caller accepts the loss.
@@ -52,6 +54,7 @@ from cosmos_semantic.spec import (
     Project,
     RatioMetric,
     SimpleMetric,
+    window_parts,
 )
 
 _CUBE_REF = re.compile(r"\$?\{CUBE\}\.")
@@ -299,12 +302,14 @@ def _cube_filter(sql: str, dims: dict[str, str]) -> str:
     return re.sub(r"__dim_([a-z0-9_]+)", lambda m: "{" + m.group(1) + "}", out)
 
 
-def _trailing_days(window: dict[str, Any]) -> int | None:
-    """N for a Cube rolling window with ``trailing: N day`` (or ``N days``), None otherwise."""
+def _trailing_window(window: dict[str, Any]) -> tuple[int, str] | None:
+    """``(N, unit)`` for a Cube rolling window with ``trailing: N day`` or ``N week`` (plural
+    too), None otherwise. A ``trailing: N week`` is read as the Cosmos ``window: N weeks``
+    (7N days, DEC-27), its meaning where Cube renders the interval; the export never writes
+    weeks, since Cube's Oracle query drops a ``week`` interval."""
     if window.get("type") not in (None, "fixed"):
         return None
-    match = re.fullmatch(r"\s*(\d+)\s+days?\s*", str(window.get("trailing", "")), re.IGNORECASE)
-    return int(match.group(1)) if match and int(match.group(1)) > 0 else None
+    return window_parts(str(window.get("trailing", "")))
 
 
 def _measure(cube, model, measure, dims, metrics, warnings) -> bool:
@@ -324,11 +329,11 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> bool:
         warnings.append(f"{where}: type `{kind}` is not supported; skipped")
         return False
     window = measure.get("rolling_window")
-    days = _trailing_days(window) if window else None
-    if days and (window.get("offset", "end") != "end" or "leading" in window):
+    trailing = _trailing_window(window) if window else None
+    if trailing and (window.get("offset", "end") != "end" or "leading" in window):
         warnings.append(
-            f"{where}: a trailing window in days with `offset: start` or `leading` does not "
-            "end on the row's day, as Cosmos windows do; measure skipped"
+            f"{where}: a trailing window in days or weeks with `offset: start` or `leading` "
+            "does not end on the row's day, as Cosmos windows do; measure skipped"
         )
         return False
     if window and _AGG[kind] not in WINDOW_AGGS:
@@ -363,15 +368,17 @@ def _measure(cube, model, measure, dims, metrics, warnings) -> bool:
         metric: dict[str, Any] = {"name": name, "type": "cumulative", "measure": base_name}
         if window.get("type") == "to_date" and window.get("granularity"):
             metric["grain_to_date"] = window["granularity"]
-        elif days:
+        elif trailing:
             # Cube's trailing window with `offset: end` ends at the end of each bucket: at day
-            # grain, the N days ending on the row's day, as the planner's `window: N days`.
-            metric["window"] = "1 day" if days == 1 else f"{days} days"
+            # grain, the N days (or 7N for weeks) ending on the row's day, as the planner's
+            # `window: N days` (or `N weeks`).
+            count, unit = trailing
+            metric["window"] = f"{count} {unit}" if count == 1 else f"{count} {unit}s"
         else:
             metric["window"] = str(window.get("trailing", "unbounded"))
             warnings.append(
-                f"{where}: only rolling windows in days (`trailing: 7 day`) are imported; "
-                "queries using the metric will be refused"
+                f"{where}: only rolling windows in days or weeks (`trailing: 7 day`) are "
+                "imported; queries using the metric will be refused"
             )
         if filters:
             warnings.append(f"{where}: filters on a cumulative measure were dropped")
@@ -1110,13 +1117,15 @@ class _CubeWriter:
         ``sum``, ``count``, ``min`` or ``max`` measure (DEC-30): a measure with
         ``rolling_window: {trailing: N day, offset: end}``, which aggregates the rows after the
         end of the bucket minus N days, up to the end of the bucket; at day grain, the days
-        D - (N - 1) to D, as the planner's window."""
+        D - (N - 1) to D, as the planner's window. A ``window: N weeks`` (DEC-27) is written as
+        its days, ``trailing: 7N day``: Cube's Oracle query drops a ``week`` interval and its
+        Presto and Trino queries render one that may not parse, so weeks are never written."""
         if metric.window:
             days = metric.window_days()
             if days is None:
                 raise _NotExported(
                     f"it is cumulative over a rolling window (`{metric.window}`) that is not in "
-                    "days, and the Cube export carries only windows in days"
+                    "days or weeks, and the Cube export carries only windows in days or weeks"
                 )
             node, measure = self.graph.measure(metric.measure)
             if measure.agg not in WINDOW_AGGS:

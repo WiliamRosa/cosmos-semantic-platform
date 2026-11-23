@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 from cosmos_semantic.cli import _glossary_resolver, app
 from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.errors import MetricLossError, PolicyError, PolicyLossError, QueryError
-from cosmos_semantic.expressions import REF_RE
+from cosmos_semantic.expressions import filter_refs
 from cosmos_semantic.interchange import dump_project, import_model
 from cosmos_semantic.interchange.cube import export_cube
 from cosmos_semantic.interchange.dbt import export_dbt
@@ -254,7 +254,7 @@ def _without_business(project: Project) -> dict:
 
 
 def _uses_rule(case, rules: set[str]) -> bool:
-    refs = REF_RE.findall(" ".join(case.request.filters)) + case.request.dimensions
+    refs = [r for f in case.request.filters for r in filter_refs(f)] + case.request.dimensions
     names = [r.split("__")[0] for r in refs]
     return any(r.startswith("rule.") or r.split(".")[-1] in rules for r in names)
 
@@ -877,7 +877,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 71
+    assert len(REFERENCE) == 72
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1261,7 +1261,7 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     # A32 (month-to-date by quarter) and A39 (year-to-date by week) are refused by the
     # re-imported model too; A33 is the 30-day window of customers by segment.
     assert {"R17", "R18", "A08", "A09", "A32", "A33", "A39", "A40", "A41"} <= {c.id for c in cases}
-    assert len(cases) == 57
+    assert len(cases) == 58
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1800,6 +1800,10 @@ def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
         ({"trailing": "7 days"}, "min", {"window": "7 days"}, None),
         ({"trailing": "1 day", "offset": "end"}, "count", {"window": "1 day"}, None),
         ({"type": "fixed", "trailing": "30 day"}, "max", {"window": "30 days"}, None),
+        # A week is 7 days in Cube's interval and in a Cosmos window (DEC-27).
+        ({"trailing": "2 week", "offset": "end"}, "sum", {"window": "2 weeks"}, None),
+        ({"trailing": "1 weeks"}, "count", {"window": "1 week"}, None),
+        ({"trailing": "2 week", "offset": "start"}, "sum", None, "does not end on the row's day"),
         ({"trailing": "7 day", "offset": "start"}, "sum", None, "does not end on the row's day"),
         ({"trailing": "7 day", "leading": "1 day"}, "sum", None, "does not end on the row's day"),
         ({"trailing": "7 day"}, "avg", None, "of type `avg` cannot be combined"),
@@ -1809,7 +1813,12 @@ def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
             None,
             "of type `count_distinct` cannot be combined",
         ),
-        ({"trailing": "1 month"}, "sum", {"window": "1 month"}, "only rolling windows in days"),
+        (
+            {"trailing": "1 month"},
+            "sum",
+            {"window": "1 month"},
+            "only rolling windows in days or weeks",
+        ),
     ],
 )
 def test_cube_import_trailing_windows(tmp_path, window, kind, metric, warning):
@@ -2225,8 +2234,9 @@ def test_dbt_export_round_trip(graph, tmp_path):
     )
     assert back.warnings == [
         *(
-            f"metrics.{name}: rolling window `{days} days`: only windows in days, queried by "
-            "day, are supported, and only days with data appear (MetricFlow uses a time spine)"
+            f"metrics.{name}: rolling window `{days} days`: only windows in days or weeks, "
+            "queried by day, are supported, and only days with data appear (MetricFlow "
+            "uses a time spine)"
             for name, days in zip(ROLLING, (30, 7, 7), strict=True)
         ),
         "metrics.revenue_prev_month: `revenue` is read `1 month` earlier (`offset_window: 1 "
@@ -2427,7 +2437,7 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     governed = compile_project(_with_policies(back.project, graph.project))
     cases = _cube_cases(graph.project, policies=True, lost=DBT_LOST)
     assert {"R17", "R18", "A32", "A33", "A38", "A39", "A40", "A41", "A42"} <= {c.id for c in cases}
-    assert len(cases) == 64
+    assert len(cases) == 65
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -2545,6 +2555,80 @@ def test_dbt_export_rolling_windows_same_numbers(graph, tmp_path, source, reques
                 compared += 1
     assert compared == 3 * len(names)
     assert refused == 6 * len(names)
+
+
+# Rolling windows in weeks (DEC-27): the dbt export keeps the unit, which MetricFlow reads as
+# 7N days, and its import reads it back as the same window. The Cube export writes the days
+# (`trailing: 7N day`): Cube's Oracle query drops a `week` interval, so a Cube round trip gives
+# `7N days`, with the same numbers.
+WEEK_WINDOWS = {"revenue_rolling_2_weeks": "2 weeks", "payment_count_rolling_1_week": "1 week"}
+
+
+def _week_window_metrics(project: Project) -> Project:
+    data = _cube_trailing_metrics(project).model_dump(mode="json")
+    data["metrics"] = [m for m in data["metrics"] if m["name"] not in (*TO_DATE, *ROLLING)]
+    for name, window in WEEK_WINDOWS.items():
+        measure = "revenue" if name.startswith("revenue") else "payment_count"
+        data["metrics"].append(
+            {"name": name, "type": "cumulative", "measure": measure, "window": window}
+        )
+    return Project.model_validate(data)
+
+
+@pytest.mark.parametrize("source", SOURCES)
+@pytest.mark.parametrize("target", ["cube", "dbt"])
+def test_export_windows_in_weeks_same_numbers(graph, tmp_path, source, target, request):
+    """A window in weeks is exported to dbt in weeks (`window: 2 weeks`) and to Cube in days
+    (`trailing: 14 day`), comes back as `2 weeks` and `14 days`, and returns the same numbers,
+    by day and with a filter the window reads back before; both models refuse it by week."""
+    connector = request.getfixturevalue(source)
+    project = _week_window_metrics(graph.project)
+    full = compile_project(project)
+    if target == "cube":
+        exported, back = _cube_round_trip(project, tmp_path)
+        assert back.warnings == []
+        written = {
+            m["name"]: m["rolling_window"]
+            for c in yaml.safe_load(exported.text)["cubes"]
+            for m in c.get("measures", [])
+            if m["name"] in WEEK_WINDOWS
+        }
+        assert written == {
+            "revenue_rolling_2_weeks": {"trailing": "14 day", "offset": "end"},
+            "payment_count_rolling_1_week": {"trailing": "7 day", "offset": "end"},
+        }
+        expected = {"revenue_rolling_2_weeks": "14 days", "payment_count_rolling_1_week": "7 days"}
+    else:
+        exported, back = _dbt_round_trip(project, tmp_path, **LOSS_FLAGS)
+        written = {
+            m["name"]: m["type_params"]["cumulative_type_params"]
+            for m in yaml.safe_load(exported.text)["metrics"]
+            if m["name"] in WEEK_WINDOWS
+        }
+        assert written == {name: {"window": w} for name, w in WEEK_WINDOWS.items()}
+        expected = WEEK_WINDOWS
+    back_metrics = {m.name: m for m in back.project.metrics}
+    for name, window in expected.items():
+        assert back_metrics[name].window == window
+    other = compile_project(back.project)
+    since = f"DATE '{(dt.date.today() - dt.timedelta(days=200)).isoformat()}'"
+    # The 1-week window has a 7-day twin in the model (`rolling_7_payment_count`).
+    twins = {"payment_count_rolling_1_week": "rolling_7_payment_count"}
+    for name in WEEK_WINDOWS:
+        model, time = ("orders", "ordered_at") if "revenue" in name else ("payments", "paid_at")
+        for filters in ([], [f"{{{model}.{time}}} >= {since}"]):
+            dims = [f"{model}.{time}__day"]
+            query = QueryRequest(metrics=[name], dimensions=dims, filters=filters)
+            native = rows(full, connector, query)
+            assert native
+            same(native, rows(other, connector, query))
+            if name in twins:
+                as_days = QueryRequest(metrics=[twins[name]], dimensions=dims, filters=filters)
+                same(native, rows(full, connector, as_days))
+        query = QueryRequest(metrics=[name], dimensions=[f"{model}.{time}__week"])
+        for side in (full, other):
+            with pytest.raises(QueryError, match="needs the time dimension at day grain"):
+                rows(side, connector, query)
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -3107,8 +3191,8 @@ def test_dbt_export_states_each_reason(graph):
         "is not exported to dbt"
     )
     assert reasons["metrics.revenue_month"] == (
-        "its window `1 month` is not in days, the only unit the engine computes; it is not "
-        "exported to dbt"
+        "its window `1 month` is not in days or weeks, the only units the engine computes; it "
+        "is not exported to dbt"
     )
     assert reasons["metrics.products_7d"] == (
         "its measure's model `products` has no time dimension for MetricFlow to window over; it "

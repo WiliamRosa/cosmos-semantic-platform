@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Cosmos Semantic · what's new</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0b1220;--bg2:#0f1a2e;--ink:#f8fafc;--muted:#94a3b8;--sky:#38bdf8;--line:rgba(148,163,184,.18)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#222;font-family:Inter,system-ui,sans-serif;color:var(--ink)}
+#card{width:1080px;height:1350px;position:relative;overflow:hidden;padding:96px 88px;display:flex;flex-direction:column;
+ background:radial-gradient(900px 600px at 110% -10%,rgba(56,189,248,.18),transparent 60%),linear-gradient(180deg,var(--bg),var(--bg2))}
+.kicker{font-size:22px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--sky)}
+h1{margin-top:20px;font-size:76px;line-height:1.05;font-weight:800;letter-spacing:-.03em}
+h1 b{color:var(--sky)}
+.items{margin-top:56px;display:flex;flex-direction:column;gap:28px}
+.item{border:1px solid rgba(56,189,248,.3);background:rgba(56,189,248,.06);border-radius:20px;padding:30px 36px}
+.item h3{font-size:36px;font-weight:800;letter-spacing:-.01em}
+.item p{margin-top:10px;font-size:26px;line-height:1.4;color:#cbd5e1}
+code{font:500 24px "JetBrains Mono",monospace;color:var(--sky)}
+.footer{position:absolute;left:88px;right:88px;bottom:56px;display:flex;justify-content:space-between;font-size:22px;color:var(--muted)}
+</style></head><body>
+<div id="card">
+<div class="kicker">What's new · Cosmos Semantic</div>
+<h1>Four things that <b>shipped</b> since the launch</h1>
+<div class="items">
+<div class="item"><h3>Two new data platforms</h3><p>Google BigQuery, fully supported, and Trino / Starburst, in preview.</p></div>
+<div class="item"><h3>Growth from one metric</h3><p>Read the same metric shifted and unshifted: <code>revenue_yoy_growth</code> needs no helper metric.</p></div>
+<div class="item"><h3>Offsets in weeks and years</h3><p><code>offset: 1 year</code>, <code>2 weeks</code>: same SQL, same hash as 12 months or 14 days.</p></div>
+<div class="item"><h3>Query explorer in the console</h3><p>Pick a metric, filters and rules; see the result, the SQL and the evidence.</p></div>
+</div>
+<div class="footer"><span>cosmosdata.ai</span><span>Apache 2.0 · pip install cosmos-semantic</span></div>
+</div></body></html>

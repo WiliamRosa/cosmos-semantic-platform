@@ -111,11 +111,11 @@ Any MCP client works the same way: command `cosmos`, arguments `mcp -m <semantic
 | `search_concepts` | Finds glossary concepts by term or synonym, in English or Portuguese ("compradores ativos" finds `active_customer`) |
 | `explain` | Definition, owner, logic and history of a metric, rule, dimension or concept, and the member's health: whether its rule tests pass and its last reconciliation matched |
 | `list_members` | The metrics, dimensions and rules it can ask for |
-| `query` | Runs a metrics request with the user's policies and returns the evidence envelope; `metric_filters` (such as `{revenue} > 1000`) keep only the rows whose metric values meet the conditions |
+| `query` | Runs a metrics request with the user's policies and returns the evidence envelope; `filters` take objects such as `{"dimension": "customers.region", "op": "=", "value": "Midwest"}` (the server writes the literal) or expression strings; `metric_filters` (such as `{revenue} > 1000`) keep only the rows whose metric values meet the conditions |
 | `show_sql` | The SQL the engine would run, without running it |
 | `replay` | Re-runs one of the user's audited queries by `query_id` and tells whether the model, the SQL or the data changed (needs `COSMOS_AUDIT_LOG`) |
 | `impact` | What a change to a member (`kind:name`, such as `rule:active_customer`) affects, by owner, source systems and processes; who queried it is shown only to admins (`COSMOS_CONSOLE_ADMINS`) |
-| `dimension_values` | The exact values of a categorical or boolean dimension (`customers.region`), with row counts, after the user's row filters; personal data is refused; at most 100 values (past 10,000 distinct values the list is marked `truncated`, and ties at that cut-off may differ between databases). For a time dimension (`orders.ordered_at`), the first and last day with data and the number of distinct days, in the model's time zone |
+| `dimension_values` | The exact values of a categorical or boolean dimension (`customers.region`), with row counts, after the user's row filters; personal data is refused; at most 100 values (past 10,000 distinct values the list is marked `truncated`, and ties at that cut-off may differ between databases). For a time dimension (`orders.ordered_at`), the first and last day with data and the number of distinct days, in the model's time zone. `filters`, as in `query`, narrow the rows counted |
 
 Ask it "how many active buyers do we have?": it finds the rule through the synonym, queries
 `customer_count` filtered by `{rule.active_customer}` for the Midwest, and cannot group by e-mail.

@@ -7,8 +7,8 @@ Only the YAML is read; the dbt project is never executed. ``ref('x')`` becomes t
 Export: the legacy spec, which MetricFlow still reads. One semantic model per model with
 entities, dimensions and measures (each measure also a metric, ``create_metric``), simple,
 ratio and derived metrics (offset inputs as ``offset_window``), cumulative metrics with a
-rolling window in days (``window`` in ``cumulative_type_params``) and running totals since the
-start of a period over ``sum`` and ``count`` measures (``grain_to_date``, with
+rolling window in days or weeks (``window`` in ``cumulative_type_params``) and running totals
+since the start of a period over ``sum`` and ``count`` measures (``grain_to_date``, with
 ``period_agg: last``); filters become ``{{ Dimension('e__d') }}``. Division in derived metrics
 and AVG are written with a ``1e0 *`` factor, as in the Cube export. ``import_dbt`` reads the
 export back with the same numbers in Cosmos. The export fails closed on row filters and
@@ -48,6 +48,7 @@ from cosmos_semantic.spec import (
     offset_grain_problem,
     parse_offset,
     window_agg_refusal,
+    window_parts,
 )
 
 _REF_RE = re.compile(r"""ref\(\s*['"]([^'"]+)['"]\s*\)""")
@@ -444,8 +445,9 @@ class _Builder:
         elif window:
             item["window"] = str(window)
             self.warnings.append(
-                f"metrics.{name}: rolling window `{window}`: only windows in days, queried by "
-                "day, are supported, and only days with data appear (MetricFlow uses a time spine)"
+                f"metrics.{name}: rolling window `{window}`: only windows in days or weeks, "
+                "queried by day, are supported, and only days with data appear (MetricFlow "
+                "uses a time spine)"
             )
         self.metrics.append(item)
 
@@ -797,19 +799,20 @@ class _DbtWriter:
         return item
 
     def _cumulative(self, metric: CumulativeMetric) -> dict[str, Any]:
-        """A rolling window in days: MetricFlow's ``window`` covers the days D - (N - 1) to D
-        of ``metric_time``, as the planner's does. Running totals since the start of a period
-        are ``_to_date``."""
+        """A rolling window in days or weeks: MetricFlow's ``window`` covers the days
+        D - (N - 1) to D of ``metric_time`` (7N days for N weeks), as the planner's does.
+        Running totals since the start of a period are ``_to_date``."""
         if metric.grain_to_date:
             return self._to_date(metric)
         if not metric.window:
             raise _NotExported(
                 "it is a running total without a window, and the dbt export does not carry it yet"
             )
-        days = metric.window_days()
-        if days is None:
+        parts = window_parts(metric.window)
+        if parts is None:
             raise _NotExported(
-                f"its window `{metric.window}` is not in days, the only unit the engine computes"
+                f"its window `{metric.window}` is not in days or weeks, the only units the "
+                "engine computes"
             )
         node, measure = self.graph.measure(metric.measure)
         problem = window_agg_refusal(measure.agg)
@@ -834,7 +837,10 @@ class _DbtWriter:
                 else ""
             )
         )
-        window = f"{days} day" if days == 1 else f"{days} days"
+        # A window in weeks stays in weeks (DEC-27): MetricFlow subtracts the interval, so
+        # `2 weeks` is the 14 days `14 days` would be.
+        count, unit = parts
+        window = f"{count} {unit}" if count == 1 else f"{count} {unit}s"
         params = {"measure": metric.measure, "cumulative_type_params": {"window": window}}
         return {"type": "cumulative", "type_params": params}
 

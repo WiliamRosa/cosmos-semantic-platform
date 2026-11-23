@@ -249,6 +249,7 @@ metrics:
   - {name: amount_2w, type: cumulative, measure: amount, window: 2 weeks}
   - {name: amount_1mo, type: cumulative, measure: amount, window: 1 month}
   - {name: amount_0d, type: cumulative, measure: amount, window: 0 days}
+  - {name: amount_0w, type: cumulative, measure: amount, window: 0 weeks}
   - {name: amount_7d_doubled, type: derived, expr: "{amount_7d} * 2"}
 """
 
@@ -256,9 +257,11 @@ metrics:
 @pytest.mark.parametrize(
     ("metric", "dimensions", "message"),
     [
-        ("amount_2w", ["sales.sold_at__day"], "only windows in days"),
-        ("amount_1mo", ["sales.sold_at__day"], "only windows in days"),
-        ("amount_0d", ["sales.sold_at__day"], "only windows in days"),
+        ("amount_1mo", ["sales.sold_at__day"], "only windows in days or weeks"),
+        ("amount_0d", ["sales.sold_at__day"], "only windows in days or weeks"),
+        ("amount_0w", ["sales.sold_at__day"], "only windows in days or weeks"),
+        ("amount_2w", ["sales.sold_at__week"], "needs the time dimension at day grain"),
+        ("amount_2w", ["sales.sold_at__month"], "needs the time dimension at day grain"),
         ("amount_7d", ["sales.sold_at__week"], "needs the time dimension at day grain"),
         ("amount_7d", ["sales.sold_at__month"], "needs the time dimension at day grain"),
         ("amount_7d", ["sales.sold_at"], "needs the time dimension at day grain"),
@@ -331,9 +334,14 @@ def test_rolling_windows_over_sum_count_min_and_max_pass_validation():
     graph = compile_project(project(ROLLING), strict=False)
     assert not [i for i in graph.issues if i.severity == "error"]
     flagged = {i.location for i in graph.issues}
-    assert not flagged & {"metrics.amount_7d", "metrics.lines_1d", "metrics.top_30d"}
+    assert not flagged & {
+        "metrics.amount_7d",
+        "metrics.lines_1d",
+        "metrics.top_30d",
+        "metrics.amount_2w",
+    }
     # Windows in other units stay a warning: the model is valid, those queries are refused.
-    assert {"metrics.amount_2w", "metrics.amount_1mo", "metrics.amount_0d"} <= flagged
+    assert {"metrics.amount_1mo", "metrics.amount_0d", "metrics.amount_0w"} <= flagged
     # Validation and the planner accept the same aggregations.
     from cosmos_semantic import planner, spec
 
@@ -366,6 +374,45 @@ def test_rolling_window_sql_for_every_dialect(dialect):
     sql = compiled.sql.upper().replace("`", "").replace('"', "")
     assert "OVER" not in sql  # a self-join, not a window frame (SQL Server has no RANGE)
     assert "MAX(PREV.TOP_AMOUNT)" in sql and "SUM(PREV.LINES)" in sql
+
+
+def test_parse_window():
+    from cosmos_semantic.spec import parse_window, window_parts
+
+    assert parse_window("1 day") == 1 and parse_window("7 days") == 7
+    assert parse_window("1 week") == parse_window("1 weeks") == 7
+    assert parse_window(" 2 Weeks ") == 14 and window_parts("2 Weeks") == (2, "week")
+    for text in ("0 weeks", "0 days", "1 month", "1.5 weeks", "-1 week", "week", "", None):
+        assert parse_window(text) is None, text
+
+
+@pytest.mark.parametrize(
+    "dialect",
+    ["postgres", "duckdb", "databricks", "snowflake", "tsql", "mysql", "oracle", "bigquery"],
+)
+@pytest.mark.parametrize(
+    "filters",
+    [[], ["{sales.sold_at} >= DATE '2026-01-01'"], ["NOT ({sales.sold_at} < DATE '2026-01-01')"]],
+    ids=["unfiltered", "lookback", "filtered-first"],
+)
+def test_window_in_weeks_has_the_sql_of_its_days(dialect, filters):
+    """`window: 2 weeks` compiles to exactly the SQL, and so the `sql_hash`, of `14 days`
+    (DEC-27), with and without a date filter the window reads back before (DEC-34)."""
+    from cosmos_semantic.evidence import sql_hash
+
+    weeks = compile_project(project(ROLLING))
+    days = compile_project(project(ROLLING.replace("window: 2 weeks", "window: 14 days")))
+    assert weeks.metrics["amount_2w"].window == "2 weeks"
+    assert days.metrics["amount_2w"].window == "14 days"
+    request = QueryRequest(
+        metrics=["amount_2w", "amount"],
+        dimensions=["sales.kind", "sales.sold_at__day"],
+        filters=filters,
+    )
+    written = Planner(weeks, dialect).plan(request).sql
+    same = Planner(days, dialect).plan(request).sql
+    assert written == same
+    assert sql_hash(written) == sql_hash(same)
 
 
 # -- Cumulative (to-date) metrics over each aggregation, and their grains (DEC-21) ----------

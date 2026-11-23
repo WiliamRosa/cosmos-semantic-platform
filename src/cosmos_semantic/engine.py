@@ -11,7 +11,7 @@ from cosmos_semantic.compiler import SemanticGraph, compile_project
 from cosmos_semantic.connectors import ConnectionsFile, Connector, DataSourceConfig, connect
 from cosmos_semantic.errors import ModelError
 from cosmos_semantic.loader import load_project
-from cosmos_semantic.planner import CompiledQuery, Planner, Principal, QueryRequest
+from cosmos_semantic.planner import CompiledQuery, Filter, Planner, Principal, QueryRequest
 
 
 @dataclass
@@ -64,22 +64,31 @@ class Engine:
         return compiled
 
     def compile_values(
-        self, dimension: str, principal: Principal | None = None, *, limit: int
+        self,
+        dimension: str,
+        principal: Principal | None = None,
+        *,
+        limit: int,
+        filters: list[str | Filter] | None = None,
     ) -> CompiledQuery:
         """The distinct values of a dimension, in the dialect of its model's data source."""
         model = self.graph.models[self.graph.resolve_dimension(dimension).model]
         config = self.config(model.spec.data_source)
         planner = Planner(self.graph, config.dialect, config.schema_map)
-        return planner.plan_values(dimension, principal, limit=limit)
+        return planner.plan_values(dimension, principal, limit=limit, filters=filters)
 
     def compile_time_range(
-        self, dimension: str, principal: Principal | None = None
+        self,
+        dimension: str,
+        principal: Principal | None = None,
+        *,
+        filters: list[str | Filter] | None = None,
     ) -> CompiledQuery:
         """The date range of a time dimension, in the dialect of its model's data source."""
         model = self.graph.models[self.graph.resolve_dimension(dimension).model]
         config = self.config(model.spec.data_source)
         planner = Planner(self.graph, config.dialect, config.schema_map)
-        return planner.plan_time_range(dimension, principal)
+        return planner.plan_time_range(dimension, principal, filters=filters)
 
     def query(self, request: QueryRequest, principal: Principal | None = None) -> QueryResult:
         compiled = self.compile(request, principal)

@@ -15,7 +15,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from cosmos_semantic.auth import Authenticator, AuthError
 from cosmos_semantic.errors import CosmosError, QueryError
 from cosmos_semantic.evidence import engine_version
-from cosmos_semantic.planner import Principal, QueryRequest
+from cosmos_semantic.planner import Filter, Principal, QueryRequest
 from cosmos_semantic.service import MAX_DIMENSION_VALUES, VALUES_FETCH_CEILING, SemanticService
 
 INSTRUCTIONS = """\
@@ -26,10 +26,14 @@ Cosmos semantic layer. Before querying:
 2. Call `list_members` to see the available metrics, dimensions and rules.
 3. Call `query` with exact names. Dimensions are `model.dimension`; time accepts `__day`,
    `__week`, `__month`, `__quarter`, `__year`. Predicate business rules are used as the
-   filter `{rule.name}`; filters compare `{model.dimension}` references with values. Before
-   filtering by a value, call `dimension_values` to get the exact values (such as `BR` or
-   `Brazil`): a guessed value returns zero rows that look real. For a time dimension it
-   returns the first and last day with data, so check it before a relative date range.
+   filter `{rule.name}`. Filter by a value with an object
+   `{"dimension": "model.dimension", "op": "=", "value": "BR"}` (ops `=`, `!=`, `<`, `<=`,
+   `>`, `>=`, `in` and `not in` with a list, `is null`, `is not null`): the server writes the
+   value as a literal, so never quote or escape it. Expression strings with
+   `{model.dimension}` references also work. Before filtering by a value, call
+   `dimension_values` to get the exact values (such as `BR` or `Brazil`): a guessed value
+   returns zero rows that look real. For a time dimension it returns the first and last day
+   with data, so check it before a relative date range.
 Personal data (LGPD) never reaches agents: grouping or filtering by it is denied.
 Always answer with the number the tool returned. Every `query` result has an `evidence`
 envelope: cite the metric formula, the business rules applied (with owner and test status),
@@ -96,7 +100,11 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
 
     @mcp.tool(
         description=(
-            "Run a metrics request with the user's policies applied. `metric_filters` keep "
+            "Run a metrics request with the user's policies applied. `filters` restrict the "
+            "facts before aggregation, ANDed with the user's row filters: objects "
+            '`{"dimension": "orders.status", "op": "in", "value": ["shipped", "delivered"]}` '
+            "(the server writes the value as a literal; do not quote it) or expression strings "
+            "such as `{rule.active_customer}`. `metric_filters` keep "
             "only the rows where a requested metric meets a condition, after aggregation, such "
             "as `{revenue} > 1000`: a metric compared with a number (`=`, `<>`, `<`, `<=`, `>`, "
             "`>=`) or `IS NULL` / `IS NOT NULL`, joined by AND; `limit` applies after them. "
@@ -107,7 +115,7 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
         metrics: list[str],
         ctx: Context,
         dimensions: list[str] | None = None,
-        filters: list[str] | None = None,
+        filters: list[str | Filter] | None = None,
         metric_filters: list[str] | None = None,
         order_by: list[str] | None = None,
         limit: int | None = None,
@@ -139,18 +147,26 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
             "at that cut-off may differ between databases. For a time dimension it returns its "
             "date range instead: `min` and `max` (the first and last day holding rows, ISO dates "
             "in the model's time zone) and `distinct_days`; null, null and 0 when no row is "
-            "visible. Call it before answering 'last month' or 'since launch'."
+            "visible. Call it before answering 'last month' or 'since launch'. `filters`, as in "
+            "`query`, narrow the rows counted (the cities of one state)."
         )
     )
-    def dimension_values(name: str, ctx: Context, limit: int | None = None) -> dict[str, Any]:
-        return guarded(lambda: service.dimension_values(name, principal(ctx), limit=limit))()
+    def dimension_values(
+        name: str,
+        ctx: Context,
+        limit: int | None = None,
+        filters: list[str | Filter] | None = None,
+    ) -> dict[str, Any]:
+        return guarded(
+            lambda: service.dimension_values(name, principal(ctx), limit=limit, filters=filters)
+        )()
 
     @mcp.tool(description="Show the SQL the engine generates for a request, without running it.")
     def show_sql(
         metrics: list[str],
         ctx: Context,
         dimensions: list[str] | None = None,
-        filters: list[str] | None = None,
+        filters: list[str | Filter] | None = None,
     ) -> dict[str, Any]:
         def run():
             request = QueryRequest(

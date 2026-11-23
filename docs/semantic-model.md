@@ -179,7 +179,7 @@ metrics:
 
 #### Rolling windows
 
-A rolling window aggregates the measure over the last N days, today included:
+A rolling window aggregates the measure over the last N days, today included (or the last N weeks, read as 7N days):
 
 ```yaml
 metrics:
@@ -197,7 +197,8 @@ metrics:
   - **Not yet.** Running totals with `grain_to_date` and inputs read at an earlier period (offsets) still apply every filter to the facts first; letting them read back to the start of the period, or to the earlier period, are the next slices.
 - **Other dimensions.** Each combination of the other requested dimensions has its own window; a null value is a group of its own. A null day (a fact with no date) is a row whose value is null.
 - **Measures.** `sum` and `count` add up over the window; `min` and `max` take the minimum or maximum of the window. `avg` and `count_distinct` are refused: they cannot be combined from daily values, and recomputing them over each window is a later slice. The model itself is invalid (`cosmos validate` and `cosmos check` report it), not only a query of the metric.
-- **Supported for now.** Only windows in days (`1 day`, `7 days`, `30 days`), queried with the time dimension at day grain (`orders.ordered_at__day`). Other units (`2 weeks`, `1 month`) and other grains are refused with an error.
+- **Weeks.** A window in weeks is read as 7 days per week (DEC-27): `1 week` is `7 days`, `2 weeks` is `14 days`, singular or plural. It runs where the window in days runs (day grain only) and gives exactly its SQL, and so its `sql_hash`; the evidence (`time.window`, the formula) and the catalog keep the window as written, with the days in `time.days`. The dbt export writes it in weeks (`window: 2 weeks`, 14 days in MetricFlow) and its import reads it back as `2 weeks`; the Cube export writes its days (`trailing: 14 day`), because Cube does not render a week interval on every database, so a Cube round trip gives `14 days`, with the same numbers.
+- **Supported for now.** Only windows in days or weeks (`1 day`, `7 days`, `30 days`, `1 week`, `2 weeks`), queried with the time dimension at day grain (`orders.ordered_at__day`). Other units (`1 month`), a window of zero and other grains are refused with an error.
 - **SQL.** The daily aggregate is joined to itself on the date range, with no window frame, so the same SQL shape runs on every data source (SQL Server has no `RANGE` frame with an interval).
 
 #### Period over period
@@ -256,7 +257,7 @@ metrics:
 
 - **Agreement.** A legacy value agrees when it is within `abs_tolerance` of the governed value, or within `rel_tolerance` times the larger of the two (`math.isclose`). A field left out keeps its default, so `abs_tolerance: 0.01` alone still allows the default relative difference of `1e-9`.
 - **Validation.** Each tolerance is a non-negative, finite number; strings, booleans and unknown keys are refused, and `reconciliation` needs at least one of the two fields.
-- **Where it applies.** The tolerance of the reconciled metric decides matched and differing rows in `cosmos reconcile` (against SQL and against another model), the pass or fail of each `cosmos check` case, and so the metric's health. The likely-cause probes compare within it too, so a cause is still found when the legacy report is also rounded. A measure reconciled on its own always uses the default.
+- **Where it applies.** The tolerance of the reconciled metric decides matched and differing rows in `cosmos reconcile` (against SQL, another model or a report's CSV), the pass or fail of each `cosmos check` case, and so the metric's health. The likely-cause probes compare within it too, so a cause is still found when the legacy report is also rounded. A measure reconciled on its own always uses the default.
 - **What the output states.** The reconcile report has `tolerance` (`abs_tolerance`, `rel_tolerance` and `source`: `metric` or `default`), `rows.within_tolerance` (matched rows that are not equal), `tolerated` (up to five of them) and a `difference` (legacy minus governed) on each example. Each check run case records its `tolerance`, health's `reconciled` and `reconciliation_failed` reasons carry it when it is the metric's own, and the evidence of a query lists it under the metric as `reconciliation`.
 - **Hashes.** A metric without `reconciliation` serializes as before, so the model hash, the generated SQL and the evidence of existing models do not change. Declaring a tolerance changes the model hash (as any change to the model does) but not the SQL.
 
@@ -431,6 +432,31 @@ processes:
 
 Measures and dimensions inherit the owner of their model. `cosmos impact` groups the affected members by owner (`unowned` when nobody owns them) and lists the source systems, and `cosmos graph` exports everything as Mermaid, Graphviz DOT or JSON, optionally focused on one member (`--focus metric:net_revenue`): what it depends on, what depends on it and who owns each part.
 
+## Structured filters
+
+A request's `filters` (in `POST /v1/query`, `POST /v1/sql`, `POST /v1/dimensions/{name}/values` and the MCP tools `query`, `show_sql` and `dimension_values`) take expression strings with `{model.dimension}` references, or objects with a dimension, an operator and a value (DEC-50). Both kinds can be mixed; every filter is ANDed with the others and with the user's row filters.
+
+```json
+{
+  "metrics": ["revenue"],
+  "dimensions": ["customers.state"],
+  "filters": [
+    {"dimension": "orders.status", "op": "in", "value": ["completed", "pending"]},
+    {"dimension": "customers.segment", "op": "!=", "value": "O'Brien"},
+    {"dimension": "orders.ordered_at", "op": ">=", "value": "2026-01-01"},
+    "{rule.active_customer}"
+  ]
+}
+```
+
+- **Operators.** `=`, `!=` (or `<>`), `<`, `<=`, `>`, `>=` with one value; `in` and `not in` with a non-empty list of at most 1,000 values; `is null` and `is not null` with no value. Case and extra spaces in the operator do not matter.
+- **Values.** Strings, numbers and booleans, sent as JSON values. The server checks them against the dimension's type: numbers for a number dimension, `true` or `false` for a boolean one, ISO dates or date-times as strings for a time dimension, strings or numbers for a categorical one. A dimension may carry a time grain (`orders.ordered_at__month`) or be a business rule (`rule.active_customer`).
+- **Literals.** The value never goes through a parser: SQLGlot writes it as a literal of the data source's dialect, with that dialect's quoting and escaping. A client therefore never quotes or escapes a value, and a value such as `O'Brien` or `a\'b` stays that value on MySQL, MariaDB, Databricks and BigQuery, which read a backslash in a string as an escape.
+- **Same SQL.** A structured filter and the equivalent expression string (written with the dialect's own quoting) produce the same SQL, and so the same `sql_hash`. The audit log keeps the object as sent, so a replay gets the same SQL; the console's answers and the evidence show it as the equivalent expression.
+- **Errors.** An unknown operator, a value of the wrong shape (a list for `=`, a value for `is null`) or an unknown field is refused before planning (HTTP 422, or an MCP tool error); an unknown dimension or a value that does not fit the dimension's type is a `QueryError` (HTTP 400). Personal data stays refused to agents, as with expression strings.
+
+Reference case A55 checks the numbers of a request with structured filters, among them a `not in` list holding a quote and a backslash before a quote, against hand-written SQL on every database.
+
 ## Filters on metric values
 
 A request's `filters` restrict the facts before aggregation. Its `metric_filters` keep only the rows of the result whose metric values meet conditions, after aggregation, at the requested grain: "the states with more than 450,000 in revenue", "the segments whose average order value is at least 2,600 with more than 5 orders".
@@ -576,4 +602,4 @@ Whatever Cube does not represent the same way produces a warning on export:
 
 - Conversion (funnel) metrics.
 - A time spine for series without gaps on days without data.
-- Rolling windows in units other than days, or at grains other than the day.
+- Rolling windows in units other than days or weeks, or at grains other than the day.

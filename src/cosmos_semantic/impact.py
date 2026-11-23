@@ -16,7 +16,7 @@ from typing import Any
 
 from cosmos_semantic.compiler import SemanticGraph
 from cosmos_semantic.errors import QueryError
-from cosmos_semantic.expressions import REF_RE
+from cosmos_semantic.expressions import REF_RE, filter_refs
 from cosmos_semantic.knowledge import owner_of, upstream_systems
 from cosmos_semantic.spec import CumulativeMetric, DerivedMetric, RatioMetric, SimpleMetric
 
@@ -238,7 +238,7 @@ def consumers(audit_path: str | Path, impact: Impact, graph: SemanticGraph) -> l
             used = set(request.get("metrics", []))
             used.update(_resolve(graph, d) for d in request.get("dimensions", []))
             for flt in request.get("filters", []):
-                used.update(_resolve(graph, r) for r in REF_RE.findall(flt))
+                used.update(_resolve(graph, r) for r in filter_refs(flt))
             used.update(f"rule.{r}" for r in record.get("rules", []) if r in rule_names)
             hits = sorted(used & members)
             if not hits:

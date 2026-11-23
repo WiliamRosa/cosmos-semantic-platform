@@ -13,6 +13,32 @@ This release adds BigQuery as a data source, checked on a live project, and Trin
 
 ### Added
 
+- Structured filters on MCP and REST (DEC-50): `filters` in `query`, `show_sql`
+  (`POST /v1/query`, `POST /v1/sql`) and `dimension_values` take objects
+  `{"dimension", "op", "value"}` next to expression strings, which keep working unchanged.
+  Operators: `=`, `!=`/`<>`, `<`, `<=`, `>`, `>=`, `in` and `not in` with a list, `is null` and
+  `is not null`. The server writes the value as a literal of the data source's dialect through
+  SQLGlot, so no client quotes or escapes a value; a quote or a backslash in a value stays a
+  value on MySQL, MariaDB, Databricks and BigQuery. A structured filter and the equivalent
+  expression string give the same SQL and `sql_hash`. Values are checked against the
+  dimension's type. `dimension_values` gains `filters` (the MCP argument, and
+  `POST /v1/dimensions/{name}/values` with `{"limit", "filters"}`), so it counts only the rows
+  they keep; its evidence lists them. The console's query explorer sends structured filters
+  instead of quoting values itself. Reference case A55 checks the numbers on every database.
+- Reconciliation against a report's numbers (DEC-38): `cosmos reconcile <metric> --by ...
+  --expected report.csv` compares the governed metric with a CSV exported from a report
+  (Excel, Power BI, a finance close), with one column per dimension and one for the metric. It
+  gives the same report as `--sql`, under the metric's declared tolerance or the default:
+  rows that agree, agree within tolerance, differ or are on one side only, totals, examples
+  and the likely-cause probes. The report's `legacy` is `{"kind": "csv", "file", "file_hash",
+  "rows"}`. Dimension columns are named as the request names them or as `cosmos query --csv`
+  writes them; time dimensions take ISO dates or `YYYY-MM`, and a categorical cell matches a
+  number the database returns (such as a `customer_id`) only when it is that number's exact
+  text. Unknown or missing columns,
+  non-numeric values, thousands separators, ragged lines and repeated rows are refused with
+  the file, line and column. The SQL the engine generates and the output of `--sql`,
+  `--other-model` and `--cases` are unchanged. Reconciliation cases in `cosmos check` do not
+  read a CSV yet.
 - Trino and Starburst as a data source, in preview (DEC-43): `type: trino` with the `trino`
   extra (the `trino` client). The connection is a `uri` such as
   `trino://user@host:443/catalog?http_scheme=https`, with `options` for the password (basic
@@ -24,6 +50,17 @@ This release adds BigQuery as a data source, checked on a live project, and Trin
   (Trino 484 with an in-memory catalog, on localhost); the comparative suites run on it when
   `COSMOS_TRINO_URI` is set. Offline tests check that every reference query plans and parses
   for Trino, and CI runs the suites against a Trino container.
+- Rolling windows in weeks (DEC-27): a cumulative metric accepts `window: 1 week` or
+  `2 weeks`, read as 7 days per week. It runs where the window in days runs (day grain only)
+  and gives exactly the SQL, and so the `sql_hash`, of `7 days` or `14 days`; the evidence and
+  the catalog keep the window as written. `cosmos export dbt` writes it as `window: N weeks`,
+  which MetricFlow reads as the same 7N days, and `cosmos import dbt` reads it back as
+  `N weeks`. `cosmos export cube` writes its days, `trailing: 7N day`, because Cube does not
+  render a `week` interval on every database (its Oracle query drops it), so a Cube round trip
+  turns `2 weeks` into `14 days`, with the same numbers. `cosmos import cube` reads a
+  `trailing: N week` as `window: N weeks` (it was imported as a window queries refused). Reference cases with
+  hand-written SQL (A52 to A54, in `tests/test_reference.py`) check `1 week` and `2 weeks`
+  against the 7 and 14-day windows on every database, and the refusal by week.
 - Offsets in weeks and years (DEC-46): a derived metric's `inputs` accept `offset: 1 week`,
   `2 weeks`, `1 year` or `2 years`, read as 7 days and 12 months. They run at the grains of
   their days or months (`2 weeks` by day or week, `1 year` by month, quarter or year) and give
@@ -313,6 +350,13 @@ This release adds BigQuery as a data source, checked on a live project, and Trin
   10,000 distinct values the list is marked `truncated` and ties at that cut-off may differ.
   Each call is written to the audit log as a `dimension_values` event, which `replay` and the
   usage report ignore.
+- Offline tests for BigQuery (EXTRA-2), with a fake `google.cloud.bigquery` client and no
+  project or credentials: each query job's timeout, `maximum_bytes_billed`, `job_retry=None`
+  and row limit; `load_bigquery` (Parquet, an explicit schema with times as `DATETIME`,
+  `WRITE_TRUNCATE`, a missing dataset created); `cosmos bootstrap` reading
+  `` `<dataset>`.INFORMATION_SCHEMA `` and `INT64`, `FLOAT64` and `BIGNUMERIC` as numbers; the
+  `bigquery` block of `cosmos init`'s `connections.yml`; and `credentials_file`, read only from
+  `options` and never logged.
 
 ### Changed
 
@@ -357,6 +401,7 @@ This release adds BigQuery as a data source, checked on a live project, and Trin
 
 ### Fixed
 
+- The Power BI import tests skip their BigQuery cases on the emulator, which panics on them.
 - `cosmos import cube` and `cosmos import dbt` skip a running total over an `avg` or
   `count_distinct` measure, with a warning naming it, instead of writing a model that
   `cosmos validate` then rejects (DEC-32). Since DEC-21 such a metric is invalid in Cosmos: an
