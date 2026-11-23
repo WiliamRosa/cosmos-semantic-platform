@@ -880,9 +880,7 @@ class _DbtWriter:
             f"metrics.{metric.name}: MetricFlow accumulates over `metric_time`, which is "
             f"`{owner}.{times[0]}`; by that dimension at {grains} grain the numbers are the "
             "engine's on the periods with facts. MetricFlow also returns periods without facts "
-            f"after the first fact of a {period} and the grains the engine refuses, and a time "
-            f"constraint that starts inside a {period} does not cut its total, while the engine "
-            "filters the facts first"
+            f"after the first fact of a {period} and the grains the engine refuses"
             + (
                 f"; queried by {others}, the engine accumulates over that dimension instead, "
                 "which MetricFlow does not"
