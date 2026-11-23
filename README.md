@@ -101,8 +101,10 @@ export COSMOS_AUDIT_LOG=data/audit.jsonl
 uv run cosmos query average_order_value --by customers.segment --where "{rule.active_customer}"   -u region=Northeast --evidence -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 uv run cosmos replay <query_id> -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
-# Reconcile a governed metric with legacy SQL or another model, and explain the divergence
+# Reconcile a governed metric with legacy SQL, another model or a report's exported numbers (CSV),
+# and explain the divergence
 uv run cosmos reconcile revenue --by orders.status --sql legacy_revenue.sql   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
+uv run cosmos reconcile revenue --by orders.status --expected report.csv   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 uv run cosmos reconcile --cases examples/ecommerce/divergence_zoo.yml   -m examples/ecommerce/semantic -c examples/ecommerce/connections.yml
 
 # What a change affects, and who queried it (also: --changes-from <previous model>)
@@ -241,7 +243,7 @@ src/cosmos_semantic/
   catalog.py         members, concept search and explanations
   auth.py            OIDC token validation and development keys
   evidence.py        evidence envelope: formulas, rules, policies, hashes
-  reconcile.py       reconciliation with legacy SQL or another model, and divergence probes
+  reconcile.py       reconciliation with legacy SQL, another model or a report's CSV, and divergence probes
   impact.py          impact analysis over the model graph and the audit log
   bootstrap.py       draft model from the database catalog
   service.py         querying with evidence, auditing and replay, shared by REST, MCP and CLI
