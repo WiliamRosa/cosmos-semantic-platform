@@ -7,6 +7,7 @@ import calendar as cal
 import datetime as dt
 import json
 import math
+import os
 from pathlib import Path
 
 import pyarrow as pa
@@ -25,6 +26,22 @@ FIXTURES = Path(__file__).parent / "fixtures"
 BIM = FIXTURES / "powerbi" / "ecommerce.bim"
 TMDL = FIXTURES / "powerbi_tmdl"
 MIDWEST = Principal(user={"region": "Midwest"})
+
+
+@pytest.fixture(autouse=True)
+def _skip_bigquery_on_the_emulator(request):
+    """The BigQuery emulator panics on these queries; real BigQuery runs them (ADR 0016)."""
+    callspec = getattr(request.node, "callspec", None)
+    if (
+        callspec is not None
+        and callspec.params.get("source") == "bigquery_connector"
+        and os.environ.get("COSMOS_BIGQUERY_ENDPOINT")
+    ):
+        pytest.skip(
+            "the BigQuery emulator (COSMOS_BIGQUERY_ENDPOINT) panics on the Power BI import "
+            "queries with 'googlesqlite: panic runtime error: slice bounds out of range'; "
+            "they pass on real BigQuery (ADR 0016)"
+        )
 
 
 def imported(kind: str, path: Path):
