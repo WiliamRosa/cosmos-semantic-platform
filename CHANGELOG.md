@@ -323,6 +323,13 @@ format or the API; such changes are listed under **Changed**.
   10,000 distinct values the list is marked `truncated` and ties at that cut-off may differ.
   Each call is written to the audit log as a `dimension_values` event, which `replay` and the
   usage report ignore.
+- Offline tests for BigQuery (EXTRA-2), with a fake `google.cloud.bigquery` client and no
+  project or credentials: each query job's timeout, `maximum_bytes_billed`, `job_retry=None`
+  and row limit; `load_bigquery` (Parquet, an explicit schema with times as `DATETIME`,
+  `WRITE_TRUNCATE`, a missing dataset created); `cosmos bootstrap` reading
+  `` `<dataset>`.INFORMATION_SCHEMA `` and `INT64`, `FLOAT64` and `BIGNUMERIC` as numbers; the
+  `bigquery` block of `cosmos init`'s `connections.yml`; and `credentials_file`, read only from
+  `options` and never logged.
 
 ### Changed
 
