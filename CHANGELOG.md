@@ -16,12 +16,14 @@ format or the API; such changes are listed under **Changed**.
   (at most 200 rows), the likely causes, the metric's updated health and the evidence, and
   append a partial check run to `COSMOS_RUNS_LOG`: health updates that case and keeps the
   others from the latest `cosmos check`. `GET /v1/reconcile` (the tool without `case`) lists
-  the declared cases without their SQL. Only declared cases run, never SQL from the caller,
+  the declared cases by id and title. Only declared cases run, never SQL from the caller,
   as the caller, with the same authentication and audit as `query` (event `reconcile`). Row
   filters cannot be applied to hand-written SQL, so a case is refused (403) when a row filter
   applies to it or when its SQL reads anything but the tables of models without row filters.
-  An unknown case is a 404. `cosmos reconcile --json` reports gain `diff`, every row that does
-  not match (up to 1,000).
+  An unknown case is a 404, and a case runs at most once per `COSMOS_RECONCILE_MIN_INTERVAL`
+  seconds (60 by default; sooner is a 429). A case that cannot run is recorded with its error
+  type only. `cosmos reconcile --json` reports gain `diff`, every row that does not match (up
+  to 1,000).
 
 ## [0.5.0] - 2026-11-23
 

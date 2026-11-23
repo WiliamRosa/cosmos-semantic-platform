@@ -60,11 +60,18 @@ CASES = [
         "JOIN public.customers c ON c.customer_id = o.customer_id "
         "WHERE c.region = 'South' GROUP BY o.status",
     },
+    {
+        # Fails on the database; the error quotes the hand-written SQL.
+        "id": "BROKEN",
+        "title": "A report whose column is gone",
+        "request": {"metrics": ["order_count"], "dimensions": ["orders.status"]},
+        "sql": "SELECT status, SUM(secret_column_xyz) FROM public.orders GROUP BY status",
+    },
 ]
+ALL_IDS = ["R1", "R2", "SEG", "SNEAK", "BROKEN"]
 
 
-@pytest.fixture
-def setup(graph, duckdb_connector, tmp_path):
+def _service(graph, duckdb_connector, tmp_path, interval: float = 0.0) -> SemanticService:
     cases = tmp_path / "cases.yml"
     cases.write_text(yaml.safe_dump({"cases": CASES}), encoding="utf-8")
     engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
@@ -75,7 +82,14 @@ def setup(graph, duckdb_connector, tmp_path):
         cases_path=cases,
         runs_path=tmp_path / "runs.jsonl",
         admins=set(),
+        reconcile_min_interval=interval,
     )
+    return service
+
+
+@pytest.fixture
+def setup(graph, duckdb_connector, tmp_path):
+    service = _service(graph, duckdb_connector, tmp_path)
     settings = AuthSettings(
         dev_keys={"midwest": DevKey(subject="analyst@example.com", user={"region": "Midwest"})}
     )
@@ -103,8 +117,8 @@ def test_lists_declared_cases_without_their_sql(setup):
     client, _, _ = setup
     body = client.get("/v1/reconcile", headers=MIDWEST).json()
     assert body["available"] is True
-    assert [c["id"] for c in body["cases"]] == ["R1", "R2", "SEG", "SNEAK"]
-    assert all("sql" not in c for c in body["cases"])
+    assert [c["id"] for c in body["cases"]] == ALL_IDS
+    assert all(c.keys() == {"id", "title"} for c in body["cases"])
     assert "SELECT" not in json.dumps(body)
 
 
@@ -217,6 +231,101 @@ def test_conflicts_are_an_allowlist(graph):
     assert conflicts("SELEC nonsense FROM")
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # A CTE shadowing the table it reads.
+        "WITH customers AS (SELECT * FROM customers) SELECT segment, COUNT(*) FROM customers "
+        "GROUP BY 1",
+        # A CTE declared in another scope, under the name of a table read elsewhere.
+        "SELECT segment, COUNT(*) FROM customers GROUP BY 1 UNION ALL SELECT c, 1 FROM "
+        "(WITH customers AS (SELECT 1 c) SELECT * FROM customers) x",
+        # A subquery reading the real table while another scope declares a CTE of that name.
+        "SELECT status, COUNT(*) FROM orders WHERE customer_id IN "
+        "(SELECT customer_id FROM customers) GROUP BY 1 UNION ALL SELECT 'x', 1 FROM "
+        "(WITH customers AS (SELECT 1 customer_id) SELECT * FROM customers) y",
+        # The same shapes with a table outside the model.
+        "WITH secrets AS (SELECT * FROM secrets) SELECT COUNT(*) FROM secrets",
+        "SELECT COUNT(*) FROM secrets UNION ALL SELECT 1 FROM "
+        "(WITH secrets AS (SELECT 1 c) SELECT * FROM secrets) x",
+        # A CTE named like a model's table, even one without row filters.
+        "WITH orders AS (SELECT 1 AS status) SELECT status, COUNT(*) FROM orders GROUP BY 1",
+    ],
+)
+def test_cte_shadowing_cannot_hide_a_table(graph, sql):
+    case = ZooCase(id="X", title="x", request={"metrics": ["order_count"]}, sql=sql)
+    assert row_filter_conflicts(case, graph, "duckdb")
+
+
+def test_table_names_match_strictly_for_the_allowlist(graph):
+    def conflicts(sql: str, dialect: str = "duckdb") -> list[str]:
+        case = ZooCase(id="X", title="x", request={"metrics": ["order_count"]}, sql=sql)
+        return row_filter_conflicts(case, graph, dialect)
+
+    assert conflicts("SELECT COUNT(*) FROM PUBLIC.ORDERS") == []  # unquoted: any case
+    assert conflicts('SELECT COUNT(*) FROM "Orders"')  # quoted: another table
+    assert conflicts('SELECT COUNT(*) FROM public."orders"')  # quoted on one side only
+    assert conflicts("SELECT COUNT(*) FROM other.orders")  # another schema
+    assert conflicts("SELECT COUNT(*) FROM other_db.public.orders") == []  # model has no catalog
+    # Against models with row filters, matching stays lenient.
+    assert conflicts('SELECT COUNT(*) FROM "Customers"')
+    assert conflicts("SELECT COUNT(*) FROM other.customers")
+    assert conflicts('SELECT COUNT(*) FROM "PUBLIC"."CUSTOMERS"', "snowflake")
+
+
+def test_a_failing_case_records_no_sql(setup):
+    client, service, _ = setup
+    response = client.post("/v1/reconcile/BROKEN", headers=MIDWEST)
+    assert response.status_code == 400, response.text
+    assert "secret_column_xyz" not in response.text
+    [run] = _runs(service)
+    [item] = run["reconciliations"]
+    assert item["outcome"] == "error"
+    assert item["detail"].endswith(": case could not run")
+    log = service.health.runs_path.read_text(encoding="utf-8")
+    assert "secret_column_xyz" not in log and "SUM(" not in log
+    assert "secret_column_xyz" not in client.get("/v1/console/runs", headers=MIDWEST).text
+
+
+def test_a_case_runs_at_most_once_per_interval(graph, duckdb_connector, tmp_path):
+    service = _service(graph, duckdb_connector, tmp_path, interval=60)
+    settings = AuthSettings(
+        dev_keys={"midwest": DevKey(subject="analyst@example.com", user={"region": "Midwest"})}
+    )
+    client = TestClient(create_app(service, Authenticator(settings, graph.project.user_context)))
+    assert client.post("/v1/reconcile/R2", headers=MIDWEST).status_code == 200
+    again = client.post("/v1/reconcile/R2", headers=MIDWEST)
+    assert again.status_code == 429 and again.json()["error"] == "RateLimitError"
+    # Another case has its own interval.
+    assert client.post("/v1/reconcile/R1", headers=MIDWEST).status_code == 200
+    assert [r["reconciliations"][0]["id"] for r in _runs(service)] == ["R2", "R1"]
+    assert [r["outcome"] for r in _audit(service)] == ["ok", "error", "ok"]
+
+
+def test_queries_run_between_the_statements_of_a_reconciliation(setup, monkeypatch):
+    """The case holds the connection lock one statement at a time, never for the whole run."""
+    client, service, _ = setup
+    connector = service.engine._connectors["local"]
+    original = connector.execute
+    held = []
+
+    def execute(*args, **kwargs):
+        held.append(service._lock.locked())
+        held.append(service._reconcile_lock.locked())
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(connector, "execute", execute)
+    assert client.post("/v1/reconcile/R1", headers=MIDWEST).status_code == 200
+    assert held and all(held)  # each statement under both locks...
+    assert not service._lock.locked()  # ...and the connection lock free in between
+    # A query between statements does not wait for the reconciliation lock.
+    with service._reconcile_lock:
+        assert (
+            client.post("/v1/query", headers=MIDWEST, json={"metrics": ["order_count"]}).status_code
+            == 200
+        )
+
+
 def test_partial_runs_keep_the_other_cases_of_the_full_run(graph, duckdb_connector, tmp_path):
     runs = tmp_path / "runs.jsonl"
     cases = [ZooCase.model_validate(c) for c in CASES[:2]]
@@ -265,8 +374,8 @@ def test_mcp_reconcile(setup, monkeypatch):
     monkeypatch.setenv("COSMOS_API_KEY", "midwest")
 
     listed = _call(server, "reconcile")
-    assert [c["id"] for c in listed["cases"]] == ["R1", "R2", "SEG", "SNEAK"]
-    assert "SELECT" not in json.dumps(listed)
+    assert [c["id"] for c in listed["cases"]] == ALL_IDS
+    assert all(c.keys() == {"id", "title"} for c in listed["cases"])
 
     report = _call(server, "reconcile", case="R2")
     assert report["outcome"] == "pass" and report["status"] == "match"

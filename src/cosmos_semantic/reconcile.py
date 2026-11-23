@@ -900,23 +900,57 @@ def check_zoo_case(
     return ok, report
 
 
+# One part of a table name: its text and whether it was quoted.
+_Part = tuple[str, bool]
+
+
+def _parts(table: Any) -> tuple[_Part, ...]:
+    from sqlglot import exp
+
+    return tuple(
+        (p.name, bool(p.args.get("quoted")) if isinstance(p, exp.Identifier) else False)
+        for p in table.parts
+    )
+
+
+def _loose_match(a: tuple[_Part, ...], b: tuple[_Part, ...]) -> bool:
+    """Might these name the same table? Case and quotes ignored, missing qualifiers match:
+    conservative, for the tables of models with row filters."""
+    n = min(len(a), len(b))
+    return n > 0 and [t.lower() for t, _ in a[-n:]] == [t.lower() for t, _ in b[-n:]]
+
+
+def _strict_match(sql: tuple[_Part, ...], model: tuple[_Part, ...]) -> bool:
+    """Surely the same table? Every part both sides carry (name, schema, catalog) agrees: an
+    unquoted part with an unquoted part ignoring case, a quoted part only with a part quoted
+    the same way and spelled exactly alike. For the tables of models without row filters."""
+    n = min(len(sql), len(model))
+    if n == 0:
+        return False
+    for (a, qa), (b, qb) in zip(sql[-n:], model[-n:], strict=True):
+        if qa != qb or (a != b if qa else a.lower() != b.lower()):
+            return False
+    return True
+
+
 def row_filter_conflicts(case: ZooCase, graph: SemanticGraph, dialect: str) -> list[str]:
     """Why a case's hand-written SQL could read rows a row filter hides; empty when it cannot.
 
     Row filters cannot be applied to hand-written SQL, so the API and MCP (DEC-45) run a case
     only when every table its SQL reads is the table of a semantic model without row filters.
-    It is an allowlist: a view, a table outside the model, a table function or SQL that does
-    not parse is a conflict, as is a table that might be the table of a model with row filters
-    (names are compared leniently, so an unqualified name matches every schema)."""
+    It is an allowlist:
+
+    - a view, a table outside the model, a table function or SQL that does not parse is a
+      conflict;
+    - a table that might be the table of a model with row filters is a conflict (names compared
+      leniently: an unqualified or differently quoted name matches);
+    - a table is allowed only when it is surely a model's table (names compared strictly:
+      quoting respected, schema and catalog compared when both sides carry them);
+    - CTE references are resolved by scope (``sqlglot.optimizer.scope``), and a CTE named like
+      a model's table or like any table the SQL reads is a conflict, so shadowing cannot hide
+      a table."""
     from sqlglot import exp, parse
-
-    def parts(table: exp.Table) -> tuple[str, ...]:
-        return tuple(p.name.lower() for p in table.parts)
-
-    def same(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
-        # The trailing parts both name must agree: `orders` matches `public.orders`.
-        n = min(len(a), len(b))
-        return n > 0 and a[-n:] == b[-n:]
+    from sqlglot.optimizer.scope import traverse_scope
 
     models = []
     for name, node in graph.models.items():
@@ -925,7 +959,7 @@ def row_filter_conflicts(case: ZooCase, graph: SemanticGraph, dialect: str) -> l
         except Exception:  # noqa: BLE001 - an unreadable table name is simply not allowed
             table = None
         models.append(
-            (name, parts(table) if table is not None else (), bool(node.spec.row_filters))
+            (name, _parts(table) if table is not None else (), bool(node.spec.row_filters))
         )
     try:
         trees = [t for t in parse(case.sql_for(dialect), read=dialect) if t is not None]
@@ -935,18 +969,33 @@ def row_filter_conflicts(case: ZooCase, graph: SemanticGraph, dialect: str) -> l
         return ["its SQL is empty"]
     conflicts: list[str] = []
     for tree in trees:
+        try:
+            scopes = list(traverse_scope(tree))
+        except Exception:  # noqa: BLE001 - SQL the scope analysis cannot follow is refused
+            return ["its SQL cannot be analyzed"]
+        physical: list[exp.Table] = []
+        resolved: set[int] = set()
+        for scope in scopes:
+            for table in scope.tables:
+                resolved.add(id(table))
+                if not table.args.get("db") and table.name in scope.cte_sources:
+                    continue  # a CTE visible in this scope
+                physical.append(table)
+        # A table the scope analysis did not place is refused, not guessed.
+        if any(id(t) not in resolved for t in tree.find_all(exp.Table)):
+            conflicts.append("it reads a table whose scope cannot be resolved")
         ctes = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
-        for table in tree.find_all(exp.Table):
-            name = parts(table)
-            if len(name) == 1 and name[0] in ctes:
-                continue
+        names = {t.name.lower() for t in physical} | {p[-1][0].lower() for _, p, _ in models if p}
+        if ctes & names:
+            conflicts.append("it declares a CTE named like a table")
+        for table in physical:
+            name = _parts(table)
             if not name or not table.name or not isinstance(table.this, exp.Identifier):
                 conflicts.append("it reads something other than a table")
                 continue
-            matches = [m for m in models if m[1] and same(name, m[1])]
-            if not matches:
-                conflicts.append("it reads a table that is not the table of a semantic model")
-            elif any(filtered for _, _, filtered in matches):
-                filtered = sorted(n for n, _, f in matches if f)
+            filtered = sorted(n for n, p, f in models if f and p and _loose_match(name, p))
+            if filtered:
                 conflicts.append(f"it reads the table of `{filtered[0]}`, which has row filters")
+            elif not any(p and not f and _strict_match(name, p) for _, p, f in models):
+                conflicts.append("it reads a table that is not the table of a semantic model")
     return list(dict.fromkeys(conflicts))

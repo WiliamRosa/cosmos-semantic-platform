@@ -29,7 +29,13 @@ import pyarrow as pa
 
 from cosmos_semantic.catalog import Catalog
 from cosmos_semantic.engine import Engine
-from cosmos_semantic.errors import CosmosError, NotFoundError, PolicyError, QueryError
+from cosmos_semantic.errors import (
+    CosmosError,
+    NotFoundError,
+    PolicyError,
+    QueryError,
+    RateLimitError,
+)
 from cosmos_semantic.evidence import (
     EvidenceBuilder,
     merge_row_filters,
@@ -51,6 +57,9 @@ MAX_DIMENSION_VALUES = 100
 VALUES_FETCH_CEILING = 10_000
 # Most rows of a reconciliation's row diff returned by the API and MCP: the hard maximum.
 MAX_RECONCILE_DIFF_ROWS = 200
+# Least time between two runs of the same case through the API or MCP, in seconds; the
+# default of COSMOS_RECONCILE_MIN_INTERVAL.
+RECONCILE_MIN_INTERVAL = 60.0
 # A case id as the audit log records it; anything else is recorded as `<invalid>`.
 CASE_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 
@@ -86,6 +95,23 @@ def _diff_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class _LockedConnector:
+    """A connector whose every statement holds the service's lock, and only that statement:
+    connections cannot be shared across threads, but a reconciliation runs many statements,
+    and queries must be able to run between them."""
+
+    def __init__(self, connector: Any, lock: threading.Lock) -> None:
+        self._connector = connector
+        self._lock = lock
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            return self._connector.execute(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connector, name)
+
+
 class SemanticService:
     def __init__(
         self,
@@ -95,6 +121,7 @@ class SemanticService:
         admins: set[str] | None = None,
         cases_path: str | Path | None = None,
         runs_path: str | Path | None = None,
+        reconcile_min_interval: float | None = None,
     ) -> None:
         self.engine = engine
         self.catalog = Catalog(engine.graph)
@@ -112,6 +139,15 @@ class SemanticService:
         self.admins = admins
         # Connections cannot be shared across threads; one query at a time per process.
         self._lock = threading.Lock()
+        # One reconciliation at a time (DEC-45), apart from `_lock`, so that a reconciliation
+        # never blocks queries for longer than one of its statements. It also guards the
+        # runs log and the time each case last ran.
+        self._reconcile_lock = threading.Lock()
+        self._last_reconciled: dict[str, float] = {}
+        if reconcile_min_interval is None:
+            raw = os.environ.get("COSMOS_RECONCILE_MIN_INTERVAL")
+            reconcile_min_interval = float(raw) if raw else RECONCILE_MIN_INTERVAL
+        self.reconcile_min_interval = max(reconcile_min_interval, 0.0)
 
     def compile(self, request: QueryRequest, principal: Principal) -> CompiledQuery:
         try:
@@ -333,18 +369,10 @@ class SemanticService:
             raise QueryError("the declared reconciliation cases cannot be read") from None
 
     def reconcile_cases(self) -> dict[str, Any]:
-        """The reconciliation cases the operator declared: id, title and request, never their
-        SQL."""
+        """The reconciliation cases the operator declared: id and title only."""
         return {
             "available": self.cases_path is not None,
-            "cases": [
-                {
-                    "id": c.id,
-                    "title": c.title,
-                    "request": c.request.model_dump(mode="json", exclude_defaults=True),
-                }
-                for c in self._cases()
-            ],
+            "cases": [{"id": c.id, "title": c.title} for c in self._cases()],
         }
 
     def reconcile(
@@ -357,7 +385,10 @@ class SemanticService:
 
         Refused (PolicyError) when a row filter applies to the governed side, or when the
         case's SQL may read a table a row filter guards: row filters cannot be applied to
-        hand-written SQL. An unknown id is a NotFoundError whose message does not repeat it."""
+        hand-written SQL. An unknown id is a NotFoundError whose message does not repeat it.
+        A case runs at most once per ``reconcile_min_interval`` seconds
+        (``COSMOS_RECONCILE_MIN_INTERVAL``, 60 by default); a call sooner is a
+        RateLimitError and records no run."""
         from cosmos_semantic.checks import append_run, run_checks
         from cosmos_semantic.reconcile import row_filter_conflicts
 
@@ -389,33 +420,42 @@ class SemanticService:
                     "be applied to the case's hand-written SQL, so it is not run through the "
                     "API or MCP (run `cosmos check` as an operator)"
                 )
-            with self._lock:
+            with self._lock:  # creating the connection only
                 connector = self.engine.connector(compiled.data_source)
-                conflicts = row_filter_conflicts(case, graph, connector.dialect)
-                if conflicts:
-                    raise PolicyError(
-                        f"case `{case.id}` is not run through the API or MCP: {conflicts[0]}; "
-                        "row filters cannot be applied to its hand-written SQL"
+            conflicts = row_filter_conflicts(case, graph, connector.dialect)
+            if conflicts:
+                raise PolicyError(
+                    f"case `{case.id}` is not run through the API or MCP: {conflicts[0]}; "
+                    "row filters cannot be applied to its hand-written SQL"
+                )
+            reports: dict[str, dict[str, Any]] = {}
+            with self._reconcile_lock:
+                now = time.monotonic()
+                last = self._last_reconciled.get(case.id)
+                if last is not None and now - last < self.reconcile_min_interval:
+                    wait = max(1, round(self.reconcile_min_interval - (now - last)))
+                    raise RateLimitError(
+                        f"case `{case.id}` ran less than {self.reconcile_min_interval:g} "
+                        f"seconds ago; try again in {wait} seconds"
                     )
-                reports: dict[str, dict[str, Any]] = {}
+                self._last_reconciled[case.id] = now
                 run = run_checks(
                     graph,
                     model_hash=self.evidence.model_hash,
-                    connector=connector,
+                    connector=_LockedConnector(connector, self._lock),
                     source=self._source(compiled),
                     cases=[case],
                     principal=principal,
                     reports=reports,
                 )
+                # A run of one case: health keeps the other cases of the latest full run.
+                run["partial"] = True
+                run["channel"] = principal.channel
+                if self.health.runs_path is not None:
+                    append_run(self.health.runs_path, run)
         except CosmosError as exc:
             self._audit(context, error=exc, event="reconcile")
             raise
-        # A run of one case: health keeps the other cases of the latest full run.
-        run["partial"] = True
-        run["channel"] = principal.channel
-        if self.health.runs_path is not None:
-            with self._lock:  # one writer at a time, so lines never interleave
-                append_run(self.health.runs_path, run)
         item = run["reconciliations"][0]
         report = reports.get(case.id)
         if report is None:  # the case errored (connector, SQL); the run recorded it

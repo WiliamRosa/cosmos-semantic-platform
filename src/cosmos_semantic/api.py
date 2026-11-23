@@ -24,6 +24,7 @@ from cosmos_semantic.errors import (
     NotFoundError,
     PolicyError,
     QueryError,
+    RateLimitError,
 )
 from cosmos_semantic.evidence import engine_version
 from cosmos_semantic.planner import FILTERS_DESCRIPTION, Filter, Principal, QueryRequest
@@ -34,6 +35,7 @@ _STATUS = {
     ForbiddenError: 403,
     PolicyError: 403,
     NotFoundError: 404,  # before QueryError, its base class
+    RateLimitError: 429,
     QueryError: 400,
     ConnectorError: 502,
     ModelError: 500,
@@ -237,7 +239,7 @@ def create_app(
     def query(request: QueryRequest, user: User) -> dict[str, Any]:
         return service.query(request, user)
 
-    @app.get("/v1/reconcile", summary="The declared reconciliation cases (id, title, request)")
+    @app.get("/v1/reconcile", summary="The declared reconciliation cases (id and title)")
     def reconcile_cases(_user: User) -> dict[str, Any]:
         return service.reconcile_cases()
 
