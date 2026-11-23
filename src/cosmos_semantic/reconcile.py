@@ -440,8 +440,9 @@ class Reconciler:
             + [example(k, None, legacy[k]) | {"side": "only_in_legacy"} for k in only_legacy],
             key=lambda e: str(tuple(e["key"])),
         )
-        total_c = sum(_number(v) or 0 for v in cosmos.values())
-        total_l = sum(_number(v) or 0 for v in legacy.values())
+        # fsum: exact, so the totals do not depend on the order of the rows.
+        total_c = math.fsum(_number(v) or 0 for v in cosmos.values())
+        total_l = math.fsum(_number(v) or 0 for v in legacy.values())
         name = request.metrics[0]
         report: dict[str, Any] = {
             "status": status,
@@ -490,6 +491,9 @@ class Reconciler:
     # -- diagnosis ---------------------------------------------------------------
 
     def diagnose(self, request: QueryRequest, cosmos: Rows, legacy: Rows) -> list[Cause]:
+        # Probes run as `self.principal`: through the API and MCP (DEC-45), the caller. A
+        # probe that touches a model with row filters gets the caller's filters, so a cause
+        # can depend on who asked; but probes only name causes, they never return rows.
         causes: list[Cause] = []
         priority = {"different_metric": 1, "unexplained": 2}
         for probe in (
@@ -872,6 +876,12 @@ class ZooCase(BaseModel):
 
     def sql_for(self, dialect: str) -> str:
         return self.sql_by_dialect.get(dialect, self.sql)
+
+
+def cases_from_bytes(data: bytes) -> tuple[list[ZooCase], str]:
+    """Cases from a file's bytes, with the sha256 of those bytes (a run's ``cases_hash``)."""
+    parsed = yaml.safe_load(data.decode("utf-8"))
+    return [ZooCase.model_validate(c) for c in parsed["cases"]], hashlib.sha256(data).hexdigest()
 
 
 def load_zoo(path: str | Path) -> list[ZooCase]:

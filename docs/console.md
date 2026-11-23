@@ -16,7 +16,8 @@ It is available in English and in Brazilian Portuguese.
 ```bash
 export COSMOS_AUDIT_LOG=audit.jsonl        # answers, usage and cost
 export COSMOS_RUNS_LOG=runs.jsonl          # check runs (health over time)
-export COSMOS_CHECK_CASES=reconciliations.yml   # cases agents may run (`reconcile`)
+export COSMOS_CHECK_CASES=reconciliations.yml   # cases agents may run (`reconcile`): the
+                                                # same file as `cosmos check --cases`
 export COSMOS_CONSOLE_ADMINS=lead@example.com   # who sees everyone's answers and usage
 cosmos serve -m semantic -c connections.yml
 # open http://127.0.0.1:8080/console/

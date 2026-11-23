@@ -577,12 +577,12 @@ def check(
 
     from cosmos_semantic.checks import append_run, run_checks, run_ok
     from cosmos_semantic.evidence import EvidenceBuilder
-    from cosmos_semantic.reconcile import load_zoo
+    from cosmos_semantic.reconcile import cases_from_bytes
 
     connector = None
     try:
         graph = compile_project(load_project(model))
-        loaded = load_zoo(cases) if cases else []
+        loaded, cases_hash = cases_from_bytes(cases.read_bytes()) if cases else ([], None)
         name = None
         if loaded:
             conns = load_connections(connections)
@@ -595,6 +595,9 @@ def check(
             source=name,
             cases=loaded,
         )
+        # The cases file this run read: the API and MCP (COSMOS_CHECK_CASES) should read the
+        # same one, since health matches cases by id.
+        run["cases_hash"] = cases_hash
     except (errors.CosmosError, KeyError) as exc:
         _fail(exc)
     finally:

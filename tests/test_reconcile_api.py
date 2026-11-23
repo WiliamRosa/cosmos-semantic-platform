@@ -9,7 +9,10 @@ filter, in the row diff or anywhere else."""
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
+import hashlib
 import json
+import math
 
 import pytest
 import yaml
@@ -19,13 +22,17 @@ from mcp import Client
 from cosmos_semantic.api import create_app
 from cosmos_semantic.auth import Authenticator, AuthSettings, DevKey
 from cosmos_semantic.checks import append_run, read_runs, run_checks
+from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.connectors import ConnectionsFile, DataSourceConfig
+from cosmos_semantic.console import Console
 from cosmos_semantic.engine import Engine
 from cosmos_semantic.evidence import EvidenceBuilder
 from cosmos_semantic.health import Health
 from cosmos_semantic.mcp_server import build_mcp
+from cosmos_semantic.planner import Principal
 from cosmos_semantic.reconcile import ZooCase, row_filter_conflicts
 from cosmos_semantic.service import MAX_RECONCILE_DIFF_ROWS, SemanticService
+from cosmos_semantic.spec import Project
 
 MIDWEST = {"X-API-Key": "midwest"}
 
@@ -142,17 +149,25 @@ def test_divergent_case_returns_diff_diagnosis_and_evidence(setup):
 
     # Audited like a query, with the caller's identity.
     [record] = _audit(service)
-    assert record["outcome"] == "ok" and record["query_id"] == body["evidence"]["query_id"]
+    assert "query_id" not in body["evidence"]
+    assert body["evidence"]["reconcile_id"].startswith("rc_")
+    assert record["outcome"] == "ok" and record["reconcile_id"] == body["evidence"]["reconcile_id"]
+    assert record["query_id"] is None
     assert record["principal"]["subject"] == "analyst@example.com"
     assert record["principal"]["channel"] == "api"
     assert record["request"]["case"] == "R1" and record["sql"]
     # Not a query: it does not replay.
-    replay = client.post(f"/v1/replay/{record['query_id']}", headers=MIDWEST)
+    replay = client.post(f"/v1/replay/{record['reconcile_id']}", headers=MIDWEST)
     assert replay.status_code == 400
+    # Nor is it counted as a query by the console.
+    overview = client.get("/v1/console/overview", headers=MIDWEST).json()
+    assert overview["usage"]["queries_30d"] == 0
 
     # Recorded as a partial check run, so health updates.
     [run] = _runs(service)
     assert run["partial"] is True and run["channel"] == "api"
+    expected_hash = hashlib.sha256(service.cases_path.read_bytes()).hexdigest()
+    assert run["cases_hash"] == expected_hash
     assert run["run_id"] == body["evidence"]["run_id"]
     assert [c["id"] for c in run["reconciliations"]] == ["R1"]
     assert "subject" not in json.dumps(run)
@@ -392,3 +407,99 @@ def test_mcp_reconcile(setup, monkeypatch):
 
     monkeypatch.delenv("COSMOS_API_KEY")
     assert _call(server, "reconcile", case="R2")["error"] == "AuthError"
+
+
+def test_full_and_partial_runs_of_one_metric_under_max_age(graph, tmp_path):
+    """A metric with cases from a full run and a later partial run: last_reconciled_at is the
+    newest of them, and staleness is judged on the oldest."""
+    data = graph.project.model_dump(mode="json")
+    data["health"] = {"max_age": "7 days"}
+    aged = compile_project(Project.model_validate(data))
+    now = dt.datetime.now(dt.UTC)
+    old = (now - dt.timedelta(days=30)).isoformat(timespec="seconds")
+    new = (now - dt.timedelta(hours=1)).isoformat(timespec="seconds")
+
+    def case(case_id):
+        return {
+            "id": case_id,
+            "title": case_id,
+            "metrics": ["order_count"],
+            "dimensions": ["orders.status"],
+            "outcome": "pass",
+        }
+
+    tests = {"total": 0, "passed": 0, "failed": 0, "failures": []}
+    runs = tmp_path / "runs.jsonl"
+    full = {"event": "check", "run_id": "full", "at": old, "rule_tests": tests}
+    full["reconciliations"] = [case("A"), case("B")]
+    partial = {"event": "check", "run_id": "partial", "at": new, "rule_tests": tests}
+    partial |= {"reconciliations": [case("B")], "partial": True}
+    append_run(runs, full)
+    append_run(runs, partial)
+
+    state = Health(aged, runs_path=runs).states()["measure:order_count"]
+    assert state["last_reconciled_at"] == new
+    assert state["state"] == "attention"
+    stale = next(r for r in state["reasons"] if r["code"] == "reconciliation_stale")
+    assert stale["at"] == old
+    assert state["reasons"][0] == {"code": "reconciled", "count": 2, "at": new}
+
+
+def test_console_overview_lists_full_runs_only(setup, graph, duckdb_connector):
+    client, service, _ = setup
+    runs = service.health.runs_path
+    full = run_checks(
+        graph,
+        model_hash=EvidenceBuilder(graph).model_hash,
+        connector=duckdb_connector,
+        source="local",
+        cases=[ZooCase.model_validate(CASES[1])],
+    )
+    append_run(runs, full)
+    assert client.post("/v1/reconcile/R1", headers=MIDWEST).status_code == 200
+    console = Console(service, runs_path=runs)
+    overview = console.overview(Principal(subject="analyst@example.com", channel="api"))
+    assert overview["latest_check"]["run_id"] == full["run_id"]
+    assert overview["latest_check"]["partial"] is False
+    assert [c["run_id"] for c in overview["checks"]] == [full["run_id"]]
+    # The run history still shows the partial run, marked as such.
+    history = console.runs()["runs"]
+    assert history[0]["partial"] is True and history[0]["reconciliations"][0]["id"] == "R1"
+
+
+def test_totals_do_not_depend_on_row_order(graph, duckdb_connector):
+    from cosmos_semantic.planner import QueryRequest
+    from cosmos_semantic.reconcile import Reconciler
+
+    reconciler = Reconciler(graph, duckdb_connector)
+    request = QueryRequest(metrics=["revenue"], dimensions=["orders.status"])
+    _, compiled = reconciler._run(request)
+    values = [0.1, 1e16, 0.2, -1e16, 0.3]
+    cosmos = {(str(i),): v for i, v in enumerate(values)}
+    backwards = {k: cosmos[k] for k in reversed(list(cosmos))}
+    a = reconciler._compare(request, cosmos, cosmos, compiled)["totals"]
+    b = reconciler._compare(request, backwards, backwards, compiled)["totals"]
+    assert a == b and a["cosmos"] == math.fsum(values) == 0.6
+
+
+def test_locked_connector_exposes_only_what_reconciliation_needs(duckdb_connector):
+    import threading
+
+    from cosmos_semantic.service import _LockedConnector
+
+    locked = _LockedConnector(duckdb_connector, threading.Lock())
+    assert locked.dialect == duckdb_connector.dialect
+    assert locked.config is duckdb_connector.config
+    assert locked.execute("SELECT 1 AS one").to_pylist() == [{"one": 1}]
+    with pytest.raises(AttributeError):
+        locked.close  # noqa: B018 - only dialect, config and execute pass through
+
+
+@pytest.mark.parametrize("raw", ["sixty", "nan"])
+def test_a_bad_min_interval_is_a_clear_error(graph, monkeypatch, raw):
+    from cosmos_semantic.errors import ModelError
+
+    monkeypatch.setenv("COSMOS_RECONCILE_MIN_INTERVAL", raw)
+    engine = Engine(graph, ConnectionsFile(data_sources={"local": DataSourceConfig(type="duckdb")}))
+    with pytest.raises(ModelError, match="COSMOS_RECONCILE_MIN_INTERVAL"):
+        SemanticService(engine)

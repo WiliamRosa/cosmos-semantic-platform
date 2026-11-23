@@ -22,8 +22,12 @@ format or the API; such changes are listed under **Changed**.
   applies to it or when its SQL reads anything but the tables of models without row filters.
   An unknown case is a 404, and a case runs at most once per `COSMOS_RECONCILE_MIN_INTERVAL`
   seconds (60 by default; sooner is a 429). A case that cannot run is recorded with its error
-  type only. `cosmos reconcile --json` reports gain `diff`, every row that does not match (up
-  to 1,000).
+  type only. The evidence carries a `reconcile_id`, which is not replayable. Point
+  `COSMOS_CHECK_CASES` at the same file as `cosmos check --cases`, since health matches cases
+  by id; every check run records the file's sha256 as `cases_hash`. The console's latest check
+  and history use full runs only, and its runs list marks partial runs. `cosmos reconcile
+  --json` reports gain `diff`, every row that does not match (up to 1,000), and their totals
+  are summed exactly (`math.fsum`), so they no longer depend on row order.
 
 ## [0.5.0] - 2026-11-23
 

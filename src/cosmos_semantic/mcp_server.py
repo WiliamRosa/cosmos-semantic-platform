@@ -48,7 +48,9 @@ changed since then. Call `impact` with `kind:name` (such as `rule:active_custome
 what a change to a member affects, by owner, source systems and processes.
 Call `reconcile` with a case id (call it without one to list the declared cases) to check
 whether a metric still matches the report a team already uses: it runs the case now and
-returns the row diff and the likely causes, and updates the metric's health."""
+returns the row diff and the likely causes, and updates the metric's health. Its
+`reconcile_id` identifies the run in the audit log; it is not a `query_id` and cannot be
+replayed: call `reconcile` again instead."""
 
 MAX_ROWS_FOR_AGENTS = 200
 

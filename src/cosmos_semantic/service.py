@@ -22,6 +22,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from cosmos_semantic.catalog import Catalog
 from cosmos_semantic.engine import Engine
 from cosmos_semantic.errors import (
     CosmosError,
+    ModelError,
     NotFoundError,
     PolicyError,
     QueryError,
@@ -88,6 +90,10 @@ def _iso_day(value: Any) -> str | None:
     return dt.date.fromisoformat(str(value)[:10]).isoformat()
 
 
+def new_reconcile_id() -> str:
+    return f"rc_{uuid.uuid4().hex[:20]}"
+
+
 def _diff_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         k: [jsonable(v) for v in value] if k == "key" else jsonable(value)
@@ -108,8 +114,18 @@ class _LockedConnector:
         with self._lock:
             return self._connector.execute(*args, **kwargs)
 
+    # An explicit allowlist, not a pass-through: anything else on the connector (a cursor,
+    # the raw connection, another way to run SQL) would bypass the lock, so it is refused.
+    @property
+    def dialect(self) -> str:
+        return self._connector.dialect
+
+    @property
+    def config(self) -> Any:
+        return self._connector.config
+
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._connector, name)
+        raise AttributeError(f"`{name}` is not available on a reconciliation's connector")
 
 
 class SemanticService:
@@ -146,7 +162,14 @@ class SemanticService:
         self._last_reconciled: dict[str, float] = {}
         if reconcile_min_interval is None:
             raw = os.environ.get("COSMOS_RECONCILE_MIN_INTERVAL")
-            reconcile_min_interval = float(raw) if raw else RECONCILE_MIN_INTERVAL
+            try:
+                reconcile_min_interval = float(raw) if raw else RECONCILE_MIN_INTERVAL
+            except ValueError:
+                raise ModelError(
+                    "COSMOS_RECONCILE_MIN_INTERVAL must be a number of seconds"
+                ) from None
+            if math.isnan(reconcile_min_interval):
+                raise ModelError("COSMOS_RECONCILE_MIN_INTERVAL must be a number of seconds")
         self.reconcile_min_interval = max(reconcile_min_interval, 0.0)
 
     def compile(self, request: QueryRequest, principal: Principal) -> CompiledQuery:
@@ -357,12 +380,17 @@ class SemanticService:
     # -- reconcile (DEC-45) ------------------------------------------------------
 
     def _cases(self) -> list[Any]:
-        from cosmos_semantic.reconcile import load_zoo
+        return self._load_cases()[0]
+
+    def _load_cases(self) -> tuple[list[Any], str | None]:
+        """The declared cases and the sha256 of the file they were read from (``cases_hash``),
+        from the same bytes."""
+        from cosmos_semantic.reconcile import cases_from_bytes
 
         if self.cases_path is None:
-            return []
+            return [], None
         try:
-            return load_zoo(self.cases_path)
+            return cases_from_bytes(self.cases_path.read_bytes())
         except (OSError, ValueError, KeyError, TypeError) as exc:
             # The type only: a parse error may quote the file.
             log.warning("cannot read the reconciliation cases: %s", type(exc).__name__)
@@ -400,7 +428,8 @@ class SemanticService:
         try:
             if max_rows is not None and max_rows < 1:
                 raise QueryError("max_rows must be at least 1")
-            case = next((c for c in self._cases() if c.id == case_id), None)
+            cases, cases_hash = self._load_cases()
+            case = next((c for c in cases if c.id == case_id), None)
             if case is None:
                 raise NotFoundError(
                     "no reconciliation case with that id is declared; list the declared cases first"
@@ -451,6 +480,7 @@ class SemanticService:
                 # A run of one case: health keeps the other cases of the latest full run.
                 run["partial"] = True
                 run["channel"] = principal.channel
+                run["cases_hash"] = cases_hash
                 if self.health.runs_path is not None:
                     append_run(self.health.runs_path, run)
         except CosmosError as exc:
@@ -468,7 +498,8 @@ class SemanticService:
         returned = [_diff_row(row) for row in diff[:limit]]
         versions = compiled.trace.rule_versions
         evidence = {
-            "query_id": new_query_id(),
+            # Not a query_id: a reconciliation is not replayable (`replay` takes queries only).
+            "reconcile_id": new_reconcile_id(),
             "run_id": run["run_id"],
             "at": run["at"],
             "as_of": report["cosmos"]["as_of"],
@@ -668,7 +699,7 @@ class SemanticService:
         compiled: CompiledQuery | None = context.get("compiled")
         record = {
             "event": event,
-            "query_id": evidence["query_id"] if evidence else None,
+            "query_id": evidence.get("query_id") if evidence else None,
             "at": dt.datetime.now(dt.UTC).isoformat(),
             "principal": {
                 "subject": principal.subject,
@@ -689,6 +720,8 @@ class SemanticService:
             "outcome": "error" if error else "ok",
             "error": f"{type(error).__name__}: {error}" if error else None,
         }
+        if evidence and evidence.get("reconcile_id"):
+            record["reconcile_id"] = evidence["reconcile_id"]
         line = json.dumps(record, ensure_ascii=False, default=str)
         audit_log.info(line)
         if self.audit_path is not None:
