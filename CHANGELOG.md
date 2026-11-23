@@ -7,6 +7,22 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+### Added
+
+- Rolling windows over a distinct count (DEC-49): a cumulative metric with a `window` over a
+  `count_distinct` measure is now valid, and is recomputed over each window from the facts,
+  never added up from daily values, so a customer who buys on several days of the window
+  counts once ("weekly active customers", "customers active in the last 30 days"). Each output
+  day is joined to a facts CTE of the distinct values of each day (`<measure>_facts`) under the
+  same filters and row filters; a filter on the time dimension still chooses the output days
+  without cutting the windows short (DEC-34), and windows in weeks (DEC-27) work too. The
+  evidence marks such a window with `time.from_facts: true`. Its cost grows with the output
+  days times the window's days. The dbt and Cube exports refuse it as metric loss, and the dbt,
+  Cube and Power BI imports skip it with a warning, until their numbers are checked against the
+  engine's. A rolling window over an `avg` measure is still refused. Reference cases A56 to A58
+  check the numbers against hand-written SQL on every database. Requests without such a window
+  keep their SQL and `sql_hash` on every dialect.
+
 ## [0.5.0] - 2026-11-23
 
 This release adds BigQuery as a data source, checked on a live project, and Trino and Starburst in preview. Metrics gain offsets and rolling windows in weeks, offsets in years, growth in one metric, a reconciliation tolerance, filters on metric values and structured time semantics in the evidence. Requests take structured filters on MCP and REST, and `cosmos reconcile --expected` checks a metric against a report's numbers.
