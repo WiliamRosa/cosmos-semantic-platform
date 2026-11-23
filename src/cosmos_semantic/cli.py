@@ -476,12 +476,21 @@ def reconcile(
     other_model: Annotated[
         Path | None, typer.Option("--other-model", help="Another semantic model to compare with.")
     ] = None,
+    expected: Annotated[
+        Path | None,
+        typer.Option(
+            "--expected",
+            help="CSV of a report's numbers to compare with: the dimension columns and the "
+            "metric's column.",
+        ),
+    ] = None,
     cases: Annotated[
         Path | None, typer.Option("--cases", help="Run a divergence zoo file instead.")
     ] = None,
     as_json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Compares a governed metric with legacy SQL or another model and explains divergences.
+    """Compares a governed metric with legacy SQL, another model or a report's exported numbers
+    (CSV) and explains divergences.
 
     Legacy SQL can read anything the database user can, so this is an operator tool: it is
     not exposed through the REST API or MCP.
@@ -489,6 +498,7 @@ def reconcile(
     from cosmos_semantic.reconcile import (
         check_zoo_case,
         load_zoo,
+        reconcile_csv,
         reconcile_models,
         reconcile_sql,
     )
@@ -514,14 +524,21 @@ def reconcile(
             if failed:
                 raise typer.Exit(1)
             return
-        if not metric or (sql is None) == (other_model is None):
-            _fail(ValueError("give a metric and exactly one of --sql or --other-model, or --cases"))
+        if not metric or [sql, other_model, expected].count(None) != 2:
+            _fail(
+                ValueError(
+                    "give a metric and exactly one of --sql, --other-model or --expected, "
+                    "or --cases"
+                )
+            )
         request = _request([metric], dimension, filter, None, None, as_of)
         principal = _principal(user)
         if sql is not None:
             report = reconcile_sql(
                 graph, connector, request, sql.read_text(encoding="utf-8"), principal
             )
+        elif expected is not None:
+            report = reconcile_csv(graph, connector, request, expected, principal)
         else:
             other = compile_project(load_project(other_model))
             report = reconcile_models(graph, other, connector, request, principal)
@@ -623,6 +640,11 @@ def _print_reconciliation(report: dict) -> None:
     typer.echo(f"  governed {report['cosmos']['formula']}  (as of {report['cosmos']['as_of']})")
     if report["legacy"].get("formula"):
         typer.echo(f"  other    {report['legacy']['formula']}")
+    if report["legacy"]["kind"] == "csv":
+        typer.echo(
+            f"  report   {report['legacy']['file']} ({report['legacy']['rows']} rows); "
+            '"legacy" below is the report'
+        )
     tol = report["tolerance"]
     typer.echo(
         f"  tolerance abs {tol['abs_tolerance']:g}, rel {tol['rel_tolerance']:g} ({tol['source']})"
