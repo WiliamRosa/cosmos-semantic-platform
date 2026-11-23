@@ -360,6 +360,7 @@ format or the API; such changes are listed under **Changed**.
 
 ### Fixed
 
+- The Power BI import tests skip their BigQuery cases on the emulator, which panics on them.
 - `cosmos import cube` and `cosmos import dbt` skip a running total over an `avg` or
   `count_distinct` measure, with a warning naming it, instead of writing a model that
   `cosmos validate` then rejects (DEC-32). Since DEC-21 such a metric is invalid in Cosmos: an
