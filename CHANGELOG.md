@@ -9,6 +9,20 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Reconciliation against a report's numbers (DEC-38): `cosmos reconcile <metric> --by ...
+  --expected report.csv` compares the governed metric with a CSV exported from a report
+  (Excel, Power BI, a finance close), with one column per dimension and one for the metric. It
+  gives the same report as `--sql`, under the metric's declared tolerance or the default:
+  rows that agree, agree within tolerance, differ or are on one side only, totals, examples
+  and the likely-cause probes. The report's `legacy` is `{"kind": "csv", "file", "file_hash",
+  "rows"}`. Dimension columns are named as the request names them or as `cosmos query --csv`
+  writes them; time dimensions take ISO dates or `YYYY-MM`, and a categorical cell matches a
+  number the database returns (such as a `customer_id`) only when it is that number's exact
+  text. Unknown or missing columns,
+  non-numeric values, thousands separators, ragged lines and repeated rows are refused with
+  the file, line and column. The SQL the engine generates and the output of `--sql`,
+  `--other-model` and `--cases` are unchanged. Reconciliation cases in `cosmos check` do not
+  read a CSV yet.
 - Trino and Starburst as a data source, in preview (DEC-43): `type: trino` with the `trino`
   extra (the `trino` client). The connection is a `uri` such as
   `trino://user@host:443/catalog?http_scheme=https`, with `options` for the password (basic
@@ -353,6 +367,7 @@ format or the API; such changes are listed under **Changed**.
 
 ### Fixed
 
+- The Power BI import tests skip their BigQuery cases on the emulator, which panics on them.
 - `cosmos import cube` and `cosmos import dbt` skip a running total over an `avg` or
   `count_distinct` measure, with a warning naming it, instead of writing a model that
   `cosmos validate` then rejects (DEC-32). Since DEC-21 such a metric is invalid in Cosmos: an
