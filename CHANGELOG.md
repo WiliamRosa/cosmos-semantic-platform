@@ -9,7 +9,7 @@ format or the API; such changes are listed under **Changed**.
 
 ## [0.5.0] - 2026-11-23
 
-This release adds BigQuery as a data source, checked on a live project, and Trino and Starburst in preview. Metrics gain offsets in weeks and years, growth in one metric, a reconciliation tolerance, filters on metric values and structured time semantics in the evidence.
+This release adds BigQuery as a data source, checked on a live project, and Trino and Starburst in preview. Metrics gain offsets and rolling windows in weeks, offsets in years, growth in one metric, a reconciliation tolerance, filters on metric values and structured time semantics in the evidence. Requests take structured filters on MCP and REST, and `cosmos reconcile --expected` checks a metric against a report's numbers.
 
 ### Added
 
