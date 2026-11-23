@@ -7,6 +7,27 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+### Fixed
+
+- Model and filter expressions are read as standard SQL on every data source (DEC-53), as
+  documented, and written in each source's dialect. They used to be read in the source's own
+  dialect: on MySQL, MariaDB, Databricks and BigQuery a double-quoted name (`"status" =
+  'paid'`) was a string, so the condition was always false; on Databricks `'O''Brien'` became
+  `CONCAT('O', 'Brien')`, and BigQuery refused it in a dimension or measure; on BigQuery and
+  Snowflake a LIKE pattern lost its backslash (`'a\_b%'` matched more rows). Numbers change by
+  design only for expressions with these forms, on those databases. This covers dimension,
+  measure and entity expressions, metric and measure filters, row filters, derived metric
+  expressions and the expression strings in `filters` (`query`, `show_sql`,
+  `dimension_values`). An expression standard SQL cannot read (T-SQL brackets, MySQL
+  backticks, a quote escaped with a backslash) is still read in the source's dialect, and any
+  parse error, the tokenizer's included, is now a model or query error instead of an
+  unhandled exception. The SQL of every existing reference, TPC-H and divergence zoo request
+  is unchanged on all nine dialects, except four TPC-H requests on Oracle, where a `DATE
+  '1998-09-02'` literal is now written `CAST('1998-09-02' AS DATE)` instead of `TO_DATE(...)`
+  (the same date). Reference cases A56 to A58 check request filters, a dimension and a metric
+  filter with double-quoted names, doubled quotes and LIKE escapes against hand-written SQL on
+  every database.
+
 ## [0.5.0] - 2026-11-23
 
 This release adds BigQuery as a data source, checked on a live project, and Trino and Starburst in preview. Metrics gain offsets and rolling windows in weeks, offsets in years, growth in one metric, a reconciliation tolerance, filters on metric values and structured time semantics in the evidence. Requests take structured filters on MCP and REST, and `cosmos reconcile --expected` checks a metric against a report's numbers.

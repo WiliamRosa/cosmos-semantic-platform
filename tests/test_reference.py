@@ -8,7 +8,7 @@ from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.errors import ModelError
 from cosmos_semantic.evidence import EvidenceBuilder, sql_hash
 from cosmos_semantic.loader import load_project
-from cosmos_semantic.planner import Planner, QueryRequest
+from cosmos_semantic.planner import Planner, Principal, QueryRequest
 from cosmos_semantic.reference import ReferenceCase, load_cases, run_case
 from cosmos_semantic.spec import Project
 
@@ -453,3 +453,121 @@ def test_windows_in_weeks_compile_to_days(week_window_graph):
     assert (time["kind"], time["window"], time["days"]) == ("window", "2 weeks", 14)
     assert builder.time("revenue_rolling_1_week", cases[0].request)["window"] == "1 week"
     assert "over the 2 weeks ending on each day" in builder.formula("revenue_rolling_2_weeks")
+
+
+# -- Expressions in standard SQL (DEC-53) --------------------------------------------------
+# Model and filter expressions are standard SQL on every database. As the cases above, these
+# run here against the example plus a dimension and a metric (each export test counts the
+# example's members), on every database available. The data has no backslash, no quote and no
+# `c_nceled` or `ca_d`, so each LIKE pattern matches no row where its backslash escapes the `_`
+# and none where LIKE has no default escape (SQL Server, Oracle, Trino) either; read without
+# the backslash, as BigQuery did, it matches `canceled` or `card`. Before DEC-53, MySQL,
+# MariaDB, Databricks and BigQuery read "status" as a string, and Databricks wrote 'O''Brien'
+# as CONCAT('O', 'Brien').
+STANDARD_SQL_DIMENSION = {
+    "name": "status_label",
+    "type": "categorical",
+    "expr": "CASE WHEN \"status\" = 'canceled' THEN 'O''Brien' ELSE \"status\" END",
+}
+STANDARD_SQL_METRIC = {
+    "name": "revenue_escaped_filter",
+    "type": "simple",
+    "measure": "revenue",
+    "filter": "{status} NOT LIKE 'c\\_nceled' AND {status} <> 'O''Brien'",
+}
+# A double-quoted lower-case name is another column where unquoted names fold to upper case.
+FOLDS_TO_UPPER_CASE = ("oracle", "snowflake")
+STANDARD_SQL_CASES = [
+    ReferenceCase(
+        id="A56",
+        category="filters",
+        phase=3,
+        title="Payments by method, with request filters holding a doubled quote and a LIKE escape",
+        request=QueryRequest(
+            metrics=["payment_count", "paid_value"],
+            dimensions=["payments.method"],
+            filters=[
+                "{payments.method} NOT LIKE 'ca\\_d'",
+                "{payments.method} <> 'O''Brien'",
+            ],
+        ),
+        sql="""
+SELECT method AS payments__method, COUNT(*) AS payment_count, SUM(value) AS paid_value
+FROM public.payments
+WHERE method NOT LIKE 'ca\\_d' AND method <> 'O''Brien'
+GROUP BY method
+""",
+    ),
+    ReferenceCase(
+        id="A57",
+        category="filters",
+        phase=3,
+        title="Revenue by a dimension whose expression has double-quoted names and a doubled quote",
+        request=QueryRequest(
+            metrics=["revenue", "order_count"], dimensions=["orders.status_label"]
+        ),
+        sql="""
+SELECT CASE WHEN status = 'canceled' THEN 'O''Brien' ELSE status END AS orders__status_label,
+       SUM(amount) AS revenue, COUNT(*) AS order_count
+FROM public.orders
+GROUP BY CASE WHEN status = 'canceled' THEN 'O''Brien' ELSE status END
+""",
+    ),
+    ReferenceCase(
+        id="A58",
+        category="filters",
+        phase=3,
+        title="Revenue by status of a metric whose filter has a LIKE escape and a doubled quote",
+        request=QueryRequest(metrics=["revenue_escaped_filter"], dimensions=["orders.status"]),
+        sql="""
+SELECT status AS orders__status,
+       SUM(CASE WHEN status NOT LIKE 'c\\_nceled' AND status <> 'O''Brien' THEN amount END)
+         AS revenue_escaped_filter
+FROM public.orders
+GROUP BY status
+""",
+    ),
+]
+STANDARD_SQL_SOURCES = [*SOURCES, "trino_connector"]
+
+
+@pytest.fixture(scope="module")
+def standard_sql_graph():
+    data = load_project(EXAMPLE).model_dump(mode="json")
+    orders = next(m for m in data["semantic_models"] if m["name"] == "orders")
+    orders["dimensions"].append(STANDARD_SQL_DIMENSION)
+    data["metrics"].append(STANDARD_SQL_METRIC)
+    return compile_project(Project.model_validate(data))
+
+
+def test_standard_sql_case_ids_are_free():
+    """A56 to A58 live here; `reference/queries_advanced.yml` must not reuse their ids."""
+    taken = {c.id for c in ALL + ADVANCED + WEEK_WINDOW_CASES}
+    assert not taken & {c.id for c in STANDARD_SQL_CASES}
+
+
+@pytest.mark.parametrize("source", STANDARD_SQL_SOURCES)
+@pytest.mark.parametrize("case", STANDARD_SQL_CASES, ids=lambda c: c.id)
+def test_reference_standard_sql_expressions(case, source, standard_sql_graph, request):
+    connector = request.getfixturevalue(source)
+    if case.id == "A57" and connector.dialect in FOLDS_TO_UPPER_CASE:
+        pytest.skip(f"{connector.dialect} folds unquoted names to upper case")
+    _check(case, standard_sql_graph, connector)
+
+
+def test_standard_sql_cases_catch_the_dialect_reading(standard_sql_graph, duckdb_connector):
+    """Each case proves something: on DuckDB, the SQL the dialect reading gave the affected
+    databases (a string for "status", the LIKE escape dropped) returns other rows than the
+    standard reading."""
+    wrong = {
+        "A56": ("NOT LIKE 'ca\\_d'", "NOT LIKE 'ca_d'"),
+        "A57": ('orders."status"', "'status'"),
+        "A58": ("NOT LIKE 'c\\_nceled'", "NOT LIKE 'c_nceled'"),
+    }
+    for case in STANDARD_SQL_CASES:
+        sql = Planner(standard_sql_graph, "duckdb").plan(case.request, Principal()).sql
+        before, after = wrong[case.id]
+        assert before in sql, (case.id, sql)
+        right = duckdb_connector.execute(sql).to_pylist()
+        broken = duckdb_connector.execute(sql.replace(before, after)).to_pylist()
+        assert right and sorted(map(str, right)) != sorted(map(str, broken)), case.id

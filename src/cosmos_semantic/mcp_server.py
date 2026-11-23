@@ -29,11 +29,11 @@ Cosmos semantic layer. Before querying:
    filter `{rule.name}`. Filter by a value with an object
    `{"dimension": "model.dimension", "op": "=", "value": "BR"}` (ops `=`, `!=`, `<`, `<=`,
    `>`, `>=`, `in` and `not in` with a list, `is null`, `is not null`): the server writes the
-   value as a literal, so never quote or escape it. Expression strings with
-   `{model.dimension}` references also work. Before filtering by a value, call
-   `dimension_values` to get the exact values (such as `BR` or `Brazil`): a guessed value
-   returns zero rows that look real. For a time dimension it returns the first and last day
-   with data, so check it before a relative date range.
+   value as a literal, so never quote or escape it. Expression strings in standard SQL
+   with `{model.dimension}` references also work (double a quote inside a string). Before
+   filtering by a value, call `dimension_values` to get the exact values (such as `BR` or
+   `Brazil`): a guessed value returns zero rows that look real. For a time dimension it
+   returns the first and last day with data, so check it before a relative date range.
 Personal data (LGPD) never reaches agents: grouping or filtering by it is denied.
 Always answer with the number the tool returned. Every `query` result has an `evidence`
 envelope: cite the metric formula, the business rules applied (with owner and test status),

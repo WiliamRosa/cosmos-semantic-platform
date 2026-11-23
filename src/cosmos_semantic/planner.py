@@ -72,9 +72,10 @@ FilterScalar = (
 )
 FILTERS_DESCRIPTION = (
     "Conditions on dimensions, applied to the facts before aggregation and ANDed with the row "
-    "filters: expressions with `{model.dimension}` references (`{orders.status} = 'shipped'`), "
-    "or objects `{dimension, op, value}` whose value the server writes as a literal of the "
-    "data source's dialect, so the caller never quotes it."
+    "filters: standard SQL expressions with `{model.dimension}` references "
+    "(`{orders.status} = 'shipped'`, a quote inside a string doubled), or objects "
+    "`{dimension, op, value}` whose value the server writes as a literal of the data source's "
+    "dialect, so the caller never quotes it."
 )
 
 
@@ -475,9 +476,10 @@ class Planner:
     # -- request filters ---------------------------------------------------------
 
     def _request_filters(self, filters: list[str | Filter]) -> list[Template]:
-        """The request's filters as templates: an expression string is parsed and checked; a
-        structured filter (DEC-50) is built as the same tree, its value checked against the
-        dimension's type and written as a literal by SQLGlot, never parsed from text."""
+        """The request's filters as templates: an expression string is parsed as standard SQL
+        (DEC-53) and checked; a structured filter (DEC-50) is built as the same tree, its value
+        checked against the dimension's type and written as a literal by SQLGlot, never parsed
+        from text."""
         templates = []
         for item in filters:
             if isinstance(item, str):
