@@ -7,6 +7,10 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-23
+
+This release adds BigQuery as a data source, checked on a live project, and Trino and Starburst in preview. Metrics gain offsets and rolling windows in weeks, offsets in years, growth in one metric, a reconciliation tolerance, filters on metric values and structured time semantics in the evidence. Requests take structured filters on MCP and REST, and `cosmos reconcile --expected` checks a metric against a report's numbers.
+
 ### Added
 
 - Structured filters on MCP and REST (DEC-50): `filters` in `query`, `show_sql`
@@ -735,7 +739,8 @@ and on the lowest dependency versions this release allows.
   `GET /v1/glossary`.
 - `cosmos init` creates a starter project with the e-commerce example and a local DuckDB source.
 
-[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.3.0
 [0.2.0]: https://github.com/WiliamRosa/cosmos-semantic-platform/releases/tag/v0.2.0
