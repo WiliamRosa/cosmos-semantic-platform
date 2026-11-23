@@ -315,7 +315,8 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
         if isinstance(metric, CumulativeMetric) and metric.window and not metric.window_days():
             warn(
                 loc,
-                "only windows in days, such as `7 days`, are supported; queries will be refused",
+                "only windows in days or weeks, such as `7 days` or `2 weeks`, are supported; "
+                "queries will be refused",
             )
         if isinstance(metric, CumulativeMetric) and metric.measure in g.measure_owner:
             agg = g.models[g.measure_owner[metric.measure]].measures[metric.measure].agg

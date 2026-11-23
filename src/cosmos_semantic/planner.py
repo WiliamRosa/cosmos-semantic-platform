@@ -475,7 +475,7 @@ class Planner:
                 if metric.window_days() is None:
                     raise QueryError(
                         f"`{name}`: window `{metric.window}` is not supported; "
-                        "only windows in days, such as `7 days`, for now"
+                        "only windows in days or weeks, such as `7 days` or `2 weeks`"
                     )
             agg = g.models[g.measure_owner[metric.measure]].measures[metric.measure].agg
             # Model validation refuses both too; kept for graphs compiled without `strict`.
@@ -1000,7 +1000,7 @@ class Planner:
         time = self._time_dim(metric, dims)
         if time.grain != "day":
             raise QueryError(
-                f"`{metric.name}`: a window in days needs the time dimension at day grain "
+                f"`{metric.name}`: a rolling window needs the time dimension at day grain "
                 f"(`{_dim_member(time)}` requested); other grains are not supported yet"
             )
         days = metric.window_days()

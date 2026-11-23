@@ -328,7 +328,7 @@
             }
           ],
           "default": null,
-          "description": "Rolling window, such as `7 days`: the value on day D aggregates the measure over the days D - (N - 1) to D. Only windows in days, queried at day grain, for now.",
+          "description": "Rolling window, such as `7 days`: the value on day D aggregates the measure over the days D - (N - 1) to D. In days or weeks (7 days), queried at day grain.",
           "title": "Window"
         }
       },
