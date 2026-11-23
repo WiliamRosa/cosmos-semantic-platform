@@ -7,10 +7,6 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-11-23
-
-This release adds BigQuery as a data source, checked on a live project, and Trino and Starburst in preview. Metrics gain offsets and rolling windows in weeks, offsets in years, growth in one metric, a reconciliation tolerance, filters on metric values and structured time semantics in the evidence. Requests take structured filters on MCP and REST, and `cosmos reconcile --expected` checks a metric against a report's numbers.
-
 ### Added
 
 - `cosmos export databricks` writes the model as Databricks Unity Catalog metric view YAML
@@ -24,6 +20,13 @@ This release adds BigQuery as a data source, checked on a live project, and Trin
   filters on another model, a time grain, a rule or `$user` are refused until
   `--allow-metric-loss`, each with a warning. On DuckDB, 57 exported measure-and-grouping pairs
   return the planner's numbers; the same test runs on Databricks when its credentials are set.
+
+## [0.5.0] - 2026-11-23
+
+This release adds BigQuery as a data source, checked on a live project, and Trino and Starburst in preview. Metrics gain offsets and rolling windows in weeks, offsets in years, growth in one metric, a reconciliation tolerance, filters on metric values and structured time semantics in the evidence. Requests take structured filters on MCP and REST, and `cosmos reconcile --expected` checks a metric against a report's numbers.
+
+### Added
+
 - Structured filters on MCP and REST (DEC-50): `filters` in `query`, `show_sql`
   (`POST /v1/query`, `POST /v1/sql`) and `dimension_values` take objects
   `{"dimension", "op", "value"}` next to expression strings, which keep working unchanged.
