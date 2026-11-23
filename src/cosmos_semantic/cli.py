@@ -492,8 +492,9 @@ def reconcile(
     """Compares a governed metric with legacy SQL, another model or a report's exported numbers
     (CSV) and explains divergences.
 
-    Legacy SQL can read anything the database user can, so this is an operator tool: it is
-    not exposed through the REST API or MCP.
+    Legacy SQL can read anything the database user can, so this is an operator tool. The REST
+    API and MCP run only the cases declared in COSMOS_CHECK_CASES, and refuse those that read
+    data under row filters.
     """
     from cosmos_semantic.reconcile import (
         check_zoo_case,

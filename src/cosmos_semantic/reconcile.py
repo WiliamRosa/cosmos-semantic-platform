@@ -20,7 +20,9 @@ declares (``reconciliation: {abs_tolerance, rel_tolerance}``, DEC-39): a finance
 rounded to cents or thousands can then agree. The report states which tolerance applied.
 
 Running arbitrary SQL can read data that row filters hide, so SQL reconciliation is an
-operator tool (CLI), not an API or MCP feature.
+operator tool (CLI). The API and MCP run only the cases the operator declared
+(``COSMOS_CHECK_CASES``, DEC-45), never SQL from the caller, and refuse a case whose
+hand-written SQL could read rows a row filter hides (see ``row_filter_conflicts``).
 """
 
 from __future__ import annotations
@@ -59,6 +61,8 @@ REL_TOL = DEFAULT_REL_TOLERANCE
 MAX_CATEGORY_VALUES = 8
 TIME_SHIFTS_HOURS = (1, 2, 3, 4, 5, -1, -2, -3, -4, -5)
 PROBE_PREFIX = "probe__"
+# Most rows a report lists in `diff` (every row that does not match, DEC-45).
+MAX_DIFF_ROWS = 1000
 
 Rows = dict[tuple, Any]
 
@@ -430,6 +434,12 @@ class Reconciler:
         only_cosmos = sorted(set(cosmos) - set(legacy), key=str)
         only_legacy = sorted(set(legacy) - set(cosmos), key=str)
         status = "match" if not (differing or only_cosmos or only_legacy) else "divergent"
+        diff = sorted(
+            [example(k, cosmos[k], legacy[k]) | {"side": "both"} for k in differing]
+            + [example(k, cosmos[k], None) | {"side": "only_in_cosmos"} for k in only_cosmos]
+            + [example(k, None, legacy[k]) | {"side": "only_in_legacy"} for k in only_legacy],
+            key=lambda e: str(tuple(e["key"])),
+        )
         total_c = sum(_number(v) or 0 for v in cosmos.values())
         total_l = sum(_number(v) or 0 for v in legacy.values())
         name = request.metrics[0]
@@ -455,6 +465,9 @@ class Reconciler:
             + [example(k, cosmos[k], None) for k in only_cosmos[:3]]
             + [example(k, None, legacy[k]) for k in only_legacy[:3]],
             "tolerated": [example(k, cosmos[k], legacy[k]) for k in tolerated[:5]],
+            # The row diff: every row that does not match, in key order, up to MAX_DIFF_ROWS.
+            "diff": diff[:MAX_DIFF_ROWS],
+            "diff_truncated": len(diff) > MAX_DIFF_ROWS,
             "cosmos": {
                 "formula": self.evidence.formula(name),
                 "sql_hash": sql_hash(compiled.sql),
@@ -868,10 +881,16 @@ def load_zoo(path: str | Path) -> list[ZooCase]:
 
 
 def check_zoo_case(
-    case: ZooCase, graph: SemanticGraph, connector: Connector
+    case: ZooCase,
+    graph: SemanticGraph,
+    connector: Connector,
+    principal: Principal | None = None,
 ) -> tuple[bool, dict[str, Any]]:
-    """Runs one case; it passes when the status matches and every expected cause is found."""
-    principal = Principal(user=case.user, channel="cli", subject="reconciliation")
+    """Runs one case; it passes when the status matches and every expected cause is found.
+
+    The governed side runs as the case's own ``user`` unless a principal is given: the API
+    and MCP run it as the caller (DEC-45)."""
+    principal = principal or Principal(user=case.user, channel="cli", subject="reconciliation")
     report = reconcile_sql(
         graph, connector, case.request, case.sql_for(connector.dialect), principal
     )
@@ -879,3 +898,55 @@ def check_zoo_case(
     expect = case.expect or ZooExpectation(status="match")
     ok = report["status"] == expect.status and set(expect.causes) <= found
     return ok, report
+
+
+def row_filter_conflicts(case: ZooCase, graph: SemanticGraph, dialect: str) -> list[str]:
+    """Why a case's hand-written SQL could read rows a row filter hides; empty when it cannot.
+
+    Row filters cannot be applied to hand-written SQL, so the API and MCP (DEC-45) run a case
+    only when every table its SQL reads is the table of a semantic model without row filters.
+    It is an allowlist: a view, a table outside the model, a table function or SQL that does
+    not parse is a conflict, as is a table that might be the table of a model with row filters
+    (names are compared leniently, so an unqualified name matches every schema)."""
+    from sqlglot import exp, parse
+
+    def parts(table: exp.Table) -> tuple[str, ...]:
+        return tuple(p.name.lower() for p in table.parts)
+
+    def same(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
+        # The trailing parts both name must agree: `orders` matches `public.orders`.
+        n = min(len(a), len(b))
+        return n > 0 and a[-n:] == b[-n:]
+
+    models = []
+    for name, node in graph.models.items():
+        try:
+            table = exp.to_table(node.spec.table, dialect=dialect)
+        except Exception:  # noqa: BLE001 - an unreadable table name is simply not allowed
+            table = None
+        models.append(
+            (name, parts(table) if table is not None else (), bool(node.spec.row_filters))
+        )
+    try:
+        trees = [t for t in parse(case.sql_for(dialect), read=dialect) if t is not None]
+    except Exception:  # noqa: BLE001 - sqlglot raises several error types
+        return ["its SQL cannot be parsed"]
+    if not trees:
+        return ["its SQL is empty"]
+    conflicts: list[str] = []
+    for tree in trees:
+        ctes = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
+        for table in tree.find_all(exp.Table):
+            name = parts(table)
+            if len(name) == 1 and name[0] in ctes:
+                continue
+            if not name or not table.name or not isinstance(table.this, exp.Identifier):
+                conflicts.append("it reads something other than a table")
+                continue
+            matches = [m for m in models if m[1] and same(name, m[1])]
+            if not matches:
+                conflicts.append("it reads a table that is not the table of a semantic model")
+            elif any(filtered for _, _, filtered in matches):
+                filtered = sorted(n for n, _, f in matches if f)
+                conflicts.append(f"it reads the table of `{filtered[0]}`, which has row filters")
+    return list(dict.fromkeys(conflicts))

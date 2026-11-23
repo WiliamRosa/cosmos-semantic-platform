@@ -24,6 +24,7 @@ from cosmos_semantic.ontology import run_rule_tests
 if TYPE_CHECKING:
     from cosmos_semantic.compiler import SemanticGraph
     from cosmos_semantic.connectors import Connector
+    from cosmos_semantic.planner import Principal
     from cosmos_semantic.reconcile import ZooCase
 
 
@@ -34,8 +35,14 @@ def run_checks(
     connector: Connector | None = None,
     source: str | None = None,
     cases: list[ZooCase] | None = None,
+    principal: Principal | None = None,
+    reports: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """One check run. Reconciliations need a connector; rule tests run on DuckDB alone."""
+    """One check run. Reconciliations need a connector; rule tests run on DuckDB alone.
+
+    ``principal`` runs the governed side of every case as that user instead of the case's own
+    ``user`` (the API and MCP, DEC-45). ``reports``, when given, receives each case's full
+    reconciliation report (row diff, diagnosis) by case id; the run itself keeps a summary."""
     from cosmos_semantic.reconcile import check_zoo_case
 
     started = time.perf_counter()
@@ -52,7 +59,9 @@ def run_checks(
             item.update(outcome="skipped", detail="no data source")
         else:
             try:
-                ok, report = check_zoo_case(case, graph, connector)
+                ok, report = check_zoo_case(case, graph, connector, principal)
+                if reports is not None:
+                    reports[case.id] = report
                 item.update(
                     outcome="pass" if ok else "fail",
                     status=report["status"],

@@ -7,6 +7,22 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+### Added
+
+- Reconciliation through MCP and REST (DEC-45): the MCP tool `reconcile` and
+  `POST /v1/reconcile/{case}` run a reconciliation case the operator declared in
+  `COSMOS_CHECK_CASES` (the file `cosmos check --cases` reads), so an agent can ask whether a
+  number is still reconciled. They return the outcome, the row counts and totals, the row diff
+  (at most 200 rows), the likely causes, the metric's updated health and the evidence, and
+  append a partial check run to `COSMOS_RUNS_LOG`: health updates that case and keeps the
+  others from the latest `cosmos check`. `GET /v1/reconcile` (the tool without `case`) lists
+  the declared cases without their SQL. Only declared cases run, never SQL from the caller,
+  as the caller, with the same authentication and audit as `query` (event `reconcile`). Row
+  filters cannot be applied to hand-written SQL, so a case is refused (403) when a row filter
+  applies to it or when its SQL reads anything but the tables of models without row filters.
+  An unknown case is a 404. `cosmos reconcile --json` reports gain `diff`, every row that does
+  not match (up to 1,000).
+
 ## [0.5.0] - 2026-11-23
 
 This release adds BigQuery as a data source, checked on a live project, and Trino and Starburst in preview. Metrics gain offsets and rolling windows in weeks, offsets in years, growth in one metric, a reconciliation tolerance, filters on metric values and structured time semantics in the evidence. Requests take structured filters on MCP and REST, and `cosmos reconcile --expected` checks a metric against a report's numbers.

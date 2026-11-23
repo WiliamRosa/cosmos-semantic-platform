@@ -16,7 +16,12 @@ from cosmos_semantic.auth import Authenticator, AuthError
 from cosmos_semantic.errors import CosmosError, QueryError
 from cosmos_semantic.evidence import engine_version
 from cosmos_semantic.planner import Filter, Principal, QueryRequest
-from cosmos_semantic.service import MAX_DIMENSION_VALUES, VALUES_FETCH_CEILING, SemanticService
+from cosmos_semantic.service import (
+    MAX_DIMENSION_VALUES,
+    MAX_RECONCILE_DIFF_ROWS,
+    VALUES_FETCH_CEILING,
+    SemanticService,
+)
 
 INSTRUCTIONS = """\
 Cosmos semantic layer. Before querying:
@@ -40,7 +45,10 @@ envelope: cite the metric formula, the business rules applied (with owner and te
 the reference date (`as_of`) and the `query_id`, so the answer can be audited and replayed.
 Call `replay` with a `query_id` the user ran to tell whether the model, the SQL or the data
 changed since then. Call `impact` with `kind:name` (such as `rule:active_customer`) to tell
-what a change to a member affects, by owner, source systems and processes."""
+what a change to a member affects, by owner, source systems and processes.
+Call `reconcile` with a case id (call it without one to list the declared cases) to check
+whether a metric still matches the report a team already uses: it runs the case now and
+returns the row diff and the likely causes, and updates the metric's health."""
 
 MAX_ROWS_FOR_AGENTS = 200
 
@@ -206,6 +214,26 @@ def build_mcp(service: SemanticService, authenticator: Authenticator | None) -> 
     )
     def impact(name: str, ctx: Context) -> dict[str, Any]:
         return guarded(lambda: service.impact(name, requester=principal(ctx)))()
+
+    @mcp.tool(
+        description=(
+            "Run a reconciliation case the operator declared, by `case` id: compare a governed "
+            "metric with the legacy report SQL a team already uses, now. Returns `outcome` "
+            "(`pass` or `fail`), `status` (`match` or `divergent`), row counts and totals, the "
+            f"row diff (at most {MAX_RECONCILE_DIFF_ROWS} rows that do not match), the likely "
+            "causes and the evidence, and records a check run so the metric's `health` "
+            "updates. Without `case`, lists the declared cases. Only declared cases run, never "
+            "SQL you send; a case that reads data under row filters is refused."
+        )
+    )
+    def reconcile(ctx: Context, case: str | None = None) -> dict[str, Any]:
+        def run():
+            user = principal(ctx)
+            if case is None:
+                return service.reconcile_cases()
+            return service.reconcile(case, user, max_rows=MAX_RECONCILE_DIFF_ROWS)
+
+        return guarded(run)()
 
     return mcp
 
