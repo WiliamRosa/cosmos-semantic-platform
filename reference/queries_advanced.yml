@@ -1264,6 +1264,9 @@ cases:
           ON (y.status = cur.status OR (y.status IS NULL AND cur.status IS NULL))
           AND y.k = cur.k - 12
 
+  # A52 to A54 (rolling windows in weeks, DEC-27) are in tests/test_reference.py: they need
+  # metrics the example does not have.
+
   # Structured filters (DEC-50): objects {dimension, op, value}, whose values the engine writes
   # as literals of each dialect. The `not in` list holds a quote and a backslash before a quote,
   # which no segment carries: on every database it keeps exactly the non-null segments, and a

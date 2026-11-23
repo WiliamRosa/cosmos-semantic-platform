@@ -179,7 +179,7 @@ metrics:
 
 #### Rolling windows
 
-A rolling window aggregates the measure over the last N days, today included:
+A rolling window aggregates the measure over the last N days, today included (or the last N weeks, read as 7N days):
 
 ```yaml
 metrics:
@@ -197,7 +197,8 @@ metrics:
   - **Not yet.** Running totals with `grain_to_date` and inputs read at an earlier period (offsets) still apply every filter to the facts first; letting them read back to the start of the period, or to the earlier period, are the next slices.
 - **Other dimensions.** Each combination of the other requested dimensions has its own window; a null value is a group of its own. A null day (a fact with no date) is a row whose value is null.
 - **Measures.** `sum` and `count` add up over the window; `min` and `max` take the minimum or maximum of the window. `avg` and `count_distinct` are refused: they cannot be combined from daily values, and recomputing them over each window is a later slice. The model itself is invalid (`cosmos validate` and `cosmos check` report it), not only a query of the metric.
-- **Supported for now.** Only windows in days (`1 day`, `7 days`, `30 days`), queried with the time dimension at day grain (`orders.ordered_at__day`). Other units (`2 weeks`, `1 month`) and other grains are refused with an error.
+- **Weeks.** A window in weeks is read as 7 days per week (DEC-27): `1 week` is `7 days`, `2 weeks` is `14 days`, singular or plural. It runs where the window in days runs (day grain only) and gives exactly its SQL, and so its `sql_hash`; the evidence (`time.window`, the formula) and the catalog keep the window as written, with the days in `time.days`. The dbt export writes it in weeks (`window: 2 weeks`, 14 days in MetricFlow) and its import reads it back as `2 weeks`; the Cube export writes its days (`trailing: 14 day`), because Cube does not render a week interval on every database, so a Cube round trip gives `14 days`, with the same numbers.
+- **Supported for now.** Only windows in days or weeks (`1 day`, `7 days`, `30 days`, `1 week`, `2 weeks`), queried with the time dimension at day grain (`orders.ordered_at__day`). Other units (`1 month`), a window of zero and other grains are refused with an error.
 - **SQL.** The daily aggregate is joined to itself on the date range, with no window frame, so the same SQL shape runs on every data source (SQL Server has no `RANGE` frame with an interval).
 
 #### Period over period
@@ -601,4 +602,4 @@ Whatever Cube does not represent the same way produces a warning on export:
 
 - Conversion (funnel) metrics.
 - A time spine for series without gaps on days without data.
-- Rolling windows in units other than days, or at grains other than the day.
+- Rolling windows in units other than days or weeks, or at grains other than the day.
