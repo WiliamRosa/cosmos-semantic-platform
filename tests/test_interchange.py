@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 from cosmos_semantic.cli import _glossary_resolver, app
 from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.errors import MetricLossError, PolicyError, PolicyLossError, QueryError
-from cosmos_semantic.expressions import REF_RE
+from cosmos_semantic.expressions import filter_refs
 from cosmos_semantic.interchange import dump_project, import_model
 from cosmos_semantic.interchange.cube import export_cube
 from cosmos_semantic.interchange.dbt import export_dbt
@@ -254,7 +254,7 @@ def _without_business(project: Project) -> dict:
 
 
 def _uses_rule(case, rules: set[str]) -> bool:
-    refs = REF_RE.findall(" ".join(case.request.filters)) + case.request.dimensions
+    refs = [r for f in case.request.filters for r in filter_refs(f)] + case.request.dimensions
     names = [r.split("__")[0] for r in refs]
     return any(r.startswith("rule.") or r.split(".")[-1] in rules for r in names)
 
@@ -877,7 +877,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 71
+    assert len(REFERENCE) == 72
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1261,7 +1261,7 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     # A32 (month-to-date by quarter) and A39 (year-to-date by week) are refused by the
     # re-imported model too; A33 is the 30-day window of customers by segment.
     assert {"R17", "R18", "A08", "A09", "A32", "A33", "A39", "A40", "A41"} <= {c.id for c in cases}
-    assert len(cases) == 57
+    assert len(cases) == 58
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -2437,7 +2437,7 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     governed = compile_project(_with_policies(back.project, graph.project))
     cases = _cube_cases(graph.project, policies=True, lost=DBT_LOST)
     assert {"R17", "R18", "A32", "A33", "A38", "A39", "A40", "A41", "A42"} <= {c.id for c in cases}
-    assert len(cases) == 64
+    assert len(cases) == 65
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"

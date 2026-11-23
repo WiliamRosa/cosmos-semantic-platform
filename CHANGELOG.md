@@ -9,6 +9,18 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Structured filters on MCP and REST (DEC-50): `filters` in `query`, `show_sql`
+  (`POST /v1/query`, `POST /v1/sql`) and `dimension_values` take objects
+  `{"dimension", "op", "value"}` next to expression strings, which keep working unchanged.
+  Operators: `=`, `!=`/`<>`, `<`, `<=`, `>`, `>=`, `in` and `not in` with a list, `is null` and
+  `is not null`. The server writes the value as a literal of the data source's dialect through
+  SQLGlot, so no client quotes or escapes a value; a quote or a backslash in a value stays a
+  value on MySQL, MariaDB, Databricks and BigQuery. A structured filter and the equivalent
+  expression string give the same SQL and `sql_hash`. Values are checked against the
+  dimension's type. `dimension_values` gains `filters` (the MCP argument, and
+  `POST /v1/dimensions/{name}/values` with `{"limit", "filters"}`), so it counts only the rows
+  they keep; its evidence lists them. The console's query explorer sends structured filters
+  instead of quoting values itself. Reference case A55 checks the numbers on every database.
 - Reconciliation against a report's numbers (DEC-38): `cosmos reconcile <metric> --by ...
   --expected report.csv` compares the governed metric with a CSV exported from a report
   (Excel, Power BI, a finance close), with one column per dimension and one for the metric. It

@@ -2,9 +2,11 @@
 
 // The query explorer (DEC-41): pick a metric, dimensions, a time grain and filters, then run
 // the request through the public API (`POST /v1/query`) or preview its SQL (`POST /v1/sql`).
-// It sends a structured request, never SQL: filters are built from a dimension, an operator
-// and a value, and the server checks them like any other request. The same credential, row
-// filters and audit apply as for any API client. Everything shown is rendered as text.
+// It sends a structured request, never SQL: each filter is an object with a dimension, an
+// operator and a value (DEC-50). The server writes the value as a literal of the data source's
+// dialect, so the console never quotes or escapes it, and checks it like any other request.
+// The same credential, row filters and audit apply as for any API client. Everything shown is
+// rendered as text.
 
 import { Play, Plus, SquareTerminal, X } from "lucide-react";
 import Link from "next/link";
@@ -16,6 +18,7 @@ import {
   type QueryRequest,
   type QueryResult,
   type SqlPreview,
+  type StructuredFilter,
 } from "@/lib/api";
 import { type Key, useI18n } from "@/lib/i18n";
 import { useSession } from "@/lib/session";
@@ -42,25 +45,29 @@ function operatorsFor(type: string | undefined): readonly Operator[] {
 }
 
 /**
- * A filter row as a request expression (`{model.dimension} op literal`), or null when the value
- * is missing or does not fit the dimension's type. Strings are quoted with '' escaping; the
- * server parses and checks the expression again.
+ * A filter row as a structured filter (`{dimension, op, value}`), or null when the value is
+ * missing or does not fit the dimension's type. The value is sent as it is, typed (number,
+ * boolean or text): the server writes the literal, so nothing here quotes or escapes it.
  */
-export function filterExpression(row: FilterRow, type: string | undefined): string | null {
-  const ref = `{${row.dimension}}`;
+export function filterObject(row: FilterRow, type: string | undefined): StructuredFilter | null {
   const value = row.value.trim();
   if (!row.dimension || !value || !operatorsFor(type).includes(row.op)) return null;
+  const filter = (v: StructuredFilter["value"]): StructuredFilter => ({
+    dimension: row.dimension,
+    op: row.op,
+    value: v,
+  });
   if (type === "number") {
     const n = Number(value);
-    return Number.isFinite(n) ? `${ref} ${row.op} ${n}` : null;
+    return Number.isFinite(n) ? filter(n) : null;
   }
   if (type === "boolean") {
-    return value === "true" || value === "false" ? `${ref} ${row.op} ${value}` : null;
+    return value === "true" || value === "false" ? filter(value === "true") : null;
   }
   if (type === "time") {
-    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${ref} ${row.op} '${value}'` : null;
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? filter(value) : null;
   }
-  return `${ref} ${row.op} '${value.replaceAll("'", "''")}'`;
+  return filter(value);
 }
 
 type Outcome =
@@ -98,7 +105,7 @@ export function QueryExplorer({ members, initialMetric }: { members: Members; in
   const [nextId, setNextId] = useState(1);
 
   const built = useMemo(() => {
-    const expressions = filters.map((f) => filterExpression(f, byName.get(f.dimension)?.type));
+    const structured = filters.map((f) => filterObject(f, byName.get(f.dimension)?.type));
     const time = timeDimension ? (grain ? `${timeDimension}__${grain}` : timeDimension) : null;
     const request: QueryRequest = {
       metrics: [metric],
@@ -106,12 +113,12 @@ export function QueryExplorer({ members, initialMetric }: { members: Members; in
       // Periods in order; without a time dimension the server's order stands.
       ...(time ? { order_by: [time] } : {}),
       filters: [
-        ...expressions.filter((e): e is string => e !== null),
+        ...structured.filter((f): f is StructuredFilter => f !== null),
         ...rules.map((r) => `{rule.${r}}`),
       ],
       limit,
     };
-    return { request, incomplete: expressions.some((e) => e === null) };
+    return { request, incomplete: structured.some((f) => f === null) };
   }, [metric, timeDimension, grain, dimensions, filters, rules, limit, byName]);
 
   const valid = Boolean(metric) && !built.incomplete && limit >= 1 && limit <= MAX_LIMIT;

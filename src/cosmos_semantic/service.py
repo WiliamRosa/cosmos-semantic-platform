@@ -31,8 +31,9 @@ from cosmos_semantic.evidence import (
     result_hash,
     sql_hash,
 )
+from cosmos_semantic.expressions import describe_filter
 from cosmos_semantic.health import Health
-from cosmos_semantic.planner import CompiledQuery, Principal, QueryRequest
+from cosmos_semantic.planner import CompiledQuery, Filter, Principal, QueryRequest
 
 audit_log = logging.getLogger("cosmos.audit")
 log = logging.getLogger(__name__)
@@ -146,16 +147,28 @@ class SemanticService:
         }
 
     def dimension_values(
-        self, dimension: str, principal: Principal, *, limit: int | None = None
+        self,
+        dimension: str,
+        principal: Principal,
+        *,
+        limit: int | None = None,
+        filters: list[str | Filter] | None = None,
     ) -> dict[str, Any]:
         """Distinct values of a categorical or boolean dimension with their counts: the rows
-        of the dimension's own model (after the caller's row filters) carrying each value.
+        of the dimension's own model (after the caller's row filters and the request's
+        ``filters``, expression strings or structured filters, DEC-50) carrying each value.
         At most ``MAX_DIMENSION_VALUES``; audited like a query (event `dimension_values`).
         A time dimension gets its date range instead (``time_range``); ``limit`` does not
         apply to it."""
         started = time.perf_counter()
+        filters = list(filters or [])
         request: dict[str, Any] = {"dimensions": [dimension], "limit": limit}
-        context: dict[str, Any] = {"request": request, "principal": principal}
+        if filters:
+            request["filters"] = [
+                f if isinstance(f, str) else f.model_dump(mode="json", exclude_defaults=True)
+                for f in filters
+            ]
+        context: dict[str, Any] = {"request": request, "principal": principal, "filters": filters}
         try:
             graph = self.engine.graph
             ref = graph.resolve_dimension(dimension)
@@ -172,7 +185,9 @@ class SemanticService:
             limit = request["limit"] = min(limit or MAX_DIMENSION_VALUES, MAX_DIMENSION_VALUES)
             # One row more than the ceiling tells whether even the fetched list was cut.
             fetch = VALUES_FETCH_CEILING + 1
-            compiled = self.engine.compile_values(dimension, principal, limit=fetch)
+            compiled = self.engine.compile_values(
+                dimension, principal, limit=fetch, filters=filters
+            )
             context["compiled"] = compiled
             with self._lock:
                 connector = self.engine.connector(compiled.data_source)
@@ -191,7 +206,9 @@ class SemanticService:
         )
         kept = pairs[:limit]
         returned = pa.table({"value": [v for v, _ in kept], "count": [n for _, n in kept]})
-        evidence = self._values_evidence(compiled, {"count_of": f"rows of `{ref.model}`"}, returned)
+        evidence = self._values_evidence(
+            compiled, {"count_of": f"rows of `{ref.model}`"}, returned, filters
+        )
         self._audit(
             context, evidence=evidence, ms=time.perf_counter() - started, event="dimension_values"
         )
@@ -211,7 +228,9 @@ class SemanticService:
         model (its business time zone); ISO dates; with no rows, null, null and 0."""
         principal: Principal = context["principal"]
         try:
-            compiled = self.engine.compile_time_range(dimension, principal)
+            compiled = self.engine.compile_time_range(
+                dimension, principal, filters=context["filters"]
+            )
             context["compiled"] = compiled
             with self._lock:
                 connector = self.engine.connector(compiled.data_source)
@@ -234,6 +253,7 @@ class SemanticService:
             compiled,
             {"count_of": f"days with rows of `{model}`", "timezone": zone},
             returned,
+            context["filters"],
         )
         self._audit(
             context, evidence=evidence, ms=time.perf_counter() - started, event="dimension_values"
@@ -248,7 +268,11 @@ class SemanticService:
         }
 
     def _values_evidence(
-        self, compiled: CompiledQuery, extra: dict[str, Any], returned: pa.Table
+        self,
+        compiled: CompiledQuery,
+        extra: dict[str, Any],
+        returned: pa.Table,
+        filters: list[str | Filter],
     ) -> dict[str, Any]:
         """The evidence of a `dimension_values` call: what ran, on what, under which filters."""
         versions = compiled.trace.rule_versions
@@ -258,6 +282,7 @@ class SemanticService:
             "data_source": {"name": self._source(compiled), "dialect": compiled.dialect},
             "model_hash": self.evidence.model_hash,
             **extra,
+            "filters": [describe_filter(f) for f in filters],
             "row_filters": merge_row_filters(compiled.trace.row_filters),
             "rules": [
                 {

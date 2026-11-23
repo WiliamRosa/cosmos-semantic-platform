@@ -432,6 +432,31 @@ processes:
 
 Measures and dimensions inherit the owner of their model. `cosmos impact` groups the affected members by owner (`unowned` when nobody owns them) and lists the source systems, and `cosmos graph` exports everything as Mermaid, Graphviz DOT or JSON, optionally focused on one member (`--focus metric:net_revenue`): what it depends on, what depends on it and who owns each part.
 
+## Structured filters
+
+A request's `filters` (in `POST /v1/query`, `POST /v1/sql`, `POST /v1/dimensions/{name}/values` and the MCP tools `query`, `show_sql` and `dimension_values`) take expression strings with `{model.dimension}` references, or objects with a dimension, an operator and a value (DEC-50). Both kinds can be mixed; every filter is ANDed with the others and with the user's row filters.
+
+```json
+{
+  "metrics": ["revenue"],
+  "dimensions": ["customers.state"],
+  "filters": [
+    {"dimension": "orders.status", "op": "in", "value": ["completed", "pending"]},
+    {"dimension": "customers.segment", "op": "!=", "value": "O'Brien"},
+    {"dimension": "orders.ordered_at", "op": ">=", "value": "2026-01-01"},
+    "{rule.active_customer}"
+  ]
+}
+```
+
+- **Operators.** `=`, `!=` (or `<>`), `<`, `<=`, `>`, `>=` with one value; `in` and `not in` with a non-empty list of at most 1,000 values; `is null` and `is not null` with no value. Case and extra spaces in the operator do not matter.
+- **Values.** Strings, numbers and booleans, sent as JSON values. The server checks them against the dimension's type: numbers for a number dimension, `true` or `false` for a boolean one, ISO dates or date-times as strings for a time dimension, strings or numbers for a categorical one. A dimension may carry a time grain (`orders.ordered_at__month`) or be a business rule (`rule.active_customer`).
+- **Literals.** The value never goes through a parser: SQLGlot writes it as a literal of the data source's dialect, with that dialect's quoting and escaping. A client therefore never quotes or escapes a value, and a value such as `O'Brien` or `a\'b` stays that value on MySQL, MariaDB, Databricks and BigQuery, which read a backslash in a string as an escape.
+- **Same SQL.** A structured filter and the equivalent expression string (written with the dialect's own quoting) produce the same SQL, and so the same `sql_hash`. The audit log keeps the object as sent, so a replay gets the same SQL; the console's answers and the evidence show it as the equivalent expression.
+- **Errors.** An unknown operator, a value of the wrong shape (a list for `=`, a value for `is null`) or an unknown field is refused before planning (HTTP 422, or an MCP tool error); an unknown dimension or a value that does not fit the dimension's type is a `QueryError` (HTTP 400). Personal data stays refused to agents, as with expression strings.
+
+Reference case A55 checks the numbers of a request with structured filters, among them a `not in` list holding a quote and a backslash before a quote, against hand-written SQL on every database.
+
 ## Filters on metric values
 
 A request's `filters` restrict the facts before aggregation. Its `metric_filters` keep only the rows of the result whose metric values meet conditions, after aggregation, at the requested grain: "the states with more than 450,000 in revenue", "the segments whose average order value is at least 2,600 with more than 5 orders".

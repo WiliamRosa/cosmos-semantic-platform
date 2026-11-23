@@ -14,6 +14,7 @@ from typing import Annotated, Any
 import anyio
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from cosmos_semantic.auth import Authenticator, AuthError, ForbiddenError
 from cosmos_semantic.errors import (
@@ -24,7 +25,7 @@ from cosmos_semantic.errors import (
     QueryError,
 )
 from cosmos_semantic.evidence import engine_version
-from cosmos_semantic.planner import Principal, QueryRequest
+from cosmos_semantic.planner import FILTERS_DESCRIPTION, Filter, Principal, QueryRequest
 from cosmos_semantic.service import SemanticService
 
 _STATUS = {
@@ -35,6 +36,15 @@ _STATUS = {
     ConnectorError: 502,
     ModelError: 500,
 }
+
+
+class ValuesRequest(BaseModel):
+    """The body of `POST /v1/dimensions/{name}/values`: `GET` with filters (DEC-50)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int | None = None
+    filters: list[str | Filter] = Field([], description=FILTERS_DESCRIPTION)
 
 
 class MCPAuthGate:
@@ -206,6 +216,13 @@ def create_app(
     )
     def dimension_values(name: str, user: User, limit: int | None = None) -> dict[str, Any]:
         return service.dimension_values(name, user, limit=limit)
+
+    @app.post(
+        "/v1/dimensions/{name}/values",
+        summary="Distinct values or date range of a dimension, under the request's filters",
+    )
+    def dimension_values_filtered(name: str, body: ValuesRequest, user: User) -> dict[str, Any]:
+        return service.dimension_values(name, user, limit=body.limit, filters=body.filters)
 
     @app.get(
         "/v1/impact/{name}",

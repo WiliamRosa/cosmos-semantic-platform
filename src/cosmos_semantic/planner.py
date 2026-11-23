@@ -10,10 +10,19 @@ from __future__ import annotations
 import datetime as dt
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 
@@ -28,6 +37,8 @@ from cosmos_semantic.compiler import (
 )
 from cosmos_semantic.errors import PolicyError, QueryError
 from cosmos_semantic.expressions import (
+    COMPARISONS,
+    LIST_OPS,
     Template,
     check_request_expression,
     literal,
@@ -35,6 +46,7 @@ from cosmos_semantic.expressions import (
     qualify,
     ref_index,
     ref_placeholder,
+    structured_template,
     substitute,
     table_ref,
 )
@@ -53,13 +65,66 @@ from cosmos_semantic.spec import (
     window_agg_refusal,
 )
 
+# Most values in the list of an `in` or `not in` structured filter.
+MAX_FILTER_VALUES = 1000
+FilterScalar = (
+    StrictStr | StrictBool | StrictInt | Annotated[float, Field(strict=True, allow_inf_nan=False)]
+)
+FILTERS_DESCRIPTION = (
+    "Conditions on dimensions, applied to the facts before aggregation and ANDed with the row "
+    "filters: expressions with `{model.dimension}` references (`{orders.status} = 'shipped'`), "
+    "or objects `{dimension, op, value}` whose value the server writes as a literal of the "
+    "data source's dialect, so the caller never quotes it."
+)
+
+
+class Filter(BaseModel):
+    """A structured filter (DEC-50): a dimension, an operator and a value. The server builds
+    the literal for the data source's dialect, so no caller quotes or escapes a value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dimension: str = Field(
+        max_length=200,
+        description="`model.dimension`, optionally with a time grain (`__month`), or `rule.name`.",
+    )
+    op: Literal["=", "!=", "<>", "<", "<=", ">", ">=", "in", "not in", "is null", "is not null"]
+    value: FilterScalar | list[FilterScalar] | None = Field(
+        None,
+        description=(
+            "A string, number or boolean; a non-empty list for `in` and `not in`; "
+            "absent for `is null` and `is not null`. Dates are ISO strings."
+        ),
+    )
+
+    @field_validator("op", mode="before")
+    @classmethod
+    def _normal_op(cls, value: Any) -> Any:
+        return " ".join(value.lower().split()) if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _value_fits_op(self) -> Filter:
+        if self.op in COMPARISONS:
+            if self.value is None or isinstance(self.value, list):
+                raise ValueError(
+                    f"`{self.op}` takes one value; use `is null` or `in` for null and lists"
+                )
+        elif self.op in LIST_OPS:
+            if not isinstance(self.value, list) or not self.value:
+                raise ValueError(f"`{self.op}` takes a non-empty list of values")
+            if len(self.value) > MAX_FILTER_VALUES:
+                raise ValueError(f"`{self.op}` takes at most {MAX_FILTER_VALUES} values")
+        elif self.value is not None:
+            raise ValueError(f"`{self.op}` takes no value")
+        return self
+
 
 class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metrics: list[str] = Field(min_length=1)
     dimensions: list[str] = []
-    filters: list[str] = Field([], description="Expressions with `{model.dimension}` references.")
+    filters: list[str | Filter] = Field([], description=FILTERS_DESCRIPTION)
     order_by: list[str] = Field(
         [], description="Requested members; prefix with `-` for descending order."
     )
@@ -219,9 +284,7 @@ class Planner:
         dims = [g.resolve_dimension(d) for d in request.dimensions]
         if len({d.alias for d in dims}) != len(dims):
             raise QueryError("dimension requested more than once")
-        filters = [parse_template(f, self.dialect, error=QueryError) for f in request.filters]
-        for template in filters:
-            check_request_expression(template)
+        filters = self._request_filters(request.filters)
         for ref in dims:
             self._check_sensitivity(ref, principal)
 
@@ -296,7 +359,12 @@ class Planner:
         )
 
     def plan_values(
-        self, dimension: str, principal: Principal | None = None, *, limit: int
+        self,
+        dimension: str,
+        principal: Principal | None = None,
+        *,
+        limit: int,
+        filters: list[str | Filter] | None = None,
     ) -> CompiledQuery:
         """Distinct values of a categorical or boolean dimension, each with the number of rows
         of the dimension's own model that carry it, after that model's row filters; most
@@ -320,8 +388,9 @@ class Planner:
                 f"`{dimension}` is a {dim.type} dimension; values are listed only for "
                 "categorical and boolean dimensions (a time dimension gets its date range)"
             )
+        templates = self._request_filters(filters or [])
         counts, joined = self._group_select(
-            _Group(ref.model), [ref], [], principal, label="dimension_values"
+            _Group(ref.model), [ref], templates, principal, label="dimension_values"
         )
         counts = counts.select(exp.Count(this=exp.Star()).as_("value_count"))
         final = (
@@ -343,7 +412,13 @@ class Planner:
             trace=self._trace,
         )
 
-    def plan_time_range(self, dimension: str, principal: Principal | None = None) -> CompiledQuery:
+    def plan_time_range(
+        self,
+        dimension: str,
+        principal: Principal | None = None,
+        *,
+        filters: list[str | Filter] | None = None,
+    ) -> CompiledQuery:
         """The first and last day of a time dimension that hold rows of its own model, and how
         many distinct days do, after that model's row filters (DEC-24). Days are the model's
         local days, the business time zone, as in a `__day` grouping: the dimension is
@@ -370,8 +445,9 @@ class Planner:
                 "the range is always in days"
             )
         day = DimensionRef(ref.model, ref.name, "day")
+        templates = self._request_filters(filters or [])
         days, joined = self._group_select(
-            _Group(ref.model), [day], [], principal, label="time_range"
+            _Group(ref.model), [day], templates, principal, label="time_range"
         )
         column = exp.column(day.alias)
         final = (
@@ -395,6 +471,54 @@ class Planner:
             rules_as_of=self._rules_as_of,
             trace=self._trace,
         )
+
+    # -- request filters ---------------------------------------------------------
+
+    def _request_filters(self, filters: list[str | Filter]) -> list[Template]:
+        """The request's filters as templates: an expression string is parsed and checked; a
+        structured filter (DEC-50) is built as the same tree, its value checked against the
+        dimension's type and written as a literal by SQLGlot, never parsed from text."""
+        templates = []
+        for item in filters:
+            if isinstance(item, str):
+                template = parse_template(item, self.dialect, error=QueryError)
+                check_request_expression(template)
+            else:
+                template = structured_template(item.dimension, item.op, item.value, self.dialect)
+                self._check_filter_value(item, template.text)
+            templates.append(template)
+        return templates
+
+    def _check_filter_value(self, item: Filter, text: str) -> None:
+        g = self.graph
+        try:
+            ref = g.resolve_dimension(item.dimension)
+        except QueryError:
+            # A rule that applies to several models is resolved per model by the planner.
+            name = item.dimension[5:] if item.dimension.startswith("rule.") else None
+            if name and g.rule_models.get(name):
+                return
+            raise
+        kind = g.dimension(ref).type
+        values = item.value if isinstance(item.value, list) else [item.value]
+        values = [v for v in values if v is not None]
+        if kind == "boolean":
+            ok = all(isinstance(v, bool) for v in values)
+            expected = "true or false"
+        elif kind == "number":
+            ok = all(isinstance(v, int | float) and not isinstance(v, bool) for v in values)
+            expected = "numbers"
+        elif kind == "time":
+            ok = all(isinstance(v, str) and _iso_moment(v) for v in values)
+            expected = "ISO dates or date-times as strings (`2026-01-31`)"
+        else:
+            ok = all(not isinstance(v, bool) for v in values)
+            expected = "strings or numbers"
+        if not ok:
+            raise QueryError(
+                f"filter `{text}`: `{item.dimension}` is a {kind} dimension; "
+                f"compare it with {expected}"
+            )
 
     def _rule_expr(self, ref: DimensionRef) -> str:
         """The rule version in effect on ``rules_as_of``, bound to the model's columns."""
@@ -1200,6 +1324,15 @@ _COMBINE_AGGS = {"sum": exp.Sum, "count": exp.Sum, "min": exp.Min, "max": exp.Ma
 assert tuple(_COMBINE_AGGS) == WINDOW_AGGS
 
 _LEVEL = {"personal": "personal", "sensitive": "sensitive personal"}
+
+
+def _iso_moment(text: str) -> bool:
+    """Whether ``text`` is an ISO date or date-time, as a structured filter on time takes."""
+    try:
+        dt.datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
 
 
 # -- metric filters (DEC-29) ---------------------------------------------------------------
