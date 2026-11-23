@@ -24,7 +24,7 @@ This is a Bring-Your-Own-Azure-subscription offer. It deploys the open-source Co
 
 **Capabilities**
 
-- Multi-database: the same model runs unmodified on Databricks, Snowflake, Oracle, SQL Server, Postgres, MySQL, MariaDB and DuckDB.
+- Multi-database: the same model runs unmodified on Databricks, Snowflake, BigQuery, Oracle, SQL Server, Postgres, MySQL, MariaDB and DuckDB.
 - A bilingual (English/Portuguese) business glossary in SKOS, versioned business rules with owners and tests, and a knowledge graph linking metrics to the teams, systems and processes that depend on them.
 - A native MCP server: agents find a concept, ask for a governed metric, and get deterministic SQL back, never raw table access.
 - Every answer is auditable: formula, rule versions, applied policies, data source, `as_of` date, model and SQL hashes. `cosmos replay` reproduces a past answer exactly.

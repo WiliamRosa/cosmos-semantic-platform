@@ -81,4 +81,4 @@ A pack whose `## Publish` section starts with **Published:** is on the page. Pub
 
 ## Hashtags
 
-Pick at most five, relevant to the post: `#SemanticLayer` `#AIAgents` `#MCP` `#DataEngineering` `#AnalyticsEngineering` `#DataGovernance` `#OpenSource` `#Databricks` `#Snowflake` `#dbt` `#PowerBI`.
+Pick at most five, relevant to the post: `#SemanticLayer` `#AIAgents` `#MCP` `#DataEngineering` `#AnalyticsEngineering` `#DataGovernance` `#OpenSource` `#Databricks` `#Snowflake` `#BigQuery` `#dbt` `#PowerBI`.
