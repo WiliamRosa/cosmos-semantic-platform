@@ -35,7 +35,7 @@ The proposal is DEC-40 in [daily #83](https://github.com/WiliamRosa/cosmos-seman
 | SQLAlchemy (`sqlalchemy-bigquery`) | Converts results row by row in Python, the path ADR 0007 keeps only as a fallback |
 | `INSERT` statements for the demo data | Refused in the free sandbox, and BigQuery charges DML by bytes scanned. The emulator, which does not run load jobs, gets them instead |
 | Store times as `TIMESTAMP` | `TIMESTAMP` is an instant in UTC; the other databases store civil times, and the model's `timezone` already decides what "today" is |
-| The emulator in CI | It answers the reference queries, but it runs rolling windows (range joins) for more than ten minutes each, and it gets some casts wrong (`CAST(DATE AS DATETIME)` returns 1970-01-01). It stays a local check, not a merge gate |
+| The emulator in CI | It answers the reference queries, but it runs rolling windows (range joins) for more than ten minutes each, and it gets some casts wrong (`CAST(DATE AS DATETIME)` returns 1970-01-01). The Power BI import queries make it panic (`googlesqlite: panic runtime error: slice bounds out of range`), so `tests/test_powerbi.py` skips its BigQuery cases when `COSMOS_BIGQUERY_ENDPOINT` is set; they pass on a real project. It stays a local check, not a merge gate |
 
 ## Consequences
 
@@ -44,7 +44,7 @@ The proposal is DEC-40 in [daily #83](https://github.com/WiliamRosa/cosmos-seman
   - against a real project with Application Default Credentials or `COSMOS_BIGQUERY_CREDENTIALS_FILE`.
 
   CI does not run them, as it does not run Databricks and Snowflake.
-- On the emulator, 58 reference queries return the same numbers as DuckDB, the A06 Monday weeks and the A48 window up to noon among them. Rolling windows over a range join (A26) need a real project.
+- On the emulator, 58 reference queries return the same numbers as DuckDB, the A06 Monday weeks and the A48 window up to noon among them. Rolling windows over a range join (A26) and the Power BI import cases, which the emulator skips, need a real project.
 - **Live run (2026-11-21):** 160 tests passed on a BigQuery sandbox project, with 1 skipped. They include the 66 reference queries, the divergence zoo, the randomized same-number test against DuckDB, bootstrap, packs, the Power BI import and the dbt, Cube and Ossie exports. The skipped test is the evidence replay, which changes data with `UPDATE`, and the sandbox refuses DML.
 - **What the live run found that the emulator did not:**
   - `DATE - DATE` is an `INTERVAL` in BigQuery; the dialect now writes `DATE_DIFF(..., DAY)`.
