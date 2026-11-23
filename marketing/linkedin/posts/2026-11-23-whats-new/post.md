@@ -6,7 +6,7 @@ What merged since the launch week, in user terms.
 
 What's new in Cosmos Semantic since launch week:
 
-1. Two more data sources, in preview: Google BigQuery and Trino / Starburst. They join Databricks, Snowflake, Oracle, SQL Server, PostgreSQL, MySQL, MariaDB and DuckDB, and the same model is checked against them in CI.
+1. Two more data platforms: Google BigQuery, now fully supported and validated on a live project, and Trino / Starburst, in preview and checked in CI against a Trino container. They join Databricks, Snowflake, Oracle, SQL Server, PostgreSQL, MySQL, MariaDB and DuckDB.
 
 2. Growth from a single metric. A derived metric can read the same input shifted and unshifted, so year-over-year growth is one definition, with no helper metric:
 (revenue - revenue_year_before) / revenue_year_before
@@ -24,8 +24,8 @@ Changelog: https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHAN
 
 ## Sources
 
-- BigQuery in preview (DEC-40, PR #100) and Trino / Starburst in preview (DEC-43, PR #104): [CHANGELOG](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md) `[Unreleased]`, "Added"; [README](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/README.md) "Multi-database" row. The eight databases: same row.
-- "Checked against them in CI": CHANGELOG, Trino entry ("CI runs the suites against a Trino container") and BigQuery entry (BigQuery suites).
+- BigQuery fully supported (DEC-40, PRs #100 and #110: live run on a BigQuery project, out of preview) and Trino / Starburst in preview (DEC-43, PR #104): [CHANGELOG](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md) `[Unreleased]`, "Added"; [README](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/README.md) "Multi-database" row. The eight databases: same row.
+- "Checked in CI against a Trino container": CHANGELOG, Trino entry. BigQuery is not run in CI (no credentials); it is validated by the maintainer's live run (ADR 0016).
 - Growth in one metric (DEC-44, PR #105): CHANGELOG, "Growth in one metric"; example metric `revenue_yoy_growth` in `examples/ecommerce/semantic/sales.yml`.
 - Offsets in weeks and years (DEC-46, PR #102): CHANGELOG, "Offsets in weeks and years" (same SQL and `sql_hash` as `14 days` or `12 months`; evidence keeps the offset as written).
 - Query explorer (DEC-41, PR #90): CHANGELOG, "A query explorer in the console" (row filters apply, every run audited).
