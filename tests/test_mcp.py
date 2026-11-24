@@ -43,7 +43,7 @@ def call(server, tool: str, **arguments):
     return json.loads(result.content[0].text)
 
 
-def test_lists_the_eight_tools(server):
+def test_lists_the_nine_tools(server):
     async def run():
         async with Client(server) as client:
             return {t.name for t in (await client.list_tools()).tools}
@@ -57,6 +57,7 @@ def test_lists_the_eight_tools(server):
         "replay",
         "impact",
         "dimension_values",
+        "reconcile",
     }
 
 
