@@ -4,7 +4,12 @@ auditing, replay, impact analysis and serialization.
 Admins are the subjects listed in ``COSMOS_CONSOLE_ADMINS`` (ADR 0012), plus the user that
 ``--allow-anonymous`` creates (local development), recognized by how it was created
 (``Principal.local_anonymous``), never by its name. Only they see audit data about other people,
-such as who queried the members a change affects."""
+such as who queried the members a change affects.
+
+Reconciliation cases (DEC-45) are declared by the operator in a file (``COSMOS_CHECK_CASES``,
+the format ``cosmos check --cases`` reads). The API and MCP run them by id, never SQL from the
+caller, and refuse a case when a row filter applies to it: row filters cannot be applied to its
+hand-written SQL, so its row diff could show rows the caller may not see."""
 
 from __future__ import annotations
 
@@ -14,8 +19,10 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +30,14 @@ import pyarrow as pa
 
 from cosmos_semantic.catalog import Catalog
 from cosmos_semantic.engine import Engine
-from cosmos_semantic.errors import CosmosError, PolicyError, QueryError
+from cosmos_semantic.errors import (
+    CosmosError,
+    ModelError,
+    NotFoundError,
+    PolicyError,
+    QueryError,
+    RateLimitError,
+)
 from cosmos_semantic.evidence import (
     EvidenceBuilder,
     merge_row_filters,
@@ -43,6 +57,13 @@ MAX_DIMENSION_VALUES = 100
 # Most distinct values fetched (most frequent first) before the top ones are chosen in Python.
 # Past it, `truncated` is set and ties at that far cut-off may differ between databases.
 VALUES_FETCH_CEILING = 10_000
+# Most rows of a reconciliation's row diff returned by the API and MCP: the hard maximum.
+MAX_RECONCILE_DIFF_ROWS = 200
+# Least time between two runs of the same case through the API or MCP, in seconds; the
+# default of COSMOS_RECONCILE_MIN_INTERVAL.
+RECONCILE_MIN_INTERVAL = 60.0
+# A case id as the audit log records it; anything else is recorded as `<invalid>`.
+CASE_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 
 
 def jsonable(value: Any) -> Any:
@@ -69,6 +90,44 @@ def _iso_day(value: Any) -> str | None:
     return dt.date.fromisoformat(str(value)[:10]).isoformat()
 
 
+def new_reconcile_id() -> str:
+    return f"rc_{uuid.uuid4().hex[:20]}"
+
+
+def _diff_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        k: [jsonable(v) for v in value] if k == "key" else jsonable(value)
+        for k, value in row.items()
+    }
+
+
+class _LockedConnector:
+    """A connector whose every statement holds the service's lock, and only that statement:
+    connections cannot be shared across threads, but a reconciliation runs many statements,
+    and queries must be able to run between them."""
+
+    def __init__(self, connector: Any, lock: threading.Lock) -> None:
+        self._connector = connector
+        self._lock = lock
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            return self._connector.execute(*args, **kwargs)
+
+    # An explicit allowlist, not a pass-through: anything else on the connector (a cursor,
+    # the raw connection, another way to run SQL) would bypass the lock, so it is refused.
+    @property
+    def dialect(self) -> str:
+        return self._connector.dialect
+
+    @property
+    def config(self) -> Any:
+        return self._connector.config
+
+    def __getattr__(self, name: str) -> Any:
+        raise AttributeError(f"`{name}` is not available on a reconciliation's connector")
+
+
 class SemanticService:
     def __init__(
         self,
@@ -76,11 +135,18 @@ class SemanticService:
         *,
         audit_path: str | Path | None = None,
         admins: set[str] | None = None,
+        cases_path: str | Path | None = None,
+        runs_path: str | Path | None = None,
+        reconcile_min_interval: float | None = None,
     ) -> None:
         self.engine = engine
         self.catalog = Catalog(engine.graph)
         self.evidence = EvidenceBuilder(engine.graph)
-        self.health = Health(engine.graph)  # rule tests and check runs (COSMOS_RUNS_LOG)
+        # Rule tests and check runs (COSMOS_RUNS_LOG).
+        self.health = Health(engine.graph, runs_path=runs_path)
+        # Declared reconciliation cases (COSMOS_CHECK_CASES, DEC-45).
+        cases = cases_path or os.environ.get("COSMOS_CHECK_CASES")
+        self.cases_path = Path(cases) if cases else None
         path = audit_path or os.environ.get("COSMOS_AUDIT_LOG")
         self.audit_path = Path(path) if path else None
         if admins is None:
@@ -89,6 +155,22 @@ class SemanticService:
         self.admins = admins
         # Connections cannot be shared across threads; one query at a time per process.
         self._lock = threading.Lock()
+        # One reconciliation at a time (DEC-45), apart from `_lock`, so that a reconciliation
+        # never blocks queries for longer than one of its statements. It also guards the
+        # runs log and the time each case last ran.
+        self._reconcile_lock = threading.Lock()
+        self._last_reconciled: dict[str, float] = {}
+        if reconcile_min_interval is None:
+            raw = os.environ.get("COSMOS_RECONCILE_MIN_INTERVAL")
+            try:
+                reconcile_min_interval = float(raw) if raw else RECONCILE_MIN_INTERVAL
+            except ValueError:
+                raise ModelError(
+                    "COSMOS_RECONCILE_MIN_INTERVAL must be a number of seconds"
+                ) from None
+            if math.isnan(reconcile_min_interval):
+                raise ModelError("COSMOS_RECONCILE_MIN_INTERVAL must be a number of seconds")
+        self.reconcile_min_interval = max(reconcile_min_interval, 0.0)
 
     def compile(self, request: QueryRequest, principal: Principal) -> CompiledQuery:
         try:
@@ -295,6 +377,180 @@ class SemanticService:
             "result": {"row_count": returned.num_rows, "hash": result_hash(returned)},
         }
 
+    # -- reconcile (DEC-45) ------------------------------------------------------
+
+    def _cases(self) -> list[Any]:
+        return self._load_cases()[0]
+
+    def _load_cases(self) -> tuple[list[Any], str | None]:
+        """The declared cases and the sha256 of the file they were read from (``cases_hash``),
+        from the same bytes."""
+        from cosmos_semantic.reconcile import cases_from_bytes
+
+        if self.cases_path is None:
+            return [], None
+        try:
+            return cases_from_bytes(self.cases_path.read_bytes())
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            # The type only: a parse error may quote the file.
+            log.warning("cannot read the reconciliation cases: %s", type(exc).__name__)
+            raise QueryError("the declared reconciliation cases cannot be read") from None
+
+    def reconcile_cases(self) -> dict[str, Any]:
+        """The reconciliation cases the operator declared: id and title only."""
+        return {
+            "available": self.cases_path is not None,
+            "cases": [{"id": c.id, "title": c.title} for c in self._cases()],
+        }
+
+    def reconcile(
+        self, case_id: str, principal: Principal, *, max_rows: int | None = None
+    ) -> dict[str, Any]:
+        """Runs one declared reconciliation case as the caller and records it as a partial
+        check run, so health updates. Returns the outcome, the row diff (at most
+        ``MAX_RECONCILE_DIFF_ROWS`` rows), the diagnosis and the evidence; audited like a
+        query (event `reconcile`).
+
+        Refused (PolicyError) when a row filter applies to the governed side, or when the
+        case's SQL may read a table a row filter guards: row filters cannot be applied to
+        hand-written SQL. An unknown id is a NotFoundError whose message does not repeat it.
+        A case runs at most once per ``reconcile_min_interval`` seconds
+        (``COSMOS_RECONCILE_MIN_INTERVAL``, 60 by default); a call sooner is a
+        RateLimitError and records no run."""
+        from cosmos_semantic.checks import append_run, run_checks
+        from cosmos_semantic.reconcile import row_filter_conflicts
+
+        started = time.perf_counter()
+        shown = case_id if CASE_ID_RE.fullmatch(case_id) else "<invalid>"
+        context: dict[str, Any] = {"request": {"case": shown}, "principal": principal}
+        graph = self.engine.graph
+        limit = min(max_rows or MAX_RECONCILE_DIFF_ROWS, MAX_RECONCILE_DIFF_ROWS)
+        try:
+            if max_rows is not None and max_rows < 1:
+                raise QueryError("max_rows must be at least 1")
+            cases, cases_hash = self._load_cases()
+            case = next((c for c in cases if c.id == case_id), None)
+            if case is None:
+                raise NotFoundError(
+                    "no reconciliation case with that id is declared; list the declared cases first"
+                )
+            request = case.request
+            context["request"] = {
+                "case": case.id,
+                **request.model_dump(mode="json", exclude_defaults=True),
+            }
+            # The caller's policies: personal data, and the row filters that apply to them.
+            compiled = self.engine.compile(request, principal)
+            context["compiled"] = compiled
+            if compiled.trace.row_filters:
+                models = sorted({f["model"] for f in compiled.trace.row_filters})
+                raise PolicyError(
+                    f"case `{case.id}` reads `{models[0]}`, which has row filters; they cannot "
+                    "be applied to the case's hand-written SQL, so it is not run through the "
+                    "API or MCP (run `cosmos check` as an operator)"
+                )
+            with self._lock:  # creating the connection only
+                connector = self.engine.connector(compiled.data_source)
+            conflicts = row_filter_conflicts(case, graph, connector.dialect)
+            if conflicts:
+                raise PolicyError(
+                    f"case `{case.id}` is not run through the API or MCP: {conflicts[0]}; "
+                    "row filters cannot be applied to its hand-written SQL"
+                )
+            reports: dict[str, dict[str, Any]] = {}
+            with self._reconcile_lock:
+                now = time.monotonic()
+                last = self._last_reconciled.get(case.id)
+                if last is not None and now - last < self.reconcile_min_interval:
+                    wait = max(1, round(self.reconcile_min_interval - (now - last)))
+                    raise RateLimitError(
+                        f"case `{case.id}` ran less than {self.reconcile_min_interval:g} "
+                        f"seconds ago; try again in {wait} seconds"
+                    )
+                self._last_reconciled[case.id] = now
+                run = run_checks(
+                    graph,
+                    model_hash=self.evidence.model_hash,
+                    connector=_LockedConnector(connector, self._lock),
+                    source=self._source(compiled),
+                    cases=[case],
+                    principal=principal,
+                    reports=reports,
+                )
+                # A run of one case: health keeps the other cases of the latest full run.
+                run["partial"] = True
+                run["channel"] = principal.channel
+                run["cases_hash"] = cases_hash
+                if self.health.runs_path is not None:
+                    append_run(self.health.runs_path, run)
+        except CosmosError as exc:
+            self._audit(context, error=exc, event="reconcile")
+            raise
+        item = run["reconciliations"][0]
+        report = reports.get(case.id)
+        if report is None:  # the case errored (connector, SQL); the run recorded it
+            # The error type only: a database message may quote the hand-written SQL.
+            kind = (item.get("detail") or "CosmosError").split(":")[0]
+            error = QueryError(f"reconciliation case `{case.id}` could not run ({kind})")
+            self._audit(context, error=error, ms=time.perf_counter() - started, event="reconcile")
+            raise error
+        diff = report["diff"]
+        returned = [_diff_row(row) for row in diff[:limit]]
+        versions = compiled.trace.rule_versions
+        evidence = {
+            # Not a query_id: a reconciliation is not replayable (`replay` takes queries only).
+            "reconcile_id": new_reconcile_id(),
+            "run_id": run["run_id"],
+            "at": run["at"],
+            "as_of": report["cosmos"]["as_of"],
+            "data_source": {"name": self._source(compiled), "dialect": compiled.dialect},
+            "model_hash": self.evidence.model_hash,
+            "formula": report["cosmos"]["formula"],
+            # None apply: a case with row filters is refused.
+            "row_filters": [],
+            "rules": [
+                {
+                    "name": r,
+                    "effective_from": versions[r].isoformat() if versions.get(r) else None,
+                }
+                for r in sorted(compiled.trace.rules)
+            ],
+            "sql": {
+                "governed_hash": report["cosmos"]["sql_hash"],
+                "legacy_hash": report["legacy"]["sql_hash"],
+            },
+            "tolerance": report["tolerance"],
+            "result": {
+                "row_count": len(returned),
+                "hash": sql_hash(json.dumps(returned, sort_keys=True, default=str)),
+            },
+        }
+        self._audit(context, evidence=evidence, ms=time.perf_counter() - started, event="reconcile")
+        metric = report["metric"]
+        try:
+            states = self.health.states()
+            health = states.get(f"metric:{metric}") or states.get(f"measure:{metric}")
+        except (OSError, ValueError):
+            health = None
+        return {
+            "case": {"id": case.id, "title": case.title},
+            "outcome": item["outcome"],
+            "status": report["status"],
+            "expected": item.get("expected"),
+            "metric": metric,
+            "request": report["request"],
+            "rows": report["rows"],
+            "totals": report["totals"],
+            "tolerance": report["tolerance"],
+            "diff": returned,
+            "diff_truncated": report["diff_truncated"] or len(diff) > limit,
+            "tolerated": [_diff_row(row) for row in report["tolerated"]],
+            "causes": report["causes"],
+            "health": health,
+            "recorded": self.health.runs_path is not None,
+            "evidence": evidence,
+        }
+
     def is_admin(self, principal: Principal) -> bool:
         # `--allow-anonymous` is for local development; the person at the keyboard sees all.
         if principal.local_anonymous:
@@ -443,7 +699,7 @@ class SemanticService:
         compiled: CompiledQuery | None = context.get("compiled")
         record = {
             "event": event,
-            "query_id": evidence["query_id"] if evidence else None,
+            "query_id": evidence.get("query_id") if evidence else None,
             "at": dt.datetime.now(dt.UTC).isoformat(),
             "principal": {
                 "subject": principal.subject,
@@ -464,6 +720,8 @@ class SemanticService:
             "outcome": "error" if error else "ok",
             "error": f"{type(error).__name__}: {error}" if error else None,
         }
+        if evidence and evidence.get("reconcile_id"):
+            record["reconcile_id"] = evidence["reconcile_id"]
         line = json.dumps(record, ensure_ascii=False, default=str)
         audit_log.info(line)
         if self.audit_path is not None:

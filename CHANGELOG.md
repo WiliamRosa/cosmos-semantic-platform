@@ -7,6 +7,28 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+### Added
+
+- Reconciliation through MCP and REST (DEC-45): the MCP tool `reconcile` and
+  `POST /v1/reconcile/{case}` run a reconciliation case the operator declared in
+  `COSMOS_CHECK_CASES` (the file `cosmos check --cases` reads), so an agent can ask whether a
+  number is still reconciled. They return the outcome, the row counts and totals, the row diff
+  (at most 200 rows), the likely causes, the metric's updated health and the evidence, and
+  append a partial check run to `COSMOS_RUNS_LOG`: health updates that case and keeps the
+  others from the latest `cosmos check`. `GET /v1/reconcile` (the tool without `case`) lists
+  the declared cases by id and title. Only declared cases run, never SQL from the caller,
+  as the caller, with the same authentication and audit as `query` (event `reconcile`). Row
+  filters cannot be applied to hand-written SQL, so a case is refused (403) when a row filter
+  applies to it or when its SQL reads anything but the tables of models without row filters.
+  An unknown case is a 404, and a case runs at most once per `COSMOS_RECONCILE_MIN_INTERVAL`
+  seconds (60 by default; sooner is a 429). A case that cannot run is recorded with its error
+  type only. The evidence carries a `reconcile_id`, which is not replayable. Point
+  `COSMOS_CHECK_CASES` at the same file as `cosmos check --cases`, since health matches cases
+  by id; every check run records the file's sha256 as `cases_hash`. The console's latest check
+  and history use full runs only, and its runs list marks partial runs. `cosmos reconcile
+  --json` reports gain `diff`, every row that does not match (up to 1,000), and their totals
+  are summed exactly (`math.fsum`), so they no longer depend on row order.
+
 ### Fixed
 
 - Flaky same-number tests (DEC-55). The replay test changed the shared `orders` table
