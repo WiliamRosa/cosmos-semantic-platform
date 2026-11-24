@@ -20,7 +20,9 @@ declares (``reconciliation: {abs_tolerance, rel_tolerance}``, DEC-39): a finance
 rounded to cents or thousands can then agree. The report states which tolerance applied.
 
 Running arbitrary SQL can read data that row filters hide, so SQL reconciliation is an
-operator tool (CLI), not an API or MCP feature.
+operator tool (CLI). The API and MCP run only the cases the operator declared
+(``COSMOS_CHECK_CASES``, DEC-45), never SQL from the caller, and refuse a case whose
+hand-written SQL could read rows a row filter hides (see ``row_filter_conflicts``).
 """
 
 from __future__ import annotations
@@ -59,6 +61,8 @@ REL_TOL = DEFAULT_REL_TOLERANCE
 MAX_CATEGORY_VALUES = 8
 TIME_SHIFTS_HOURS = (1, 2, 3, 4, 5, -1, -2, -3, -4, -5)
 PROBE_PREFIX = "probe__"
+# Most rows a report lists in `diff` (every row that does not match, DEC-45).
+MAX_DIFF_ROWS = 1000
 
 Rows = dict[tuple, Any]
 
@@ -430,8 +434,15 @@ class Reconciler:
         only_cosmos = sorted(set(cosmos) - set(legacy), key=str)
         only_legacy = sorted(set(legacy) - set(cosmos), key=str)
         status = "match" if not (differing or only_cosmos or only_legacy) else "divergent"
-        total_c = sum(_number(v) or 0 for v in cosmos.values())
-        total_l = sum(_number(v) or 0 for v in legacy.values())
+        diff = sorted(
+            [example(k, cosmos[k], legacy[k]) | {"side": "both"} for k in differing]
+            + [example(k, cosmos[k], None) | {"side": "only_in_cosmos"} for k in only_cosmos]
+            + [example(k, None, legacy[k]) | {"side": "only_in_legacy"} for k in only_legacy],
+            key=lambda e: str(tuple(e["key"])),
+        )
+        # fsum: exact, so the totals do not depend on the order of the rows.
+        total_c = math.fsum(_number(v) or 0 for v in cosmos.values())
+        total_l = math.fsum(_number(v) or 0 for v in legacy.values())
         name = request.metrics[0]
         report: dict[str, Any] = {
             "status": status,
@@ -455,6 +466,9 @@ class Reconciler:
             + [example(k, cosmos[k], None) for k in only_cosmos[:3]]
             + [example(k, None, legacy[k]) for k in only_legacy[:3]],
             "tolerated": [example(k, cosmos[k], legacy[k]) for k in tolerated[:5]],
+            # The row diff: every row that does not match, in key order, up to MAX_DIFF_ROWS.
+            "diff": diff[:MAX_DIFF_ROWS],
+            "diff_truncated": len(diff) > MAX_DIFF_ROWS,
             "cosmos": {
                 "formula": self.evidence.formula(name),
                 "sql_hash": sql_hash(compiled.sql),
@@ -477,6 +491,9 @@ class Reconciler:
     # -- diagnosis ---------------------------------------------------------------
 
     def diagnose(self, request: QueryRequest, cosmos: Rows, legacy: Rows) -> list[Cause]:
+        # Probes run as `self.principal`: through the API and MCP (DEC-45), the caller. A
+        # probe that touches a model with row filters gets the caller's filters, so a cause
+        # can depend on who asked; but probes only name causes, they never return rows.
         causes: list[Cause] = []
         priority = {"different_metric": 1, "unexplained": 2}
         for probe in (
@@ -861,6 +878,12 @@ class ZooCase(BaseModel):
         return self.sql_by_dialect.get(dialect, self.sql)
 
 
+def cases_from_bytes(data: bytes) -> tuple[list[ZooCase], str]:
+    """Cases from a file's bytes, with the sha256 of those bytes (a run's ``cases_hash``)."""
+    parsed = yaml.safe_load(data.decode("utf-8"))
+    return [ZooCase.model_validate(c) for c in parsed["cases"]], hashlib.sha256(data).hexdigest()
+
+
 def load_zoo(path: str | Path) -> list[ZooCase]:
     with Path(path).open(encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
@@ -868,10 +891,16 @@ def load_zoo(path: str | Path) -> list[ZooCase]:
 
 
 def check_zoo_case(
-    case: ZooCase, graph: SemanticGraph, connector: Connector
+    case: ZooCase,
+    graph: SemanticGraph,
+    connector: Connector,
+    principal: Principal | None = None,
 ) -> tuple[bool, dict[str, Any]]:
-    """Runs one case; it passes when the status matches and every expected cause is found."""
-    principal = Principal(user=case.user, channel="cli", subject="reconciliation")
+    """Runs one case; it passes when the status matches and every expected cause is found.
+
+    The governed side runs as the case's own ``user`` unless a principal is given: the API
+    and MCP run it as the caller (DEC-45)."""
+    principal = principal or Principal(user=case.user, channel="cli", subject="reconciliation")
     report = reconcile_sql(
         graph, connector, case.request, case.sql_for(connector.dialect), principal
     )
@@ -879,3 +908,104 @@ def check_zoo_case(
     expect = case.expect or ZooExpectation(status="match")
     ok = report["status"] == expect.status and set(expect.causes) <= found
     return ok, report
+
+
+# One part of a table name: its text and whether it was quoted.
+_Part = tuple[str, bool]
+
+
+def _parts(table: Any) -> tuple[_Part, ...]:
+    from sqlglot import exp
+
+    return tuple(
+        (p.name, bool(p.args.get("quoted")) if isinstance(p, exp.Identifier) else False)
+        for p in table.parts
+    )
+
+
+def _loose_match(a: tuple[_Part, ...], b: tuple[_Part, ...]) -> bool:
+    """Might these name the same table? Case and quotes ignored, missing qualifiers match:
+    conservative, for the tables of models with row filters."""
+    n = min(len(a), len(b))
+    return n > 0 and [t.lower() for t, _ in a[-n:]] == [t.lower() for t, _ in b[-n:]]
+
+
+def _strict_match(sql: tuple[_Part, ...], model: tuple[_Part, ...]) -> bool:
+    """Surely the same table? Every part both sides carry (name, schema, catalog) agrees: an
+    unquoted part with an unquoted part ignoring case, a quoted part only with a part quoted
+    the same way and spelled exactly alike. For the tables of models without row filters."""
+    n = min(len(sql), len(model))
+    if n == 0:
+        return False
+    for (a, qa), (b, qb) in zip(sql[-n:], model[-n:], strict=True):
+        if qa != qb or (a != b if qa else a.lower() != b.lower()):
+            return False
+    return True
+
+
+def row_filter_conflicts(case: ZooCase, graph: SemanticGraph, dialect: str) -> list[str]:
+    """Why a case's hand-written SQL could read rows a row filter hides; empty when it cannot.
+
+    Row filters cannot be applied to hand-written SQL, so the API and MCP (DEC-45) run a case
+    only when every table its SQL reads is the table of a semantic model without row filters.
+    It is an allowlist:
+
+    - a view, a table outside the model, a table function or SQL that does not parse is a
+      conflict;
+    - a table that might be the table of a model with row filters is a conflict (names compared
+      leniently: an unqualified or differently quoted name matches);
+    - a table is allowed only when it is surely a model's table (names compared strictly:
+      quoting respected, schema and catalog compared when both sides carry them);
+    - CTE references are resolved by scope (``sqlglot.optimizer.scope``), and a CTE named like
+      a model's table or like any table the SQL reads is a conflict, so shadowing cannot hide
+      a table."""
+    from sqlglot import exp, parse
+    from sqlglot.optimizer.scope import traverse_scope
+
+    models = []
+    for name, node in graph.models.items():
+        try:
+            table = exp.to_table(node.spec.table, dialect=dialect)
+        except Exception:  # noqa: BLE001 - an unreadable table name is simply not allowed
+            table = None
+        models.append(
+            (name, _parts(table) if table is not None else (), bool(node.spec.row_filters))
+        )
+    try:
+        trees = [t for t in parse(case.sql_for(dialect), read=dialect) if t is not None]
+    except Exception:  # noqa: BLE001 - sqlglot raises several error types
+        return ["its SQL cannot be parsed"]
+    if not trees:
+        return ["its SQL is empty"]
+    conflicts: list[str] = []
+    for tree in trees:
+        try:
+            scopes = list(traverse_scope(tree))
+        except Exception:  # noqa: BLE001 - SQL the scope analysis cannot follow is refused
+            return ["its SQL cannot be analyzed"]
+        physical: list[exp.Table] = []
+        resolved: set[int] = set()
+        for scope in scopes:
+            for table in scope.tables:
+                resolved.add(id(table))
+                if not table.args.get("db") and table.name in scope.cte_sources:
+                    continue  # a CTE visible in this scope
+                physical.append(table)
+        # A table the scope analysis did not place is refused, not guessed.
+        if any(id(t) not in resolved for t in tree.find_all(exp.Table)):
+            conflicts.append("it reads a table whose scope cannot be resolved")
+        ctes = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
+        names = {t.name.lower() for t in physical} | {p[-1][0].lower() for _, p, _ in models if p}
+        if ctes & names:
+            conflicts.append("it declares a CTE named like a table")
+        for table in physical:
+            name = _parts(table)
+            if not name or not table.name or not isinstance(table.this, exp.Identifier):
+                conflicts.append("it reads something other than a table")
+                continue
+            filtered = sorted(n for n, p, f in models if f and p and _loose_match(name, p))
+            if filtered:
+                conflicts.append(f"it reads the table of `{filtered[0]}`, which has row filters")
+            elif not any(p and not f and _strict_match(name, p) for _, p, f in models):
+                conflicts.append("it reads a table that is not the table of a semantic model")
+    return list(dict.fromkeys(conflicts))

@@ -24,3 +24,11 @@ class MetricLossError(CosmosError):
 
 class ConnectorError(CosmosError):
     """Running SQL on a data source failed."""
+
+
+class NotFoundError(QueryError):
+    """The thing asked for does not exist, such as an undeclared reconciliation case (HTTP 404)."""
+
+
+class RateLimitError(CosmosError):
+    """Asked again too soon, such as a reconciliation case run within its interval (HTTP 429)."""

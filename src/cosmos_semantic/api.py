@@ -21,8 +21,10 @@ from cosmos_semantic.errors import (
     ConnectorError,
     CosmosError,
     ModelError,
+    NotFoundError,
     PolicyError,
     QueryError,
+    RateLimitError,
 )
 from cosmos_semantic.evidence import engine_version
 from cosmos_semantic.planner import FILTERS_DESCRIPTION, Filter, Principal, QueryRequest
@@ -32,6 +34,8 @@ _STATUS = {
     AuthError: 401,
     ForbiddenError: 403,
     PolicyError: 403,
+    NotFoundError: 404,  # before QueryError, its base class
+    RateLimitError: 429,
     QueryError: 400,
     ConnectorError: 502,
     ModelError: 500,
@@ -234,6 +238,20 @@ def create_app(
     @app.post("/v1/query", summary="Run a metrics request on the data source")
     def query(request: QueryRequest, user: User) -> dict[str, Any]:
         return service.query(request, user)
+
+    @app.get("/v1/reconcile", summary="The declared reconciliation cases (id and title)")
+    def reconcile_cases(_user: User) -> dict[str, Any]:
+        return service.reconcile_cases()
+
+    @app.post(
+        "/v1/reconcile/{case}",
+        summary=(
+            "Run a declared reconciliation case as the caller: outcome, row diff, diagnosis and "
+            "evidence; recorded as a check run"
+        ),
+    )
+    def reconcile(case: str, user: User, max_rows: int | None = None) -> dict[str, Any]:
+        return service.reconcile(case, user, max_rows=max_rows)
 
     @app.post(
         "/v1/replay/{query_id}",
