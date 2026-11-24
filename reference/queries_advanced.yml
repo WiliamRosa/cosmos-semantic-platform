@@ -1310,7 +1310,7 @@ cases:
 
   # Year-to-date by month from 75 days ago, of completed orders: the first month's total starts
   # on 1 January, while `revenue` and the status filter still apply to the facts first.
-  - id: A56
+  - id: A59
     category: tempo
     phase: 3
     title: Year-to-date revenue of completed orders by month for the last 75 days
@@ -1352,7 +1352,7 @@ cases:
   # A range whose upper bound falls inside a month: the months with orders in the range are
   # kept, and each reads its year from 1 January to the end of the month, so the last month
   # counts its orders after the bound too. A running maximum and a running sum, by status.
-  - id: A57
+  - id: A60
     category: tempo
     phase: 3
     title: Year-to-date maximum and revenue by status and month, between two dates
@@ -1404,7 +1404,7 @@ cases:
   # An upper bound inside a day on the timestamp column (12:00, 22 days ago): that day is kept,
   # and its month-to-date holds the whole month up to the end of that day, its orders after
   # noon included. `CAST(... AS DATETIME)` as in A48.
-  - id: A58
+  - id: A61
     category: tempo
     phase: 3
     title: Month-to-date revenue by day up to noon of a day, with that day whole
@@ -1444,7 +1444,7 @@ cases:
 
   # A filter shape the planner cannot split (NOT) keeps the behaviour before DEC-48: it
   # restricts the facts first, so the first month's total starts 45 days ago.
-  - id: A59
+  - id: A62
     category: tempo
     phase: 3
     title: A NOT filter on the time dimension still cuts the first month-to-date of the range

@@ -2,7 +2,7 @@
 
 A request filter on a year-, quarter-, month-, week- or day-to-date metric's time dimension
 chooses the output rows; each row still reads its period from the start. Other filters apply
-to the facts first. Reference cases A09 and A56-A59 check the numbers against hand-written SQL
+to the facts first. Reference cases A09 and A59-A62 check the numbers against hand-written SQL
 on every database; these tests check the filter shapes, the SQL of requests without such a
 filter, and the dialects. The shapes split are those of rolling windows (DEC-34,
 tests/test_window_filters.py).
@@ -157,7 +157,7 @@ def test_an_upper_bound_inside_a_month_keeps_that_months_whole_total(graph, duck
 
 
 # Shapes the planner cannot split: they still restrict the facts before the running total, as
-# before DEC-48 (reference case A59 checks the numbers of one).
+# before DEC-48 (reference case A62 checks the numbers of one).
 UNSPLIT = [
     f"NOT ({{orders.ordered_at}} < {_d(X)})",
     f"{{orders.ordered_at}} <> {_d(X)}",

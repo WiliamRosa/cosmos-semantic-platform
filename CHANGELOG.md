@@ -27,9 +27,9 @@ format or the API; such changes are listed under **Changed**.
   without such a filter. The evidence's `time.filters_applied` for `grain_to_date` metrics is
   `time_after`, or `before` when an unsplit filter cuts them; unfiltered year-to-date queries now
   carry `time_after` too (they had `before`). The dbt export warning for running totals no longer
-  lists time constraints among the differences. Reference cases A56 (year-to-date by month with
-  a status filter), A57 (a running maximum and sum by status for a range ending inside a
-  month), A58 (an upper bound at noon of a day) and A59 (a `NOT` filter that still cuts) have
+  lists time constraints among the differences. Reference cases A59 (year-to-date by month with
+  a status filter), A60 (a running maximum and sum by status for a range ending inside a
+  month), A61 (an upper bound at noon of a day) and A62 (a `NOT` filter that still cuts) have
   hand-written SQL, and the randomized cross-database test draws 8 date-filtered
   grain-to-date requests ([semantic model](docs/semantic-model.md#period-to-date)). Offsets
   still filter first; they are the next slice.
