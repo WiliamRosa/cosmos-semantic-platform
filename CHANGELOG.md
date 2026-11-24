@@ -34,7 +34,7 @@ format or the API; such changes are listed under **Changed**.
   unhandled exception. The SQL of every existing reference, TPC-H and divergence zoo request
   is unchanged on all nine dialects, except four TPC-H requests on Oracle, where a `DATE
   '1998-09-02'` literal is now written `CAST('1998-09-02' AS DATE)` instead of `TO_DATE(...)`
-  (the same date). Reference cases A56 to A58 check request filters, a dimension and a metric
+  (the same date). Reference cases A63 to A65 check request filters, a dimension and a metric
   filter with double-quoted names, doubled quotes and LIKE escapes against hand-written SQL on
   every database.
 

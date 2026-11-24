@@ -479,7 +479,7 @@ STANDARD_SQL_METRIC = {
 FOLDS_TO_UPPER_CASE = ("oracle", "snowflake")
 STANDARD_SQL_CASES = [
     ReferenceCase(
-        id="A56",
+        id="A63",
         category="filters",
         phase=3,
         title="Payments by method, with request filters holding a doubled quote and a LIKE escape",
@@ -499,7 +499,7 @@ GROUP BY method
 """,
     ),
     ReferenceCase(
-        id="A57",
+        id="A64",
         category="filters",
         phase=3,
         title="Revenue by a dimension whose expression has double-quoted names and a doubled quote",
@@ -514,7 +514,7 @@ GROUP BY CASE WHEN status = 'canceled' THEN 'O''Brien' ELSE status END
 """,
     ),
     ReferenceCase(
-        id="A58",
+        id="A65",
         category="filters",
         phase=3,
         title="Revenue by status of a metric whose filter has a LIKE escape and a doubled quote",
@@ -541,7 +541,7 @@ def standard_sql_graph():
 
 
 def test_standard_sql_case_ids_are_free():
-    """A56 to A58 live here; `reference/queries_advanced.yml` must not reuse their ids."""
+    """A63 to A65 live here; `reference/queries_advanced.yml` must not reuse their ids."""
     taken = {c.id for c in ALL + ADVANCED + WEEK_WINDOW_CASES}
     assert not taken & {c.id for c in STANDARD_SQL_CASES}
 
@@ -550,7 +550,7 @@ def test_standard_sql_case_ids_are_free():
 @pytest.mark.parametrize("case", STANDARD_SQL_CASES, ids=lambda c: c.id)
 def test_reference_standard_sql_expressions(case, source, standard_sql_graph, request):
     connector = request.getfixturevalue(source)
-    if case.id == "A57" and connector.dialect in FOLDS_TO_UPPER_CASE:
+    if case.id == "A64" and connector.dialect in FOLDS_TO_UPPER_CASE:
         pytest.skip(f"{connector.dialect} folds unquoted names to upper case")
     _check(case, standard_sql_graph, connector)
 
@@ -560,9 +560,9 @@ def test_standard_sql_cases_catch_the_dialect_reading(standard_sql_graph, duckdb
     databases (a string for "status", the LIKE escape dropped) returns other rows than the
     standard reading."""
     wrong = {
-        "A56": ("NOT LIKE 'ca\\_d'", "NOT LIKE 'ca_d'"),
-        "A57": ('orders."status"', "'status'"),
-        "A58": ("NOT LIKE 'c\\_nceled'", "NOT LIKE 'c_nceled'"),
+        "A63": ("NOT LIKE 'ca\\_d'", "NOT LIKE 'ca_d'"),
+        "A64": ('orders."status"', "'status'"),
+        "A65": ("NOT LIKE 'c\\_nceled'", "NOT LIKE 'c_nceled'"),
     }
     for case in STANDARD_SQL_CASES:
         sql = Planner(standard_sql_graph, "duckdb").plan(case.request, Principal()).sql
