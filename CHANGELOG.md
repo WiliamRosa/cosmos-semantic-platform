@@ -7,6 +7,16 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+### Changed
+
+- Reading expressions as standard SQL (DEC-53) changes three forms that some models may use.
+  Check models for them when you upgrade:
+  - on MySQL, MariaDB and BigQuery, a double-quoted string such as `status = "paid"` is now a
+    column name, so the query usually fails with an unknown column; write `'paid'`;
+  - a backslash in a string that standard SQL still reads (`'a\\b'` on MySQL, `'\n'` on
+    BigQuery) is now a literal backslash, with no error;
+  - on MySQL, `||` is now string concatenation, not `OR`.
+
 ### Fixed
 
 - Model and filter expressions are read as standard SQL on every data source (DEC-53), as
