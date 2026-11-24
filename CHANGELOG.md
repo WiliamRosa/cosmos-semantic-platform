@@ -41,6 +41,13 @@ format or the API; such changes are listed under **Changed**.
 
 ### Fixed
 
+- Flaky same-number tests (DEC-55). The replay test changed the shared `orders` table
+  (`amount + 1` on order 1, undone right after), and the database containers are shared by
+  every test run on the machine, so a run comparing two queries meanwhile could see one of
+  them off by exactly 1.00: the `*_export_same_numbers` tests and the divergence zoo (Z04 on
+  MariaDB) failed now and then. The replay test now changes a private copy of the table,
+  dropped afterwards.
+
 - Model and filter expressions are read as standard SQL on every data source (DEC-53), as
   documented, and written in each source's dialect. They used to be read in the source's own
   dialect: on MySQL, MariaDB, Databricks and BigQuery a double-quoted name (`"status" =
