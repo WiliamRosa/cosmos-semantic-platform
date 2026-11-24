@@ -18,6 +18,11 @@ last reconciliation matched but is older than that needs ``attention``
 (``reconciliation_stale``). Rule tests run again each time health is computed, so they are
 never stale.
 
+A run of one case from the API or MCP (DEC-45) is marked ``partial``: it updates the cases it
+ran and leaves the others as the latest full run (``cosmos check``) recorded them. Each case
+counts with the time of the run that last ran it; a metric's ``last_reconciled_at`` is the
+newest of its cases, and staleness is judged on the oldest.
+
 A reconciliation passes or fails within the tolerance its metric declares (DEC-39). When that
 tolerance is the metric's own, the ``reconciled`` and ``reconciliation_failed`` reasons carry
 it (``tolerance: {abs_tolerance, rel_tolerance, source: "metric"}``); under the default
@@ -59,6 +64,23 @@ def _declared_tolerance(cases: list[dict[str, Any]]) -> dict[str, Any]:
         if isinstance(tolerance, dict) and tolerance.get("source") == "metric":
             return {"tolerance": tolerance}
     return {}
+
+
+def _sort_at(value: Any) -> dt.datetime:
+    return _parse_at(value) or dt.datetime.min.replace(tzinfo=dt.UTC)
+
+
+def _latest_cases(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The latest result of each case, each with the ``at`` of its run: the partial runs
+    (DEC-45) newer than the latest full run, then that full run. Without partial runs, exactly
+    the latest run's reconciliations."""
+    seen: dict[str, dict[str, Any]] = {}
+    for run in reversed(runs):
+        for case in run.get("reconciliations") or []:
+            seen.setdefault(case["id"], {**case, "at": run.get("at")})
+        if not run.get("partial"):
+            break
+    return list(seen.values())
 
 
 class Health:
@@ -112,13 +134,12 @@ class Health:
 
         runs = self.runs()
         latest = runs[-1] if runs else None
-        at = latest.get("at") if latest else None
-        tests_at = at if latest and latest.get("rule_tests") else None
+        tests_at = latest.get("at") if latest and latest.get("rule_tests") else None
         settings = self.graph.project.health
         max_age = parse_max_age(settings.max_age) if settings and settings.max_age else None
         now = dt.datetime.now(dt.UTC)
         reconciled: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for case in latest["reconciliations"] if latest else []:
+        for case in _latest_cases(runs):
             for metric in case["metrics"]:
                 reconciled[metric].append(case)
         members = [f"metric:{n}" for n in self.graph.metrics]
@@ -128,6 +149,9 @@ class Health:
             if not cases:
                 states[member] = {"state": "unchecked", "reasons": [{"code": "never_reconciled"}]}
                 continue
+            ats = [c["at"] for c in cases if c.get("at")]
+            at = max(ats, key=_sort_at) if ats else None
+            oldest = min(ats, key=_sort_at) if ats else None
             bad = [c for c in cases if c["outcome"] in ("fail", "error")]
             if bad:
                 reasons = [
@@ -135,7 +159,7 @@ class Health:
                         "code": "reconciliation_failed",
                         "case": c["id"],
                         "title": c["title"],
-                        "at": at,
+                        "at": c.get("at"),
                     }
                     | _declared_tolerance([c])
                     for c in bad
@@ -148,11 +172,15 @@ class Health:
                 ]
                 state = "healthy"
                 if max_age is not None:
-                    when = _parse_at(at)
+                    when = _parse_at(oldest)
                     if when is None or now - when > max_age:
                         state = "attention"
                         reasons.append(
-                            {"code": "reconciliation_stale", "at": at, "max_age": settings.max_age}
+                            {
+                                "code": "reconciliation_stale",
+                                "at": oldest,
+                                "max_age": settings.max_age,
+                            }
                         )
                 states[member] = {"state": state, "reasons": reasons, "last_reconciled_at": at}
 
