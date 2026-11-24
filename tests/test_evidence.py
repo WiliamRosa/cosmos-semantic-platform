@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
+from cosmos_semantic import demo_data
 from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.connectors import ConnectionsFile
 from cosmos_semantic.engine import Engine
@@ -89,29 +92,37 @@ def test_replay_of_an_unchanged_query_is_identical(graph, connector, tmp_path):
     assert all(report["matches"].values())
 
 
-def test_replay_detects_changed_data(graph, connector, tmp_path):
+def test_replay_detects_changed_data(graph, connector, tables, tmp_path):
+    """The data change happens in a private copy of the orders table, never in the shared
+    `orders`: the containers are shared by every test run on the machine, and an update there,
+    even undone right after, changed the numbers other runs were comparing (DEC-55)."""
     if connector.dialect == "trino":
         pytest.skip("Trino's memory connector does not support UPDATE")
-    service = make_service(graph, connector, tmp_path)
-    request = QueryRequest(metrics=["revenue"], dimensions=["orders.status"])
-    query_id = service.query(request, SUDESTE)["evidence"]["query_id"]
+    name = f"replay_orders_{uuid.uuid4().hex[:8]}"
+    project = graph.project.model_copy(deep=True)
+    next(m for m in project.semantic_models if m.name == "orders").table = f"public.{name}"
+    demo_data.load(connector, {name: tables["orders"]})
 
     def run(sql: str) -> None:
         connector.run_script(remap_sql(sql, connector.dialect, connector.config.schema_map))
 
     try:
-        run("UPDATE public.orders SET amount = amount + 1 WHERE order_id = 1")
-    except Exception as exc:  # BigQuery's free sandbox refuses DML
-        if "billingNotEnabled" in str(exc) or "free tier" in str(exc):
-            pytest.skip("DML is not allowed in the BigQuery sandbox")
-        raise
-    try:
+        service = make_service(compile_project(project), connector, tmp_path)
+        request = QueryRequest(metrics=["revenue"], dimensions=["orders.status"])
+        query_id = service.query(request, SUDESTE)["evidence"]["query_id"]
+        try:
+            run(f"UPDATE public.{name} SET amount = amount + 1 WHERE order_id = 1")
+        except Exception as exc:  # BigQuery's free sandbox refuses DML
+            if "billingNotEnabled" in str(exc) or "free tier" in str(exc):
+                pytest.skip("DML is not allowed in the BigQuery sandbox")
+            raise
         report = service.replay(query_id)
+        assert report["verdict"] == "data_changed", report
+        assert report["matches"]["sql_hash"] and not report["matches"]["result_hash"]
+        run(f"UPDATE public.{name} SET amount = amount - 1 WHERE order_id = 1")
+        assert service.replay(query_id)["verdict"] == "identical"
     finally:
-        run("UPDATE public.orders SET amount = amount - 1 WHERE order_id = 1")
-    assert report["verdict"] == "data_changed", report
-    assert report["matches"]["sql_hash"] and not report["matches"]["result_hash"]
-    assert service.replay(query_id)["verdict"] == "identical"
+        run(f"DROP TABLE public.{name}")
 
 
 def test_replay_detects_changed_model(graph, connector, tmp_path):
