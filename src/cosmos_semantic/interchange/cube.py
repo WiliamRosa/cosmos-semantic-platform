@@ -25,9 +25,14 @@ measure is a measure with ``rolling_window: {trailing: N day, offset: end}``, wh
 ``import_cube`` reads back as the same window; a ``window: N weeks`` (DEC-27) is written as
 its days, ``trailing: 7N day``, because Cube does not render a ``week`` interval the same way
 on every database (its Oracle query drops it), so a round trip gives ``7N days``.
-The export fails closed on row filters it cannot express, and on metrics it cannot carry
+Fifth slice (DEC-51): a derived metric with offset inputs is a multi-stage ``number`` measure
+with ``time_shift: [{interval, type: prior}]``; a metric that also reads members unshifted (or
+through an ``alias``) reads each shifted one through a ``<metric>__<name>`` measure, which
+``import_cube`` folds back into the input. Cube adds the interval to each row's time before
+truncating it, which at every grain the planner accepts moves whole periods, as the planner
+does. The export fails closed on row filters it cannot express, and on metrics it cannot carry
 (running totals of other aggregations or without a period, metrics over a cumulative one,
-offsets, filters beyond the measure's own cube), unless the caller accepts the loss.
+filters beyond the measure's own cube), unless the caller accepts the loss.
 Business rules, the glossary and the business context are not exported yet; each one present is
 a warning.
 """
@@ -54,6 +59,8 @@ from cosmos_semantic.spec import (
     Project,
     RatioMetric,
     SimpleMetric,
+    offset_grain_problem,
+    parse_offset,
     window_parts,
 )
 
@@ -128,6 +135,7 @@ def import_cube(
     lost: dict[str, list[str]] = {}  # cube -> why its access_policy is not imported in full
     skipped: set[str] = set()  # measures not imported, so metrics over them are skipped too
     metric_where: dict[str, str] = {}
+    notes: dict[str, str] = {}  # measure -> the conditions of its `time_shift` (DEC-51)
 
     for cube in cubes:
         name = cube["name"]
@@ -195,7 +203,7 @@ def import_cube(
         model = models[name]
         for measure in cube.get("measures") or []:
             metric_where[measure["name"]] = f"cubes.{name}.measures.{measure['name']}"
-            if not _measure(name, model, measure, col_to_dim[name], metrics, warnings):
+            if not _measure(name, model, measure, col_to_dim[name], metrics, warnings, notes):
                 skipped.add(measure["name"])
         for segment in cube.get("segments") or []:
             rule = _segment(name, segment, col_to_dim[name], models[name], warnings)
@@ -204,7 +212,14 @@ def import_cube(
         for join in cube.get("joins") or []:
             _join(name, join, models, pk, warnings)
 
-    metrics = skip_dependents(metrics, skipped, warnings, lambda m: metric_where.get(m, m))
+    where_of = lambda m: metric_where.get(m, m)  # noqa: E731
+    measure_names = {x["name"] for m in models.values() for x in m.get("measures", [])}
+    _fold_shifts(metrics, measure_names)
+    folded = {m["name"] for m in metrics}
+    metrics = _skip_invalid_offsets(metrics, skipped, warnings, where_of)
+    metrics = skip_dependents(metrics, skipped, warnings, where_of)
+    dropped = folded - {m["name"] for m in metrics}
+    warnings += [text for name, text in notes.items() if name not in dropped]
     if lost and not allow_policy_loss:
         reasons = "; ".join(f"cubes.{c}: {', and '.join(r)}" for c, r in lost.items())
         raise PolicyLossError(
@@ -312,18 +327,169 @@ def _trailing_window(window: dict[str, Any]) -> tuple[int, str] | None:
     return window_parts(str(window.get("trailing", "")))
 
 
-def _measure(cube, model, measure, dims, metrics, warnings) -> bool:
+_SHIFT = re.compile(r"(\d+) (day|week|month|quarter|year)s?")
+
+
+def _shift_offset(shift: Any) -> tuple[str | None, str | None]:
+    """``(offset, None)`` for a Cube ``time_shift`` Cosmos reads as an offset: a single
+    ``prior`` shift (the default) of ``N day``, ``week``, ``month``, ``quarter`` (as ``3N
+    months``) or ``year``, singular or plural, without ``time_dimension`` or ``name``, so it
+    moves the query's time dimension as the planner does; ``(None, why)`` otherwise."""
+    items = shift if isinstance(shift, list) else [shift]
+    if len(items) != 1 or not isinstance(items[0], dict):
+        return None, "a `time_shift` with several shifts"
+    item = items[0]
+    if item.get("time_dimension") or item.get("name"):
+        key = "time_dimension" if item.get("time_dimension") else "name"
+        return None, f"a `time_shift` with `{key}`"
+    if item.get("type", "prior") != "prior":
+        return None, f"a `time_shift` of type `{item.get('type')}`"
+    match = _SHIFT.fullmatch(str(item.get("interval", "")).strip())
+    count = int(match.group(1)) if match else 0
+    if count <= 0:
+        return None, f"a `time_shift` of `{item.get('interval')}`"
+    unit = match.group(2)
+    if unit == "quarter":
+        count, unit = count * 3, "month"
+    return (f"{count} {unit}" if count == 1 else f"{count} {unit}s"), None
+
+
+def _fold_shifts(metrics: list[dict[str, Any]], measures: set[str]) -> None:
+    """Reads ``<metric>__<name>`` measures back as the metric's offset input (DEC-51): the
+    export writes one for each shifted read of a metric that also reads members unshifted, or
+    reads one through an ``alias``. A helper used elsewhere, or whose name cannot be an input
+    or an alias, stays a metric of its own, with the same numbers."""
+    by_name = {m["name"]: m for m in metrics}
+    uses: dict[str, int] = {}
+    for metric in metrics:
+        for ref in set(_metric_refs(metric)):
+            uses[ref] = uses.get(ref, 0) + 1
+    for main in list(metrics):
+        if main.get("type") != "derived" or main.get("inputs"):
+            continue
+        refs = REF_RE.findall(main["expr"])
+        for ref in dict.fromkeys(refs):
+            helper = by_name.get(ref)
+            key = ref.removeprefix(main["name"] + "__")
+            if key == ref or helper is None or uses.get(ref) != 1:
+                continue
+            inputs = helper.get("inputs") or []
+            if len(inputs) != 1 or helper["expr"].strip() != "{" + inputs[0]["metric"] + "}":
+                continue
+            target = inputs[0]["metric"]
+            if key == target:
+                if target in refs:
+                    continue  # also read unshifted: only an alias tells them apart
+                item = {"metric": target, "offset": inputs[0]["offset"]}
+            elif _FIELD.fullmatch(key) and key not in by_name and key not in measures:
+                item = {"metric": target, "offset": inputs[0]["offset"], "alias": key}
+            else:
+                continue
+            main["expr"] = main["expr"].replace("{" + ref + "}", "{" + key + "}")
+            main.setdefault("inputs", []).append(item)
+            metrics.remove(helper)
+            del by_name[ref]
+
+
+def _skip_invalid_offsets(
+    metrics: list[dict[str, Any]], skipped: set[str], warnings: list[str], where
+) -> list[dict[str, Any]]:
+    """The metrics without those whose offsets Cosmos cannot compute: a shift of a cumulative
+    metric or of a metric with offsets of its own (Cube adds nested shifts), and offsets that
+    mix days or weeks with months or years, which no grain answers. The conditions are the
+    validator's own; the metrics that use a skipped one go too."""
+    by_name = {m["name"]: m for m in metrics}
+
+    def under(name: str, seen: set[str]):
+        metric = by_name.get(name)
+        if metric is None or name in seen:
+            return
+        seen.add(name)
+        yield metric
+        for ref in _metric_refs(metric):
+            if ref:
+                yield from under(ref, seen)
+
+    def units(name: str) -> set[str]:
+        return {
+            parse_offset(i["offset"])[1]
+            for found in under(name, set())
+            for i in found.get("inputs") or []
+        }
+
+    mixed = {m["name"] for m in metrics if len(units(m["name"])) > 1}
+    kept = []
+    for metric in metrics:
+        reason = None
+        for item in metric.get("inputs") or []:
+            for found in under(item["metric"], set()):
+                if found["type"] == "cumulative":
+                    reason = (
+                        f"it shifts the cumulative metric `{found['name']}`, and Cosmos does "
+                        "not shift cumulative metrics"
+                    )
+                elif found["type"] == "derived" and found.get("inputs"):
+                    reason = (
+                        f"it shifts `{found['name']}`, which is shifted itself, and Cosmos "
+                        "offsets do not combine"
+                    )
+                if reason:
+                    break
+            if reason:
+                break
+        if reason is None and metric["name"] in mixed:
+            if not any(ref in mixed for ref in _metric_refs(metric)):
+                reason = "its shifts mix days or weeks with months or years, which no grain answers"
+        if reason:
+            warnings.append(f"{where(metric['name'])}: {reason}; skipped")
+            skipped.add(metric["name"])
+        else:
+            kept.append(metric)
+    return kept
+
+
+def _measure(cube, model, measure, dims, metrics, warnings, notes) -> bool:
     """Adds the measure (and its metric) to the model; False when it is skipped."""
     name, kind = measure["name"], measure.get("type", "count")
     where = f"cubes.{cube}.measures.{name}"
     sql = measure.get("sql")
+    shift = measure.get("time_shift")
+    offset = None
+    if shift is not None:
+        offset, problem = _shift_offset(shift)
+        if kind != "number":
+            problem = f"a `time_shift` on a measure of type `{kind}`"
+        if problem:
+            warnings.append(
+                f"{where}: {problem} has no Cosmos offset (only one `type: prior` shift of a "
+                "whole number of days, weeks, months, quarters or years, on every time "
+                "dimension of the query); measure skipped"
+            )
+            return False
     if kind == "number":
         refs = _MEMBER_REF.findall(str(sql or ""))
         if not refs:
             warnings.append(f"{where}: `number` measure without measure references; skipped")
             return False
         expr = _MEMBER_REF.sub(lambda m: "{" + (m.group(2) or m.group(1)) + "}", str(sql))
-        metrics.append({"name": name, "type": "derived", "expr": _strip_cube(expr)})
+        metric = {"name": name, "type": "derived", "expr": _strip_cube(expr)}
+        if offset:
+            # A time shift moves every member the measure reads (DEC-51).
+            used = dict.fromkeys(REF_RE.findall(metric["expr"]))
+            metric["inputs"] = [{"metric": ref, "offset": offset} for ref in used]
+            grains = [
+                g
+                for g in ("day", "week", "month", "quarter", "year")
+                if not offset_grain_problem(offset, g)
+            ]
+            notes[name] = (
+                f"{where}: `time_shift` read as the offset `{offset}`, queried by "
+                f"{' or '.join(grains)}, where the periods both return have the same numbers. "
+                "Cube also answers other grains and returns periods without facts whose earlier "
+                "period has some, and it applies a date range after the shift, while Cosmos "
+                "filters the facts first"
+            )
+        metrics.append(metric)
         return True
     if kind not in _AGG:
         warnings.append(f"{where}: type `{kind}` is not supported; skipped")
@@ -726,6 +892,19 @@ def real_division(tree: exp.Expression) -> exp.Expression:
 _TO_DATE_AGGS = ("sum", "count")
 
 
+def _cube_interval(offset: str) -> str:
+    """A Cosmos offset as a Cube ``time_shift`` interval, in its own unit (``1 month``,
+    ``12 months``, ``1 year``), except weeks, written as their days (``2 weeks`` is
+    ``14 days``): Cube's Oracle query drops a ``week`` interval, as for trailing windows."""
+    match = re.fullmatch(r"\s*(\d+)\s+(day|week|month|year)s?\s*", offset, re.IGNORECASE)
+    if match is None or parse_offset(offset) is None:
+        raise AssertionError(offset)  # the model validated
+    count, unit = int(match.group(1)), match.group(2).lower()
+    if unit == "week":
+        count, unit = count * 7, "day"
+    return f"{count} {unit}" if count == 1 else f"{count} {unit}s"
+
+
 class _NotExported(Exception):
     """A metric the Cube export cannot carry; the message is the reason."""
 
@@ -805,6 +984,8 @@ class _CubeWriter:
         self.lost: dict[str, str] = {}
         self.placed: dict[str, str] = {}  # member -> cube it is written on
         self.leaves: dict[str, set[str]] = {}  # member -> cubes whose measures it aggregates
+        self.staged: set[str] = set()  # multi-stage measures (offsets and what uses them)
+        self._helpers: dict[str, list[tuple[str, dict[str, Any], set[str]]]] = {}
         self.measures: dict[str, list[dict[str, Any]]] = {m: [] for m in graph.models}
         for node in graph.models.values():
             for measure in node.spec.measures:
@@ -1071,9 +1252,19 @@ class _CubeWriter:
         metric = self.graph.metrics[name]
         try:
             cube, item, leaves = self._metric(metric)
+            helpers = self._helpers.pop(name, [])
         except _NotExported as exc:
+            self._helpers.pop(name, None)
             self.lost[name] = str(exc)
             return
+        for where, helper, under in helpers:
+            # The shifted reads of a metric that also reads members unshifted (DEC-51).
+            self.placed[helper["name"]] = where
+            self.leaves[helper["name"]] = under
+            self.staged.add(helper["name"])
+            self.measures[where].append(helper)
+        if item.get("multi_stage"):
+            self.staged.add(name)
         if metric.label:
             item["title"] = metric.label
         if metric.description:
@@ -1104,7 +1295,7 @@ class _CubeWriter:
             num, den = self._use(metric.numerator), self._use(metric.denominator)
             cube = self.placed[num]
             sql = f"1e0 * {self._ref(num, cube)} / NULLIF({self._ref(den, cube)}, 0)"
-            item = {"name": metric.name, "type": "number", "sql": sql}
+            item = self._number(metric.name, sql, staged={num, den} & self.staged)
             return cube, item, self.leaves[num] | self.leaves[den]
         if isinstance(metric, DerivedMetric):
             return self._derived(metric)
@@ -1152,12 +1343,18 @@ class _CubeWriter:
         item["rolling_window"] = {"type": "to_date", "granularity": metric.grain_to_date}
         return node.name, item, {node.name}
 
+    def _number(self, name: str, sql: str, *, staged: Any, shift: str | None = None) -> dict:
+        """A ``number`` measure; ``multi_stage`` when it reads a multi-stage measure or shifts
+        its members with ``time_shift`` (DEC-51), as Cube requires."""
+        item: dict[str, Any] = {"name": name, "type": "number"}
+        if staged or shift:
+            item["multi_stage"] = True
+        item["sql"] = sql
+        if shift:
+            item["time_shift"] = [{"interval": _cube_interval(shift), "type": "prior"}]
+        return item
+
     def _derived(self, metric) -> tuple[str, dict[str, Any], set[str]]:
-        if metric.inputs:
-            raise _NotExported(
-                "it reads an input at an earlier period (`offset`), and the Cube export does "
-                "not carry offsets yet"
-            )
         refs: list[str] = []
 
         def mask(match):
@@ -1171,19 +1368,95 @@ class _CubeWriter:
                 f"its expression uses bare columns ({', '.join(bare)}), and a Cube `number` "
                 "measure references measures only"
             )
-        names = [self._use(ref) for ref in refs]
-        cube = self.placed[names[0]]
-        leaves: set[str] = set().union(*(self.leaves[n] for n in names))
+        offsets = metric.offsets()
+        # Every reference read at one offset, with no alias: one measure with `time_shift`,
+        # which shifts all the members it reads. Otherwise each shifted read is a measure of
+        # its own, `<metric>__<name>`, that the metric reads (DEC-51).
+        shift = None
+        if (
+            offsets
+            and not metric.aliases()
+            and set(refs) <= set(offsets)
+            and len({_cube_interval(o) for o in offsets.values()}) == 1
+        ):
+            shift = next(iter(offsets.values()))
+        placed: dict[str, str] = {}
+        helpers: list[tuple[str, dict[str, Any], set[str]]] = []
+        names: list[str] = []
+        for ref in refs:
+            if ref not in offsets or shift:
+                names.append(self._use(metric.target(ref)))
+                continue
+            helper = f"{metric.name}__{ref}"
+            if helper not in placed:
+                taken = set(self.graph.metrics) | set(self.graph.measure_owner) | set(self.placed)
+                if helper in taken:
+                    raise _NotExported(
+                        f"it reads `{ref}` at an earlier period, and `{helper}`, the name of the "
+                        "measure that would shift it, is already taken"
+                    )
+                target = self._use(metric.target(ref))
+                where = self.placed[target]
+                placed[helper] = where
+                sql = self._ref(target, where)
+                item = self._number(helper, sql, staged=True, shift=offsets[ref])
+                helpers.append((where, item, self.leaves[target]))
+            names.append(helper)
+
+        def ref_of(name: str, cube: str) -> str:
+            where = placed.get(name) or self.placed[name]
+            return "{" + (name if where == cube else f"{where}.{name}") + "}"
+
+        cube = placed.get(names[0]) or self.placed[names[0]]
+        under = {h["name"]: leaves for _, h, leaves in helpers}
+        leaves: set[str] = set().union(*(under.get(n) or self.leaves[n] for n in names))
         if not tree.find(exp.Div):
             it = iter(names)
-            sql = REF_RE.sub(lambda m: self._ref(next(it), cube), metric.expr)
+            sql = REF_RE.sub(lambda m: ref_of(next(it), cube), metric.expr)
         else:
             sql = re.sub(
                 r"__ref_(\d+)",
-                lambda m: self._ref(names[int(m.group(1))], cube),
+                lambda m: ref_of(names[int(m.group(1))], cube),
                 real_division(tree).sql(),
             )
-        return cube, {"name": metric.name, "type": "number", "sql": sql}, leaves
+        staged = bool(helpers) or bool(set(names) & self.staged)
+        item = self._number(metric.name, sql, staged=staged, shift=shift)
+        if offsets:
+            self._helpers[metric.name] = helpers
+            self._warn_offsets(metric)
+        return cube, item, leaves
+
+    def _warn_offsets(self, metric: DerivedMetric) -> None:
+        """Where Cube's ``time_shift`` gives the planner's numbers, and where not (DEC-51)."""
+        offsets, aliases = metric.offsets(), metric.aliases()
+        reads = ", ".join(
+            f"`{metric.target(ref)}`"
+            + (f" (as `{ref}`)" if ref in aliases else "")
+            + f" by `{offset}`"
+            + (
+                f" (`interval: {_cube_interval(offset)}`)"
+                if _cube_interval(offset) != offset
+                else ""
+            )
+            for ref, offset in offsets.items()
+        )
+        grains = [
+            g
+            for g in ("day", "week", "month", "quarter", "year")
+            if all(not offset_grain_problem(o, g) for o in offsets.values())
+        ]
+        self.warnings.append(
+            f"metrics.{metric.name}: Cube shifts {reads} with a multi-stage `time_shift`, which "
+            "needs Cube's Tesseract planner (the default from Cube 1.7.0). Cube adds the "
+            "interval to each row's time before truncating it to the query's grain; at the "
+            f"grains Cosmos accepts ({', '.join(grains)}) the shifted rows fill exactly the "
+            "later period, so the periods both return have the same numbers. Cube also answers "
+            "grains Cosmos refuses (a month shift by day clamps month ends) and shifts every "
+            "time dimension of the query; it full-joins the shifted values, so it also returns "
+            "periods without facts whose earlier period has some; and it applies a date range "
+            "to the shifted time, while Cosmos filters the facts first, so a time filter leaves "
+            "out the earlier periods in Cosmos only"
+        )
 
     def _condition(self, flt: str, model: str) -> str:
         """A metric filter over the measure's own cube, as Cube SQL."""

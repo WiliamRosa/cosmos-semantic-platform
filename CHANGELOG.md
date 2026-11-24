@@ -7,6 +7,27 @@ format or the API; such changes are listed under **Changed**.
 
 ## [Unreleased]
 
+### Added
+
+- Offsets in the Cube export (DEC-51): `cosmos export cube` writes a derived metric with offset
+  inputs as a Cube multi-stage `number` measure with `time_shift: [{interval, type: prior}]`
+  (`revenue_prev_month`: `sql: "{revenue}"`, `interval: 1 month`) instead of refusing it. A
+  metric that also reads members unshifted, or reads an input through an `alias`, reads each
+  shifted reference through a `<metric>__<alias or input>` measure; metrics over a shifted one
+  are `multi_stage` too. Intervals keep the offset's unit (`1 year`, `12 months`), except weeks,
+  written as days (Cube's Oracle query drops a `week` interval). Checked against Cube's
+  Tesseract source: Cube adds the interval to each row's time before truncating it, so at every
+  grain the planner accepts (days by day, multiples of 7 days by week, months by month, quarter
+  and year in multiples of 3 and 12) the shift moves whole periods, month-end clamping included,
+  and the numbers agree; nothing is refused on month-end grounds. Each exported offset is a
+  warning on what differs: Cube answers grains the planner refuses, returns periods without
+  facts and applies a date range after the shift. `cosmos import cube` reads a single `prior`
+  `time_shift` back as offsets (`N quarter` as `3N months`), folds the `<metric>__<alias>`
+  measures back into the metric's input and alias, and skips with a warning `next` shifts,
+  `time_dimension` or named shifts, several shifts, other units, shifts of zero, shifts of a
+  shifted or cumulative measure and mixed days and months. The re-imported example answers the
+  offset reference queries A35 to A38 and A49 to A51 with the hand-written SQL's numbers.
+
 ## [0.5.0] - 2026-11-23
 
 This release adds BigQuery as a data source, checked on a live project, and Trino and Starburst in preview. Metrics gain offsets and rolling windows in weeks, offsets in years, growth in one metric, a reconciliation tolerance, filters on metric values and structured time semantics in the evidence. Requests take structured filters on MCP and REST, and `cosmos reconcile --expected` checks a metric against a report's numbers.
