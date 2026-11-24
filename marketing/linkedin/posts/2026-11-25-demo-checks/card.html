@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Cosmos Semantic · demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0b1220;--bg2:#0f1a2e;--ink:#f8fafc;--muted:#94a3b8;--sky:#38bdf8}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#222;font-family:Inter,system-ui,sans-serif;color:var(--ink)}
+#card{width:1080px;height:1350px;position:relative;overflow:hidden;padding:96px 88px;display:flex;flex-direction:column;
+ background:radial-gradient(900px 600px at 110% -10%,rgba(56,189,248,.18),transparent 60%),linear-gradient(180deg,var(--bg),var(--bg2))}
+.kicker{font-size:22px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--sky)}
+h1{margin-top:20px;font-size:72px;line-height:1.05;font-weight:800;letter-spacing:-.03em}
+h1 b{color:var(--sky)}
+.steps{margin-top:52px;display:flex;flex-direction:column;gap:22px}
+.step{display:flex;gap:28px;align-items:center;border:1px solid rgba(56,189,248,.3);background:rgba(56,189,248,.06);border-radius:20px;padding:26px 34px}
+.n{font-size:44px;font-weight:800;color:var(--sky);width:48px}
+.step h3{font-size:32px;font-weight:800}
+.step p{margin-top:6px;font-size:24px;line-height:1.35;color:#cbd5e1}
+code{font:500 22px "JetBrains Mono",monospace;color:var(--sky)}
+.footer{position:absolute;left:88px;right:88px;bottom:56px;display:flex;justify-content:space-between;font-size:22px;color:var(--muted)}
+</style></head><body>
+<div id="card">
+<div class="kicker">Live demo · two minutes</div>
+<h1>Two reports disagree. <b>Find out why.</b></h1>
+<div class="steps">
+<div class="step"><div class="n">1</div><div><h3>Jump to the metric</h3><p>Press <code>Ctrl+K</code>, type "revenue".</p></div></div>
+<div class="step"><div class="n">2</div><div><h3>Read its definition</h3><p>Formula, owner, what depends on it.</p></div></div>
+<div class="step"><div class="n">3</div><div><h3>Open Checks</h3><p>Governed metrics against legacy report SQL.</p></div></div>
+<div class="step"><div class="n">4</div><div><h3>See the likely cause</h3><p>Not just a red mark.</p></div></div>
+<div class="step"><div class="n">5</div><div><h3>Open an audited answer</h3><p>Formula, rules, SQL, fingerprints.</p></div></div>
+</div>
+<div class="footer"><span>Read-only · synthetic data · no install</span><span>wiliamrosa.github.io/cosmos-semantic-platform</span></div>
+</div></body></html>
