@@ -164,7 +164,7 @@ The report gives matched and differing rows, keys found on one side only, totals
 
 Probes are evidence, not proof: when two causes produce the same numbers, both are listed. The [divergence zoo](../examples/ecommerce/divergence_zoo.yml) plants each mistake in legacy SQL and is diagnosed on DuckDB, Postgres and SQL Server in the tests (`cosmos reconcile --cases examples/ecommerce/divergence_zoo.yml` runs it as a demo).
 
-Legacy SQL can read anything the database user can, bypassing row filters, so reconciliation is an operator tool in the CLI; it is not exposed through the REST API or MCP. The governed side uses the database server's date as `as_of`, so both sides agree on "today"; against a report, pass the report's date with `--as-of` when it is not today's.
+Legacy SQL can read anything the database user can, bypassing row filters, so arbitrary reconciliation is an operator tool in the CLI. The REST API (`POST /v1/reconcile/{case}`) and the MCP tool `reconcile` run only the cases the operator declared in `COSMOS_CHECK_CASES` (DEC-45; point it at the same file as `cosmos check --cases`, since health matches cases by id, and every run records the file's sha256 as `cases_hash`), never SQL from the caller, as the caller, audited like a query (event `reconcile`) and recorded as a partial check run. Row filters cannot be applied to hand-written SQL, so a case is refused when a row filter applies to its governed side or when its SQL reads anything other than the tables of models without row filters: a view, another table, a table function or SQL that does not parse is refused. CTE references are resolved by scope, and a CTE named like a model's table or like any table the SQL reads is refused, so shadowing cannot hide a table. Against models with row filters, names match leniently (an unqualified or differently quoted `customers` counts as `public.customers`); against models without them, strictly (quoting respected, schema and catalog compared when both sides carry them). The row diff lists at most 200 rows. The evidence carries a `reconcile_id`, which is not a `query_id`: a reconciliation is not replayable, and the console does not count it as a query. Diagnosis probes run as the caller, so a cause can depend on the caller's row filters; probes never return rows. The console's latest check and check history use full runs only; partial runs are marked `partial` in the runs list. A case runs at most once per `COSMOS_RECONCILE_MIN_INTERVAL` seconds (60 by default; a call sooner is a 429 and records no run), and a reconciliation holds the connection lock one statement at a time, so queries run between its statements. A case that cannot run is recorded in the runs log with its error type only, since a database message may quote its SQL. The governed side uses the database server's date as `as_of`, so both sides agree on "today"; against a report, pass the report's date with `--as-of` when it is not today's.
 
 ### The expected CSV
 
@@ -266,6 +266,7 @@ Every inference goes into the report (`--report report.json`); the draft is a st
 | `replay` | Whether the model, the SQL or the data changed since one of the user's audited queries |
 | `impact` | What a change to a member affects, by owner, source systems and processes |
 | `dimension_values` | The distinct values of a categorical or boolean dimension with their row counts, or the date range of a time dimension (first and last day with rows, distinct days, in the model's time zone), after the user's row filters and the request's `filters` (also `GET` and `POST /v1/dimensions/{name}/values`) |
+| `reconcile` | Runs a declared reconciliation case (`COSMOS_CHECK_CASES`) as the caller: outcome, row diff (at most 200 rows), likely causes, the metric's updated health and the evidence; records a partial check run. Without `case`, the declared cases (id and title). Refused for cases under row filters; at most once a minute per case (also `GET /v1/reconcile` and `POST /v1/reconcile/{case}`) |
 
 ### Member health
 
@@ -273,7 +274,7 @@ Every inference goes into the report (`--report report.json`); the draft is a st
 
 | Field | Meaning |
 | --- | --- |
-| `last_reconciled_at` | When the latest check run reconciled this metric or measure (ISO 8601); null when it did not, and for rules and processes |
+| `last_reconciled_at` | When the latest check run reconciled this metric or measure (ISO 8601); null when it did not, and for rules and processes. A partial run (one case through `reconcile`, DEC-45) updates only its case; the others keep the latest full run, and the metric's time is the newest of its cases (staleness is judged on the oldest) |
 | `last_tests_run_at` | When the latest check run ran the rule tests; null when no run recorded them |
 
 | Reason | State | Parameters |
