@@ -18,6 +18,8 @@ export interface RunSummary {
   run_id: string;
   at: string;
   ok: boolean;
+  /** One case run through the API or MCP (DEC-45); the overview lists full runs only. */
+  partial: boolean;
   data_source: string | null;
   rule_tests: { total: number; passed: number; failed: number };
   reconciliations: { pass: number; fail: number; error: number; skipped: number };

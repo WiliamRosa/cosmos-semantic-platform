@@ -112,8 +112,11 @@ class Console:
         )
         rule_tests = self._rule_tests.values()
         runs = self._runs()
-        latest = runs[-1] if runs else None
-        audit = self._audit()
+        # Partial runs (one case through the API or MCP, DEC-45) neither stand for the latest
+        # check nor push full runs out of the history.
+        full = [r for r in runs if not r.get("partial")]
+        latest = full[-1] if full else None
+        audit = self._audit()  # query records only: `reconcile` and `dimension_values` are not
         since = dt.datetime.now(dt.UTC) - dt.timedelta(days=30)
         recent = [r for r in audit if dt.datetime.fromisoformat(r["at"]) >= since]
         by_day: dict[str, Counter] = defaultdict(Counter)
@@ -152,7 +155,7 @@ class Console:
                 "metric_health": {s: metric_states.get(s, 0) for s in RANK},
             },
             "latest_check": _run_summary(latest) if latest else None,
-            "checks": [_run_summary(r) for r in runs[-30:]],
+            "checks": [_run_summary(r) for r in full[-30:]],
             "usage": {
                 "available": self.service.audit_path is not None,
                 "queries_30d": len(recent),
@@ -439,6 +442,7 @@ def _run_summary(run: dict[str, Any]) -> dict[str, Any]:
         "run_id": run["run_id"],
         "at": run["at"],
         "ok": run_ok(run),
+        "partial": bool(run.get("partial")),
         "data_source": run.get("data_source"),
         "rule_tests": {k: run["rule_tests"][k] for k in ("total", "passed", "failed")},
         "reconciliations": {k: outcomes.get(k, 0) for k in ("pass", "fail", "error", "skipped")},
