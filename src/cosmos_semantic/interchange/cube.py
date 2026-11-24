@@ -1455,7 +1455,9 @@ class _CubeWriter:
             "time dimension of the query; it full-joins the shifted values, so it also returns "
             "periods without facts whose earlier period has some; and it applies a date range "
             "to the shifted time, while Cosmos filters the facts first, so a time filter leaves "
-            "out the earlier periods in Cosmos only"
+            "out the earlier periods in Cosmos only. A Cube query with no time member applies "
+            "no shift and returns the unshifted total, and one with only a date range returns "
+            "the earlier period's total; Cosmos refuses both requests"
         )
 
     def _condition(self, flt: str, model: str) -> str:

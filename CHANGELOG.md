@@ -21,7 +21,8 @@ format or the API; such changes are listed under **Changed**.
   and year in multiples of 3 and 12) the shift moves whole periods, month-end clamping included,
   and the numbers agree; nothing is refused on month-end grounds. Each exported offset is a
   warning on what differs: Cube answers grains the planner refuses, returns periods without
-  facts and applies a date range after the shift. `cosmos import cube` reads a single `prior`
+  facts, applies a date range after the shift, and applies no shift to a query without a time
+  member. `cosmos import cube` reads a single `prior`
   `time_shift` back as offsets (`N quarter` as `3N months`), folds the `<metric>__<alias>`
   measures back into the metric's input and alias, and skips with a warning `next` shifts,
   `time_dimension` or named shifts, several shifts, other units, shifts of zero, shifts of a

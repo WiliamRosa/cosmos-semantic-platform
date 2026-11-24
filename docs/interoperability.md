@@ -289,6 +289,7 @@ So there is no month-end case where both return a number and the numbers differ;
 - **Periods without facts:** the full join returns periods whose earlier period has facts and they have none (the month after the last month of data); Cosmos returns only periods with facts after the filters. Periods both return have the same numbers.
 - **Date filters:** Cube applies the query's date range to the shifted time, so the first period of a range reads the period before it; Cosmos filters the facts before the shift, so that first period is NULL (as with the dbt export).
 - **Another time dimension:** Cube shifts every time dimension of the query; the planner refuses a request with more than one.
+- **No time dimension:** a Cube query with no time member applies no shift, so the shifted measure returns the unshifted total (not last period's value); with only a date range, Cube shifts the filter and returns the earlier period's total. The planner refuses an offset request without a time grain.
 
 Cube's runtime was not run: the tests check the numbers through `cosmos import cube` and the planner, and the source reading above stands for Cube's own behaviour.
 
