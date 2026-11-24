@@ -24,7 +24,7 @@
           "type": "named",
           "name": "--with",
           "value": "cosmos-semantic[server,duckdb]",
-          "description": "The MCP server and a data source driver; use postgres, databricks, snowflake, oracle, mysql or sqlserver for yours"
+          "description": "The MCP server and a data source driver; use postgres, databricks, snowflake, bigquery, oracle, mysql or sqlserver for yours"
         }
       ],
       "packageArguments": [
