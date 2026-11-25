@@ -877,7 +877,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 72
+    assert len(REFERENCE) == 76
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1302,7 +1302,7 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     # to A37 and the aliased ones A49 to A51 (DEC-51) among them.
     assert {"A08", "A09", "A29", "A30", "A34"} <= {c.id for c in cases}
     assert {"A35", "A36", "A37", "A49", "A50", "A51"} <= {c.id for c in cases}
-    assert len(cases) == 40
+    assert len(cases) == 43
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1314,7 +1314,7 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     # re-imported model too; A33 is the 30-day window of customers by segment.
     assert {"R17", "R18", "A08", "A09", "A32", "A33", "A39", "A40", "A41"} <= {c.id for c in cases}
     assert "A38" in {c.id for c in cases}
-    assert len(cases) == 65
+    assert len(cases) == 68
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -2731,8 +2731,7 @@ def test_dbt_export_round_trip(graph, tmp_path):
         "metrics.revenue_month_to_date: MetricFlow accumulates over `metric_time`, which is "
         "`orders.ordered_at`; by that dimension at day or month grain the numbers are the "
         "engine's on the periods with facts. MetricFlow also returns periods without facts after "
-        "the first fact of a month and the grains the engine refuses, and a time constraint that "
-        "starts inside a month does not cut its total, while the engine filters the facts first"
+        "the first fact of a month and the grains the engine refuses"
     ) in exported.warnings
     assert (
         "metrics.revenue_year_to_date: MetricFlow accumulates over `metric_time`, which is "
@@ -2792,7 +2791,7 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     assert {"A08", "A09", "A29", "A30", "A34", "A35", "A36", "A37", "A49", "A51"} <= {
         c.id for c in cases
     }
-    assert len(cases) == 40
+    assert len(cases) == 43
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -2802,7 +2801,7 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     governed = compile_project(_with_policies(back.project, graph.project))
     cases = _cube_cases(graph.project, policies=True, lost=DBT_LOST)
     assert {"R17", "R18", "A32", "A33", "A38", "A39", "A40", "A41", "A42"} <= {c.id for c in cases}
-    assert len(cases) == 65
+    assert len(cases) == 68
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"

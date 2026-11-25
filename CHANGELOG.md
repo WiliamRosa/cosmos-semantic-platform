@@ -75,6 +75,33 @@ format or the API; such changes are listed under **Changed**.
   shifted or cumulative measure and mixed days and months. The re-imported example answers the
   offset reference queries A35 to A38 and A49 to A51 with the hand-written SQL's numbers.
 
+### Changed
+
+- Date filters no longer cut year-, quarter-, month-, week- or day-to-date metrics short
+  (DEC-48). A request filter on a `grain_to_date` metric's time dimension now chooses the output
+  rows, and each row still reads its period from the start: "year-to-date revenue for October"
+  is the revenue since 1 January, not since 1 October, as in Power BI, Cube and MetricFlow; other
+  filters (status, region, row filters) still apply to the facts first. **Filtered running-total
+  queries change their numbers by design:** each row now has the value the request gives without
+  its filters on the time dimension (reference case A09 now expects month-to-date from the 1st of
+  each month). The planner splits the same shapes as for rolling windows (DEC-34): the running
+  total reads its facts from a second aggregate, `<model>_agg_from_<period>_start`, where each
+  lower bound on the time dimension is read at the start of the next period and each upper bound
+  at the start of the row (so a bound inside the last row keeps that row's later facts), while
+  the original aggregate still chooses the rows. `NOT`, `<>`, `NOT IN`, functions of the time
+  dimension, the hour grain and `OR` with another member keep today's behaviour, and so do
+  running totals over all time (without `grain_to_date`). The SQL of every reference request
+  other than A09 is unchanged on every dialect, and a test pins the `sql_hash` of requests
+  without such a filter. The evidence's `time.filters_applied` for `grain_to_date` metrics is
+  `time_after`, or `before` when an unsplit filter cuts them; unfiltered year-to-date queries now
+  carry `time_after` too (they had `before`). The dbt export warning for running totals no longer
+  lists time constraints among the differences. Reference cases A59 (year-to-date by month with
+  a status filter), A60 (a running maximum and sum by status for a range ending inside a
+  month), A61 (an upper bound at noon of a day) and A62 (a `NOT` filter that still cuts) have
+  hand-written SQL, and the randomized cross-database test draws 8 date-filtered
+  grain-to-date requests ([semantic model](docs/semantic-model.md#period-to-date)). Offsets
+  still filter first; they are the next slice.
+
 ### Fixed
 
 - Flaky same-number tests (DEC-55). The replay test changed the shared `orders` table

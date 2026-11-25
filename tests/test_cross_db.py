@@ -3,8 +3,9 @@
 Generates random requests (fixed seed) combining metrics, dimensions, grains, business rules
 and users, and requires DuckDB, Postgres and SQL Server to return exactly the same result.
 Rolling-window metrics, valid only at day grain, get draws of their own so every run has them,
-also with a filter on their time dimension (DEC-34); so do metrics that read an input at an
-earlier period, valid only at the grains it fits.
+also with a filter on their time dimension (DEC-34); so do grain-to-date metrics with a filter
+on their time dimension (DEC-48), and metrics that read an input at an earlier period, valid
+only at the grains it fits.
 Also checks that a refused request is refused on every data source.
 """
 
@@ -17,7 +18,7 @@ import random
 
 import pytest
 
-from cosmos_semantic.compiler import TIME_GRAINS, metrics_under
+from cosmos_semantic.compiler import TIME_GRAINS, metrics_under, to_date_grain_problem
 from cosmos_semantic.errors import CosmosError
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
 from cosmos_semantic.spec import CumulativeMetric, DerivedMetric, offset_grain_problem
@@ -235,6 +236,47 @@ def _rolling_date_filter_requests(graph, count: int, seed: int):
     return produced
 
 
+def _to_date_filter_requests(graph, count: int, seed: int):
+    """Grain-to-date requests with a filter on the time dimension and up to one other filter
+    (DEC-48), at the grains each period accepts. Its own generator, as for rolling windows."""
+    rng = random.Random(seed)
+    to_date = sorted(
+        name
+        for name, metric in graph.metrics.items()
+        if isinstance(metric, CumulativeMetric) and metric.grain_to_date
+    )
+    times = sorted(
+        f"{m}.{d}"
+        for m, node in graph.models.items()
+        for d, spec in node.dimensions.items()
+        if spec.type == "time" and not spec.sensitivity
+    )
+    produced, attempts = [], 0
+    while len(produced) < count and attempts < count * 50:
+        attempts += 1
+        name, time = rng.choice(to_date), rng.choice(times)
+        period = graph.metrics[name].grain_to_date
+        grain = rng.choice([g for g in ("day", "month") if not to_date_grain_problem(period, g)])
+        request = QueryRequest(
+            metrics=[name],
+            dimensions=[f"{time}__{grain}"],
+            filters=[
+                rng.choice(DATE_FILTERS).format(t=time),
+                *rng.sample(FILTERS, rng.choice([0, 1])),
+            ],
+        )
+        principal = Principal(
+            user={"region": rng.choice(REGIONS)}, channel=rng.choice(["api", "mcp"])
+        )
+        try:
+            for dialect in DIALECTS:
+                Planner(graph, dialect).plan(request, principal)
+        except CosmosError:
+            continue
+        produced.append((request, principal))
+    return produced
+
+
 def _offset_grains(graph, name: str) -> list[str]:
     """The grains every offset under ``name`` fits (empty when it reads no offset)."""
     offsets = [
@@ -345,6 +387,7 @@ def _metric_filter_requests(graph, count: int, seed: int):
 REQUESTS_PER_RUN = 80
 ROLLING_PER_RUN = 12
 ROLLING_DATE_FILTER_PER_RUN = 8
+TO_DATE_FILTER_PER_RUN = 8
 OFFSET_PER_RUN = 12
 METRIC_FILTER_PER_RUN = 8
 
@@ -390,6 +433,17 @@ def test_rolling_date_filter_draws_are_deterministic_and_split(graph):
     assert any(lookback)
 
 
+def test_to_date_filter_draws_are_deterministic_and_split(graph):
+    first = _to_date_filter_requests(graph, TO_DATE_FILTER_PER_RUN, seed=2026)
+    assert len(first) == TO_DATE_FILTER_PER_RUN
+    assert first == _to_date_filter_requests(graph, TO_DATE_FILTER_PER_RUN, seed=2026)
+    start = [
+        "_start AS" in Planner(graph, "duckdb").plan(request, principal).sql
+        for request, principal in first
+    ]
+    assert any(start)
+
+
 def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     failures = []
     requests = _requests(graph, REQUESTS_PER_RUN, seed=2026)
@@ -400,6 +454,9 @@ def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     dated = _rolling_date_filter_requests(graph, ROLLING_DATE_FILTER_PER_RUN, seed=2026)
     assert len(dated) == ROLLING_DATE_FILTER_PER_RUN
     requests += dated
+    to_date = _to_date_filter_requests(graph, TO_DATE_FILTER_PER_RUN, seed=2026)
+    assert len(to_date) == TO_DATE_FILTER_PER_RUN
+    requests += to_date
     shifted = _offset_requests(graph, OFFSET_PER_RUN, seed=2026)
     assert len(shifted) == OFFSET_PER_RUN
     requests += shifted

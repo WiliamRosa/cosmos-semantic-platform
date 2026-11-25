@@ -158,10 +158,12 @@ cases:
                SUM(r) OVER (PARTITION BY DATETRUNC(year, m) ORDER BY m ROWS UNBOUNDED PRECEDING) AS revenue_year_to_date
         FROM m
 
+  # Since DEC-48 the date filter chooses the output days and each day's month-to-date still
+  # reads its month from the 1st: the facts start at the 1st of the month 45 days ago.
   - id: A09
     category: tempo
     phase: 1
-    title: Month-to-date by status and day (window with an extra partition)
+    title: Month-to-date by status and day over the last 45 days, from the start of each month
     request:
       metrics: [revenue_month_to_date]
       dimensions: [orders.status, orders.ordered_at__day]
@@ -169,21 +171,30 @@ cases:
     sql: |
       WITH d AS (
         SELECT status, DATE_TRUNC('day', ordered_at) AS d, SUM(amount) AS r
-        FROM public.orders WHERE ordered_at >= CURRENT_DATE - INTERVAL '45' DAY GROUP BY 1, 2
+        FROM public.orders
+        WHERE ordered_at >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '45' DAY)
+        GROUP BY 1, 2
+      ), t AS (
+        SELECT status, d,
+               SUM(r) OVER (PARTITION BY status, DATE_TRUNC('month', d) ORDER BY d) AS mtd
+        FROM d
       )
-      SELECT status AS orders__status, d AS orders__ordered_at__day,
-             SUM(r) OVER (PARTITION BY status, DATE_TRUNC('month', d) ORDER BY d) AS revenue_month_to_date
-      FROM d
+      SELECT status AS orders__status, d AS orders__ordered_at__day, mtd AS revenue_month_to_date
+      FROM t WHERE d >= CURRENT_DATE - INTERVAL '45' DAY
     sql_by_dialect:
       tsql: |
         WITH d AS (
           SELECT status, DATETRUNC(day, ordered_at) AS d, SUM(amount) AS r
-          FROM public.orders WHERE ordered_at >= DATEADD(day, -45, CAST(GETDATE() AS DATE))
+          FROM public.orders
+          WHERE ordered_at >= DATETRUNC(month, DATEADD(day, -45, CAST(GETDATE() AS DATE)))
           GROUP BY status, DATETRUNC(day, ordered_at)
+        ), t AS (
+          SELECT status, d,
+                 SUM(r) OVER (PARTITION BY status, DATETRUNC(month, d) ORDER BY d ROWS UNBOUNDED PRECEDING) AS mtd
+          FROM d
         )
-        SELECT status AS orders__status, d AS orders__ordered_at__day,
-               SUM(r) OVER (PARTITION BY status, DATETRUNC(month, d) ORDER BY d ROWS UNBOUNDED PRECEDING) AS revenue_month_to_date
-        FROM d
+        SELECT status AS orders__status, d AS orders__ordered_at__day, mtd AS revenue_month_to_date
+        FROM t WHERE d >= DATEADD(day, -45, CAST(GETDATE() AS DATE))
 
   - id: A10
     category: regras
@@ -1291,3 +1302,171 @@ cases:
         AND c.segment <> 'Enterprise'
         AND c.region = 'Midwest'
       GROUP BY c.state
+
+  # -- Date filters do not cut running totals short (DEC-48) -----------------------------
+  # A request filter on a grain-to-date metric's time dimension chooses the output rows; each
+  # row still reads its period from the start. The hand-written SQL computes the running total
+  # over all the facts the other filters keep, then keeps the rows the date filter keeps.
+
+  # Year-to-date by month from 75 days ago, of completed orders: the first month's total starts
+  # on 1 January, while `revenue` and the status filter still apply to the facts first.
+  - id: A59
+    category: tempo
+    phase: 3
+    title: Year-to-date revenue of completed orders by month for the last 75 days
+    request:
+      metrics: [revenue_year_to_date, revenue]
+      dimensions: [orders.ordered_at__month]
+      filters:
+        - "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '75' DAY"
+        - "{orders.status} = 'completed'"
+    sql: |
+      WITH c AS (SELECT ordered_at, amount FROM public.orders WHERE status = 'completed'),
+      m AS (SELECT DATE_TRUNC('month', ordered_at) AS m, SUM(amount) AS r FROM c GROUP BY 1),
+      y AS (SELECT m, SUM(r) OVER (PARTITION BY DATE_TRUNC('year', m) ORDER BY m) AS ytd FROM m),
+      k AS (
+        SELECT DATE_TRUNC('month', ordered_at) AS m, SUM(amount) AS r FROM c
+        WHERE ordered_at >= CURRENT_DATE - INTERVAL '75' DAY GROUP BY 1
+      )
+      SELECT k.m AS orders__ordered_at__month, y.ytd AS revenue_year_to_date, k.r AS revenue
+      FROM k JOIN y ON y.m = k.m
+    sql_by_dialect:
+      tsql: |
+        WITH c AS (SELECT ordered_at, amount FROM public.orders WHERE status = 'completed'),
+        m AS (
+          SELECT DATETRUNC(month, ordered_at) AS m, SUM(amount) AS r FROM c
+          GROUP BY DATETRUNC(month, ordered_at)
+        ),
+        y AS (
+          SELECT m, SUM(r) OVER (PARTITION BY DATETRUNC(year, m) ORDER BY m ROWS UNBOUNDED PRECEDING) AS ytd
+          FROM m
+        ),
+        k AS (
+          SELECT DATETRUNC(month, ordered_at) AS m, SUM(amount) AS r FROM c
+          WHERE ordered_at >= DATEADD(day, -75, CAST(GETDATE() AS DATE))
+          GROUP BY DATETRUNC(month, ordered_at)
+        )
+        SELECT k.m AS orders__ordered_at__month, y.ytd AS revenue_year_to_date, k.r AS revenue
+        FROM k JOIN y ON y.m = k.m
+
+  # A range whose upper bound falls inside a month: the months with orders in the range are
+  # kept, and each reads its year from 1 January to the end of the month, so the last month
+  # counts its orders after the bound too. A running maximum and a running sum, by status.
+  - id: A60
+    category: tempo
+    phase: 3
+    title: Year-to-date maximum and revenue by status and month, between two dates
+    request:
+      metrics: [max_order_value_year_to_date, revenue_year_to_date]
+      dimensions: [orders.status, orders.ordered_at__month]
+      filters:
+        - "{orders.ordered_at} BETWEEN CURRENT_DATE - INTERVAL '70' DAY AND CURRENT_DATE - INTERVAL '40' DAY"
+    sql: |
+      WITH m AS (
+        SELECT status, DATE_TRUNC('month', ordered_at) AS m, SUM(amount) AS r, MAX(amount) AS x
+        FROM public.orders GROUP BY 1, 2
+      ),
+      y AS (
+        SELECT status, m,
+               MAX(x) OVER (PARTITION BY status, DATE_TRUNC('year', m) ORDER BY m) AS mx,
+               SUM(r) OVER (PARTITION BY status, DATE_TRUNC('year', m) ORDER BY m) AS ytd
+        FROM m
+      ),
+      k AS (
+        SELECT DISTINCT status, DATE_TRUNC('month', ordered_at) AS m FROM public.orders
+        WHERE ordered_at BETWEEN CURRENT_DATE - INTERVAL '70' DAY
+                             AND CURRENT_DATE - INTERVAL '40' DAY
+      )
+      SELECT k.status AS orders__status, k.m AS orders__ordered_at__month,
+             y.mx AS max_order_value_year_to_date, y.ytd AS revenue_year_to_date
+      FROM k JOIN y ON y.status = k.status AND y.m = k.m
+    sql_by_dialect:
+      tsql: |
+        WITH m AS (
+          SELECT status, DATETRUNC(month, ordered_at) AS m, SUM(amount) AS r, MAX(amount) AS x
+          FROM public.orders GROUP BY status, DATETRUNC(month, ordered_at)
+        ),
+        y AS (
+          SELECT status, m,
+                 MAX(x) OVER (PARTITION BY status, DATETRUNC(year, m) ORDER BY m ROWS UNBOUNDED PRECEDING) AS mx,
+                 SUM(r) OVER (PARTITION BY status, DATETRUNC(year, m) ORDER BY m ROWS UNBOUNDED PRECEDING) AS ytd
+          FROM m
+        ),
+        k AS (
+          SELECT DISTINCT status, DATETRUNC(month, ordered_at) AS m FROM public.orders
+          WHERE ordered_at BETWEEN DATEADD(day, -70, CAST(GETDATE() AS DATE))
+                               AND DATEADD(day, -40, CAST(GETDATE() AS DATE))
+        )
+        SELECT k.status AS orders__status, k.m AS orders__ordered_at__month,
+               y.mx AS max_order_value_year_to_date, y.ytd AS revenue_year_to_date
+        FROM k JOIN y ON y.status = k.status AND y.m = k.m
+
+  # An upper bound inside a day on the timestamp column (12:00, 22 days ago): that day is kept,
+  # and its month-to-date holds the whole month up to the end of that day, its orders after
+  # noon included. `CAST(... AS DATETIME)` as in A48.
+  - id: A61
+    category: tempo
+    phase: 3
+    title: Month-to-date revenue by day up to noon of a day, with that day whole
+    request:
+      metrics: [revenue_month_to_date]
+      dimensions: [orders.ordered_at__day]
+      filters:
+        - "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '40' DAY"
+        - "{orders.ordered_at} <= CAST(CURRENT_DATE AS DATETIME) - INTERVAL '516' HOUR"
+    sql: |
+      WITH d AS (SELECT DATE_TRUNC('day', ordered_at) AS d, SUM(amount) AS r FROM public.orders GROUP BY 1),
+      t AS (SELECT d, SUM(r) OVER (PARTITION BY DATE_TRUNC('month', d) ORDER BY d) AS mtd FROM d),
+      k AS (
+        SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS d FROM public.orders
+        WHERE ordered_at >= CURRENT_DATE - INTERVAL '40' DAY
+          AND ordered_at <= CAST(CURRENT_DATE AS TIMESTAMP) - INTERVAL '516' HOUR
+      )
+      SELECT k.d AS orders__ordered_at__day, t.mtd AS revenue_month_to_date
+      FROM k JOIN t ON t.d = k.d
+    sql_by_dialect:
+      tsql: |
+        WITH d AS (
+          SELECT DATETRUNC(day, ordered_at) AS d, SUM(amount) AS r FROM public.orders
+          GROUP BY DATETRUNC(day, ordered_at)
+        ),
+        t AS (
+          SELECT d, SUM(r) OVER (PARTITION BY DATETRUNC(month, d) ORDER BY d ROWS UNBOUNDED PRECEDING) AS mtd
+          FROM d
+        ),
+        k AS (
+          SELECT DISTINCT DATETRUNC(day, ordered_at) AS d FROM public.orders
+          WHERE ordered_at >= DATEADD(day, -40, CAST(GETDATE() AS DATE))
+            AND ordered_at <= DATEADD(hour, -516, CAST(CAST(GETDATE() AS DATE) AS DATETIME2))
+        )
+        SELECT k.d AS orders__ordered_at__day, t.mtd AS revenue_month_to_date
+        FROM k JOIN t ON t.d = k.d
+
+  # A filter shape the planner cannot split (NOT) keeps the behaviour before DEC-48: it
+  # restricts the facts first, so the first month's total starts 45 days ago.
+  - id: A62
+    category: tempo
+    phase: 3
+    title: A NOT filter on the time dimension still cuts the first month-to-date of the range
+    request:
+      metrics: [revenue_month_to_date]
+      dimensions: [orders.status, orders.ordered_at__day]
+      filters: ["NOT ({orders.ordered_at} < CURRENT_DATE - INTERVAL '45' DAY)"]
+    sql: |
+      WITH d AS (
+        SELECT status, DATE_TRUNC('day', ordered_at) AS d, SUM(amount) AS r
+        FROM public.orders WHERE ordered_at >= CURRENT_DATE - INTERVAL '45' DAY GROUP BY 1, 2
+      )
+      SELECT status AS orders__status, d AS orders__ordered_at__day,
+             SUM(r) OVER (PARTITION BY status, DATE_TRUNC('month', d) ORDER BY d) AS revenue_month_to_date
+      FROM d
+    sql_by_dialect:
+      tsql: |
+        WITH d AS (
+          SELECT status, DATETRUNC(day, ordered_at) AS d, SUM(amount) AS r
+          FROM public.orders WHERE ordered_at >= DATEADD(day, -45, CAST(GETDATE() AS DATE))
+          GROUP BY status, DATETRUNC(day, ordered_at)
+        )
+        SELECT status AS orders__status, d AS orders__ordered_at__day,
+               SUM(r) OVER (PARTITION BY status, DATETRUNC(month, d) ORDER BY d ROWS UNBOUNDED PRECEDING) AS revenue_month_to_date
+        FROM d
