@@ -1000,7 +1000,8 @@ CUMULATIVE = (
     "revenue_rolling_7_days",
     "smallest_order_rolling_7_days",
 )
-# Derived metrics that read an input at an earlier period (DEC-18): no export carries them.
+# Derived metrics that read an input at an earlier period (DEC-18): the Cube export carries
+# them as multi-stage measures with `time_shift` (DEC-51), the dbt one as `offset_window`.
 OFFSETS = (
     "revenue_prev_month",
     "revenue_mom_growth",
@@ -1008,10 +1009,10 @@ OFFSETS = (
     "order_count_7_days_earlier",
 )
 # Running totals Cube carries as `to_date` rolling windows, rolling windows in days it carries
-# as `trailing` ones (DEC-30), and the cumulative metrics it does not.
+# as `trailing` ones (DEC-30), and the cumulative metric it does not (a running maximum).
 TO_DATE = ("revenue_year_to_date", "revenue_month_to_date")
 TRAILING = ("customers_rolling_30_days", "revenue_rolling_7_days", "smallest_order_rolling_7_days")
-CUBE_LOST = ("max_order_value_year_to_date", *OFFSETS)
+CUBE_LOST = ("max_order_value_year_to_date",)
 SPANS_CUBES = ("collection_gap", "items_per_order")
 # Rolling windows in days and running totals of `sum` and `count` measures (DEC-31) the dbt
 # export carries, and the cumulative metric it does not (a running maximum); it carries the
@@ -1032,6 +1033,11 @@ def _cube_round_trip(project: Project, tmp_path: Path, **options):
     path.parent.mkdir(exist_ok=True)
     path.write_text(exported.text, encoding="utf-8")
     return exported, import_model("cube", path)
+
+
+def _without_shift_notes(warnings: list[str]) -> list[str]:
+    """Import warnings other than the conditions of each `time_shift` read as an offset."""
+    return [w for w in warnings if "`time_shift` read as the offset" not in w]
 
 
 def _with_policies(back: Project, original: Project) -> Project:
@@ -1064,9 +1070,8 @@ def _cube_cases(
 
 
 def test_cube_export_fails_closed(graph, tmp_path):
-    """The example's row filter and sensitivity are exported; a row filter that reads a
-    business rule, a running maximum and offsets are refused until the caller accepts the
-    loss."""
+    """The example's row filter, sensitivity and offsets are exported; a row filter that reads
+    a business rule and a running maximum are refused until the caller accepts the loss."""
     with pytest.raises(PolicyLossError) as exc:
         export_cube(_with_rule_filter(graph.project), allow_metric_loss=True)
     assert str(exc.value) == (
@@ -1076,31 +1081,33 @@ def test_cube_export_fails_closed(graph, tmp_path):
     )
     with pytest.raises(MetricLossError) as exc:
         export_cube(graph.project)
-    assert str(exc.value).startswith(
-        "5 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
-        "revenue_yoy_growth, order_count_7_days_earlier) would NOT be exported "
+    assert str(exc.value) == (
+        "1 metric (max_order_value_year_to_date) would NOT be exported "
         "(max_order_value_year_to_date: it is "
         "cumulative over a measure that aggregates with `max`, and the Cube export carries "
-        "running totals of `sum` and `count` measures only; revenue_prev_month:"
+        "running totals of `sum` and `count` measures only); the Cube model would not have "
+        "them. Pass --allow-metric-loss to export anyway"
     )
-    assert (
-        "revenue_prev_month: it reads an input at an earlier period (`offset`), and the Cube "
-        "export does not carry offsets yet; revenue_mom_growth: it uses `revenue_prev_month`, "
-        "which is not exported"
-    ) in str(exc.value)
-    # Without policies, the running maximum or the offsets there is nothing to refuse: the
-    # year-to-date, month-to-date and rolling metrics are exported.
+    # Without policies or the running maximum there is nothing to refuse: the year-to-date,
+    # month-to-date, rolling and offset metrics are exported, each offset with its conditions.
     data = _without_policies(_without_business(graph.project))
     data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUBE_LOST]
     data["user_context"], data["timezone"], data["glossary"] = {}, None, []
     clean = export_cube(Project.model_validate(data))
-    assert {w.split(":")[0] for w in clean.warnings} == {f"metrics.{m}" for m in SPANS_CUBES}
+    shifted = ("revenue_prev_month", "revenue_yoy_growth", "order_count_7_days_earlier")
+    assert {w.split(":")[0] for w in clean.warnings} == {
+        f"metrics.{m}" for m in (*SPANS_CUBES, *shifted)
+    }
 
 
 def test_cube_export_round_trip(graph, tmp_path):
     exported, back = _cube_round_trip(graph.project, tmp_path, **LOSS_FLAGS)
-    # The importer reads the whole export, with nothing to report.
-    assert back.warnings == []
+    # The importer reads the whole export, reporting only the offsets' conditions.
+    assert [w.split(":")[0] for w in back.warnings] == [
+        "cubes.orders.measures.revenue_prev_month",
+        "cubes.orders.measures.revenue_yoy_growth__revenue_year_before",
+        "cubes.orders.measures.order_count_7_days_earlier",
+    ]
     doc = yaml.safe_load(exported.text)
     cubes = {c["name"]: c for c in doc["cubes"]}
     assert set(cubes) == {m.name for m in graph.project.semantic_models}
@@ -1179,6 +1186,36 @@ def test_cube_export_round_trip(graph, tmp_path):
         "trailing": "30 day",
         "offset": "end",
     }
+    # Offsets (DEC-51): a multi-stage measure with a prior `time_shift`; one that also reads
+    # its input unshifted, through an alias, reads a `<metric>__<alias>` measure that shifts.
+    assert measures["revenue_prev_month"] == {
+        "name": "revenue_prev_month",
+        "type": "number",
+        "multi_stage": True,
+        "sql": "{revenue}",
+        "time_shift": [{"interval": "1 month", "type": "prior"}],
+        "description": "Revenue of the month before each month",
+        "meta": {"owner": "controllership"},
+    }
+    assert measures["order_count_7_days_earlier"]["time_shift"] == [
+        {"interval": "7 days", "type": "prior"}
+    ]
+    assert measures["revenue_yoy_growth__revenue_year_before"] == {
+        "name": "revenue_yoy_growth__revenue_year_before",
+        "type": "number",
+        "multi_stage": True,
+        "sql": "{revenue}",
+        "time_shift": [{"interval": "12 months", "type": "prior"}],
+    }
+    helper = "{revenue_yoy_growth__revenue_year_before}"
+    assert measures["revenue_yoy_growth"]["sql"] == (
+        f"(1e0 * ({{revenue}} - {helper}) / NULLIF({helper}, 0))"
+    )
+    assert measures["revenue_yoy_growth"]["multi_stage"] is True
+    # A metric over a shifted one is multi-stage too, as Cube requires.
+    assert measures["revenue_mom_growth"]["multi_stage"] is True
+    assert "time_shift" not in measures["revenue_mom_growth"]
+    assert "multi_stage" not in measures["average_order_value"]
 
     # Models, tables, dimensions and measures come back as they were (the primary key as an
     # entity named after the cube; AVG with a `1e0 *` factor, so it is real in Cube too).
@@ -1215,11 +1252,18 @@ def test_cube_export_round_trip(graph, tmp_path):
         assert metrics[name].window == native.window
         assert metrics[name].grain_to_date is None
         assert metrics[name].measure == f"{name}__base"
+    # The offsets come back as the same inputs, the alias included.
+    for name in OFFSETS:
+        assert metrics[name].inputs == graph.metrics[name].inputs
+        assert metrics[name].type == "derived"
+    assert metrics["revenue_yoy_growth"].expr == (
+        "(1e0 * ({revenue} - {revenue_year_before}) / NULLIF({revenue_year_before}, 0))"
+    )
     orders_back = next(m for m in back.project.semantic_models if m.name == "orders")
     base = next(x for x in orders_back.measures if x.name == "revenue_year_to_date__base")
     assert (base.agg, base.expr) == ("sum", "amount")
-    # Every loss is a warning: the running maximum, the offsets and what a later slice
-    # exports; metrics spanning cubes are exported, with Rule 3's warning.
+    # Every loss is a warning: the running maximum and what a later slice exports; metrics
+    # spanning cubes are exported, with Rule 3's warning, and offsets with their conditions.
     joined = "\n".join(exported.warnings)
     assert "row_filters" not in joined and "sensitivity" not in joined
     assert "metrics.max_order_value_year_to_date: it is cumulative over a measure" in joined
@@ -1235,7 +1279,13 @@ def test_cube_export_round_trip(graph, tmp_path):
     ) in joined
     assert "timezone: not exported to Cube. Model timestamps are local time, so keep" in joined
     assert "relative dates such as today then follow UTC in Cube, not America/New_York" in joined
-    assert len(exported.warnings) == 14
+    assert (
+        "metrics.revenue_yoy_growth: Cube shifts `revenue` (as `revenue_year_before`) by "
+        "`12 months` with a multi-stage `time_shift`, which needs Cube's Tesseract planner"
+    ) in joined
+    assert "at the grains Cosmos accepts (month, quarter, year) the shifted rows" in joined
+    assert "by `7 days` with a multi-stage" in joined
+    assert len(exported.warnings) == 13
 
 
 @pytest.mark.parametrize("source", SOURCES)
@@ -1247,10 +1297,12 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     ungoverned = _without_policies(back.project.model_dump(mode="json"))
     other = compile_project(Project.model_validate(ungoverned))
     cases = _cube_cases(graph.project, policies=False, lost=CUBE_LOST)
-    # A08 (year-to-date by month), A09 (month-to-date by status and day) and the rolling
-    # windows A29, A30 (by status, from 45 days ago) and A34 (a minimum) among them.
+    # A08 (year-to-date by month), A09 (month-to-date by status and day), the rolling
+    # windows A29, A30 (by status, from 45 days ago) and A34 (a minimum), and the offsets A35
+    # to A37 and the aliased ones A49 to A51 (DEC-51) among them.
     assert {"A08", "A09", "A29", "A30", "A34"} <= {c.id for c in cases}
-    assert len(cases) == 37
+    assert {"A35", "A36", "A37", "A49", "A50", "A51"} <= {c.id for c in cases}
+    assert len(cases) == 43
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1261,7 +1313,8 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     # A32 (month-to-date by quarter) and A39 (year-to-date by week) are refused by the
     # re-imported model too; A33 is the 30-day window of customers by segment.
     assert {"R17", "R18", "A08", "A09", "A32", "A33", "A39", "A40", "A41"} <= {c.id for c in cases}
-    assert len(cases) == 61
+    assert "A38" in {c.id for c in cases}
+    assert len(cases) == 68
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1314,7 +1367,7 @@ def test_cube_access_policy_same_rows_per_principal(graph, tmp_path, source, req
     connector = request.getfixturevalue(source)
     project = _with_cube_policies(graph.project, CUBE_POLICY_FILTERS)
     exported, back = _cube_round_trip(project, tmp_path, allow_metric_loss=True)
-    assert back.warnings == []
+    assert _without_shift_notes(back.warnings) == []
     cubes = {c["name"]: c for c in yaml.safe_load(exported.text)["cubes"]}
     assert cubes["customers"]["access_policy"][0]["row_level"]["filters"][1] == {
         "and": [
@@ -1639,7 +1692,7 @@ def _cube_to_date_metrics(project: Project) -> Project:
     `count` measures of two cubes."""
     data = _without_policies(_without_business(project))
     data["glossary"] = []
-    data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUBE_LOST]
+    data["metrics"] = [m for m in data["metrics"] if m["name"] not in (*CUBE_LOST, *OFFSETS)]
     for grain in ("day", "week", "month", "quarter", "year"):
         for measure in ("revenue", "order_count", "paid_value", "payment_count"):
             data["metrics"].append(
@@ -1719,7 +1772,7 @@ def _cube_trailing_metrics(project: Project) -> Project:
     `min` and `max` measures of two cubes."""
     data = _without_policies(_without_business(project))
     data["glossary"] = []
-    data["metrics"] = [m for m in data["metrics"] if m["name"] not in CUBE_LOST]
+    data["metrics"] = [m for m in data["metrics"] if m["name"] not in (*CUBE_LOST, *OFFSETS)]
     for measures in TRAILING_MEASURES.values():
         for measure in measures:
             for days in (1, 7, 30):
@@ -1927,6 +1980,322 @@ def test_cube_import_skips_to_date_over_avg_or_distinct_count(tmp_path, kind):
     assert validated.exit_code == 0, validated.output
 
 
+# Offsets the Cube export writes as a prior `time_shift` (DEC-51), with the interval written
+# and the grains the engine accepts for each. Weeks are written as their days, as trailing
+# windows are, so a round trip gives `14 days` for `2 weeks`.
+CUBE_OFFSETS = {
+    "1 day": ("1 day", ("day",)),
+    "7 days": ("7 days", ("day", "week")),
+    "2 weeks": ("14 days", ("day", "week")),
+    "1 month": ("1 month", ("month",)),
+    "3 months": ("3 months", ("month", "quarter")),
+    "12 months": ("12 months", ("month", "quarter", "year")),
+    "1 year": ("1 year", ("month", "quarter", "year")),
+}
+
+
+def _cube_offset_metrics(project: Project) -> Project:
+    """The example without policies and the metrics Cube does not carry, plus every offset of
+    ``CUBE_OFFSETS`` over `sum` and `count` measures of two cubes, a growth over a shifted
+    metric, a shifted ratio, an aliased growth, two aliases of one input at two offsets, a
+    metric that reads one input shifted and another unshifted, and a shifted division."""
+    data = _without_policies(_without_business(project))
+    data["glossary"] = []
+    data["metrics"] = [m for m in data["metrics"] if m["name"] not in (*CUBE_LOST, *OFFSETS)]
+    for offset in CUBE_OFFSETS:
+        tag = offset.replace(" ", "_")
+        for measure in ("revenue", "order_count", "paid_value", "payment_count"):
+            data["metrics"].append(
+                {
+                    "name": f"{measure}_{tag}",
+                    "type": "derived",
+                    "expr": "{" + measure + "}",
+                    "inputs": [{"metric": measure, "offset": offset}],
+                }
+            )
+    data["metrics"] += [
+        {
+            "name": "revenue_yoy",
+            "type": "derived",
+            "expr": "({revenue} - {revenue_12_months}) / {revenue_12_months}",
+        },
+        {
+            "name": "orders_per_buyer_1_month",
+            "type": "derived",
+            "expr": "{orders_per_buyer} * 100",
+            "inputs": [{"metric": "orders_per_buyer", "offset": "1 month"}],
+        },
+        {
+            "name": "revenue_growth_ly",
+            "type": "derived",
+            "expr": "({revenue} - {revenue_ly}) / {revenue_ly}",
+            "inputs": [{"metric": "revenue", "offset": "1 year", "alias": "revenue_ly"}],
+        },
+        {
+            "name": "revenue_m1_vs_m12",
+            "type": "derived",
+            "expr": "{revenue_m1} - {revenue_m12}",
+            "inputs": [
+                {"metric": "revenue", "offset": "1 month", "alias": "revenue_m1"},
+                {"metric": "revenue", "offset": "12 months", "alias": "revenue_m12"},
+            ],
+        },
+        {
+            "name": "revenue_less_prior_orders",
+            "type": "derived",
+            "expr": "{revenue} - {order_count}",
+            "inputs": [{"metric": "order_count", "offset": "1 month"}],
+        },
+        {
+            "name": "ticket_prior_week",
+            "type": "derived",
+            "expr": "{revenue} / {order_count}",
+            "inputs": [
+                {"metric": "revenue", "offset": "7 days"},
+                {"metric": "order_count", "offset": "1 week"},
+            ],
+        },
+    ]
+    return Project.model_validate(data)
+
+
+def _same_offset(a: str, b: str) -> bool:
+    from cosmos_semantic.spec import parse_offset
+
+    return parse_offset(a) == parse_offset(b)
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_cube_export_offsets_same_numbers(graph, tmp_path, source, request):
+    """Every offset the export writes as a multi-stage measure with `time_shift` comes back as
+    the same offset (weeks as their days), with the native numbers at every grain the engine
+    accepts, by another dimension too and with a filter on the time dimension; both models
+    refuse the other grains with the same error (DEC-51)."""
+    connector = request.getfixturevalue(source)
+    project = _cube_offset_metrics(graph.project)
+    full = compile_project(project)
+    exported, back = _cube_round_trip(project, tmp_path)
+    measures = {
+        m["name"]: m for c in yaml.safe_load(exported.text)["cubes"] for m in c.get("measures", [])
+    }
+    for offset, (interval, _) in CUBE_OFFSETS.items():
+        assert measures[f"paid_value_{offset.replace(' ', '_')}"] == {
+            "name": f"paid_value_{offset.replace(' ', '_')}",
+            "type": "number",
+            "multi_stage": True,
+            "sql": "{paid_value}",
+            "time_shift": [{"interval": interval, "type": "prior"}],
+        }
+    assert measures["orders_per_buyer_1_month"]["sql"] == "{orders_per_buyer} * 100"
+    # Both inputs at one offset (`7 days` and `1 week`): one measure shifts both.
+    assert measures["ticket_prior_week"]["time_shift"] == [{"interval": "7 days", "type": "prior"}]
+    assert measures["ticket_prior_week"]["sql"] == "(1e0 * {revenue} / NULLIF({order_count}, 0))"
+    # Two aliases, and an input read shifted next to another read unshifted: one measure per
+    # shifted read, which the metric reads.
+    assert measures["revenue_m1_vs_m12"]["sql"] == (
+        "{revenue_m1_vs_m12__revenue_m1} - {revenue_m1_vs_m12__revenue_m12}"
+    )
+    assert measures["revenue_m1_vs_m12__revenue_m12"]["time_shift"] == [
+        {"interval": "12 months", "type": "prior"}
+    ]
+    assert measures["revenue_less_prior_orders"]["sql"] == (
+        "{revenue} - {revenue_less_prior_orders__order_count}"
+    )
+    assert "time_shift" not in measures["revenue_less_prior_orders"]
+    assert measures["revenue_yoy"]["multi_stage"] is True
+    shifted = [m.name for m in project.metrics if m.type == "derived" and m.inputs]
+    assert len(shifted) == 33
+    # They come back as the same inputs, aliases included, with no helper measure left over.
+    back_metrics = {m.name: m for m in back.project.metrics}
+    assert not any("__" in name for name in back_metrics)
+    for name in [*shifted, "revenue_yoy"]:
+        want, got = full.metrics[name].inputs, back_metrics[name].inputs
+        assert [(i.metric, i.alias) for i in got] == [(i.metric, i.alias) for i in want]
+        assert all(_same_offset(i.offset, j.offset) for i, j in zip(got, want, strict=True))
+    assert back_metrics["paid_value_2_weeks"].inputs[0].offset == "14 days"
+    assert back_metrics["paid_value_1_year"].inputs[0].offset == "1 year"
+    # One export warning per shifted metric, and one import warning per `time_shift`.
+    joined = "\n".join(exported.warnings)
+    assert joined.count("with a multi-stage `time_shift`") == len(shifted)
+    assert (
+        "metrics.paid_value_2_weeks: Cube shifts `paid_value` by `2 weeks` (`interval: 14 days`) "
+        "with a multi-stage `time_shift`"
+    ) in joined
+    assert "at the grains Cosmos accepts (day, week) the shifted rows" in joined
+    # Three metrics read their shifts through four helper measures, each one `time_shift`.
+    assert len(back.warnings) == len(shifted) - 3 + 4
+    other = compile_project(back.project)
+    since = f"DATE '{(dt.date.today() - dt.timedelta(days=200)).isoformat()}'"
+    refused = compared = 0
+    for name in [*shifted, "revenue_yoy"]:
+        payments = name.startswith(("paid_value", "payment_count"))
+        model, time = ("payments", "paid_at") if payments else ("orders", "ordered_at")
+        extra = "payments.method" if payments else "orders.status"
+        for grain in GRAINS:
+            for dims, filters in (
+                ([f"{model}.{time}__{grain}"], []),
+                ([extra, f"{model}.{time}__{grain}"], []),
+                ([f"{model}.{time}__{grain}"], [f"{{{model}.{time}}} >= {since}"]),
+            ):
+                query = QueryRequest(metrics=[name], dimensions=dims, filters=filters)
+                try:
+                    native = rows(full, connector, query)
+                except QueryError as refusal:
+                    refused += 1
+                    with pytest.raises(QueryError) as again:
+                        rows(other, connector, query)
+                    assert str(again.value).replace("14 days", "2 weeks") == str(refusal).replace(
+                        "14 days", "2 weeks"
+                    )
+                    continue
+                assert native
+                same(native, rows(other, connector, query))
+                compared += 1
+    assert refused and compared
+    assert refused + compared == 3 * len(GRAINS) * (len(shifted) + 1)
+
+
+def _cube_doc(measures: list[dict]) -> dict:
+    return {
+        "cubes": [
+            {
+                "name": "orders",
+                "sql_table": "public.orders",
+                "dimensions": [
+                    {
+                        "name": "order_id",
+                        "sql": "{CUBE}.order_id",
+                        "type": "string",
+                        "primary_key": True,
+                    },
+                    {"name": "status", "sql": "{CUBE}.status", "type": "string"},
+                    {"name": "ordered_at", "sql": "{CUBE}.ordered_at", "type": "time"},
+                ],
+                "measures": [
+                    {"name": "revenue", "type": "sum", "sql": "{CUBE}.amount"},
+                    {"name": "order_count", "type": "count"},
+                    {
+                        "name": "revenue_ytd",
+                        "type": "sum",
+                        "sql": "{CUBE}.amount",
+                        "rolling_window": {"type": "to_date", "granularity": "year"},
+                    },
+                    *measures,
+                ],
+            }
+        ]
+    }
+
+
+def _shift(name: str, sql: str, *shifts: dict, kind: str = "number") -> dict:
+    return {"name": name, "type": kind, "multi_stage": True, "sql": sql, "time_shift": list(shifts)}
+
+
+def test_cube_import_time_shifts(graph, duckdb_connector, tmp_path):
+    """A Cube `time_shift` in days, weeks, months, quarters or years imports as an offset with
+    the numbers of the same offset written in Cosmos; a shift Cosmos cannot compute is skipped
+    with a warning, with the measures that use it (DEC-51)."""
+    prior = {"type": "prior"}
+    doc = _cube_doc(
+        [
+            _shift("revenue_1_week", "{revenue}", {"interval": "1 week", **prior}),
+            _shift("revenue_1_quarter", "{revenue}", {"interval": "1 quarter"}),
+            _shift("revenue_1_year", "{revenue}", {"interval": "1 years", **prior}),
+            _shift("ticket_2_months", "{revenue} / {order_count}", {"interval": "2 months"}),
+            {"name": "growth", "type": "number", "sql": "{revenue} - {revenue_1_year}"},
+            # Skipped: what Cosmos cannot shift, and what uses it.
+            _shift("revenue_next", "{revenue}", {"interval": "1 month", "type": "next"}),
+            _shift(
+                "revenue_by_date",
+                "{revenue}",
+                {"interval": "1 month", "time_dimension": "ordered_at", **prior},
+            ),
+            _shift("revenue_two", "{revenue}", {"interval": "1 month"}, {"interval": "1 year"}),
+            _shift("revenue_hour", "{revenue}", {"interval": "1 hour"}),
+            _shift("revenue_zero", "{revenue}", {"interval": "0 days"}),
+            _shift("revenue_compound", "{revenue}", {"interval": "1 year 2 months"}),
+            _shift("revenue_sum", "{CUBE}.amount", {"interval": "1 month"}, kind="sum"),
+            _shift("revenue_nested", "{revenue_1_year}", {"interval": "1 month"}),
+            _shift("ytd_prior", "{revenue_ytd}", {"interval": "1 year"}),
+            {"name": "mixed", "type": "number", "sql": "{revenue_1_week} - {revenue_1_year}"},
+            {"name": "next_share", "type": "number", "sql": "{revenue_next} / {revenue}"},
+        ]
+    )
+    path = tmp_path / "model.yml"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    other, warnings = imported("cube", path)  # dumps, reloads and validates the model
+    offsets = {
+        name: [(i.metric, i.offset) for i in m.inputs]
+        for name, m in other.metrics.items()
+        if m.type == "derived"
+    }
+    assert offsets == {
+        "revenue_1_week": [("revenue", "1 week")],
+        "revenue_1_quarter": [("revenue", "3 months")],
+        "revenue_1_year": [("revenue", "1 year")],
+        "ticket_2_months": [("revenue", "2 months"), ("order_count", "2 months")],
+        "growth": [],
+    }
+    where = "cubes.orders.measures"
+    skipped = [w for w in warnings if "`time_shift` read as the offset" not in w]
+    assert skipped == [
+        f"{where}.revenue_next: a `time_shift` of type `next` has no Cosmos offset (only one "
+        "`type: prior` shift of a whole number of days, weeks, months, quarters or years, on "
+        "every time dimension of the query); measure skipped",
+        f"{where}.revenue_by_date: a `time_shift` with `time_dimension` has no Cosmos offset "
+        "(only one `type: prior` shift of a whole number of days, weeks, months, quarters or "
+        "years, on every time dimension of the query); measure skipped",
+        f"{where}.revenue_two: a `time_shift` with several shifts has no Cosmos offset (only "
+        "one `type: prior` shift of a whole number of days, weeks, months, quarters or years, "
+        "on every time dimension of the query); measure skipped",
+        f"{where}.revenue_hour: a `time_shift` of `1 hour` has no Cosmos offset (only one "
+        "`type: prior` shift of a whole number of days, weeks, months, quarters or years, on "
+        "every time dimension of the query); measure skipped",
+        f"{where}.revenue_zero: a `time_shift` of `0 days` has no Cosmos offset (only one "
+        "`type: prior` shift of a whole number of days, weeks, months, quarters or years, on "
+        "every time dimension of the query); measure skipped",
+        f"{where}.revenue_compound: a `time_shift` of `1 year 2 months` has no Cosmos offset "
+        "(only one `type: prior` shift of a whole number of days, weeks, months, quarters or "
+        "years, on every time dimension of the query); measure skipped",
+        f"{where}.revenue_sum: a `time_shift` on a measure of type `sum` has no Cosmos offset "
+        "(only one `type: prior` shift of a whole number of days, weeks, months, quarters or "
+        "years, on every time dimension of the query); measure skipped",
+        f"{where}.revenue_nested: it shifts `revenue_1_year`, which is shifted itself, and "
+        "Cosmos offsets do not combine; skipped",
+        f"{where}.ytd_prior: it shifts the cumulative metric `revenue_ytd`, and Cosmos does not "
+        "shift cumulative metrics; skipped",
+        f"{where}.mixed: its shifts mix days or weeks with months or years, which no grain "
+        "answers; skipped",
+        f"{where}.next_share: depends on `revenue_next`, which was not imported; skipped",
+    ]
+    assert sum("`time_shift` read as the offset" in w for w in warnings) == 4
+    assert (
+        f"{where}.revenue_1_quarter: `time_shift` read as the offset `3 months`, queried by "
+        "month or quarter, where the periods both return have the same numbers"
+    ) in "\n".join(warnings)
+    # The numbers of the same offsets written in Cosmos.
+    for name, offset, grain in (
+        ("revenue_1_week", "7 days", "week"),
+        ("revenue_1_quarter", "3 months", "quarter"),
+        ("revenue_1_year", "12 months", "month"),
+    ):
+        data = graph.project.model_dump(mode="json")
+        data["metrics"].append(
+            {
+                "name": "native_shift",
+                "type": "derived",
+                "expr": "{revenue}",
+                "inputs": [{"metric": "revenue", "offset": offset}],
+            }
+        )
+        native = compile_project(Project.model_validate(data))
+        dims = [f"orders.ordered_at__{grain}"]
+        same(
+            rows(native, duckdb_connector, QueryRequest(metrics=["native_shift"], dimensions=dims)),
+            rows(other, duckdb_connector, QueryRequest(metrics=[name], dimensions=dims)),
+        )
+
+
 @pytest.mark.parametrize("spec", ["legacy", "latest"])
 @pytest.mark.parametrize("agg", ["average", "count_distinct"])
 def test_dbt_import_skips_to_date_over_avg_or_distinct_count(tmp_path, spec, agg):
@@ -2085,10 +2454,7 @@ def test_cube_export_states_each_reason(graph):
     project = Project.model_validate(data)
     with pytest.raises(MetricLossError) as exc:
         export_cube(project)
-    assert str(exc.value).startswith(
-        "16 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
-        "revenue_yoy_growth, order_count_7_days_earlier, midwest_revenue, "
-    )
+    assert str(exc.value).startswith("12 metrics (max_order_value_year_to_date, midwest_revenue, ")
     warnings = export_cube(project, allow_metric_loss=True).warnings
     reasons = {w.split(": ", 1)[0]: w.split(": ", 1)[1] for w in warnings}
     assert reasons["metrics.midwest_revenue"].startswith(
@@ -2150,10 +2516,7 @@ def test_cli_export_cube(tmp_path):
     assert refused.exit_code == 1
     assert refused.stdout == ""
     assert "row filter" not in refused.stderr
-    assert (
-        "5 metrics (max_order_value_year_to_date, revenue_prev_month, revenue_mom_growth, "
-        "revenue_yoy_growth, order_count_7_days_earlier) would NOT be exported" in refused.stderr
-    )
+    assert "1 metric (max_order_value_year_to_date) would NOT be exported" in refused.stderr
     flags = ["--allow-metric-loss"]
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), *flags])
     assert result.exit_code == 0, result.output
@@ -2163,8 +2526,8 @@ def test_cli_export_cube(tmp_path):
     out = tmp_path / "model" / "cubes.yml"
     result = runner.invoke(app, ["export", "cube", "-m", str(EXAMPLE), "-o", str(out), *flags])
     assert result.exit_code == 0, result.output
-    assert "14 warnings" in result.stdout
-    assert import_model("cube", out).warnings == []
+    assert "13 warnings" in result.stdout
+    assert _without_shift_notes(import_model("cube", out).warnings) == []
 
 
 # -- dbt export (semantic models, simple, ratio and derived metrics) ----------------------------
