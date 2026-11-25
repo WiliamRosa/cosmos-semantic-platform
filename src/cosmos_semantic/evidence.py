@@ -280,9 +280,12 @@ class EvidenceBuilder:
         or shift, so a filter on the time dimension also leaves out the earlier periods a
         window or offset would read; or, for a rolling window (DEC-34), ``time_after``: the
         filters on the time dimension choose the output days and the window still reads the
-        N - 1 days before them, while the other filters restrict the facts first. A rolling
-        window is ``before`` only when ``trace`` (the query's) shows a filter on its time
-        dimension whose shape the planner could not split.
+        N - 1 days before them, while the other filters restrict the facts first. The same
+        holds for a year-, quarter-, month-, week- or day-to-date metric (DEC-48): the filters
+        on the time dimension choose the output rows and each row still reads its period from
+        the start. Either is ``before`` only when ``trace`` (the query's) shows a filter on its
+        time dimension whose shape the planner could not split. A running total over all time
+        stays ``before``.
         """
         g = self.graph
         metric = g.metrics.get(name) if name not in g.measure_owner else None
@@ -307,7 +310,7 @@ class EvidenceBuilder:
         times = [r for r in refs if g.dimension(r).type == "time"]
         ref = times[0] if len(times) == 1 else None
         applied = "before"
-        if time["kind"] == "window":
+        if time["kind"] == "window" or (time["kind"] == "grain_to_date" and time["period"]):
             split = trace.window_filters.get(name) if trace else None
             applied = "before" if split and split["before"] else "time_after"
         return time | {
