@@ -110,6 +110,37 @@ format or the API; such changes are listed under **Changed**.
   grain-to-date requests ([semantic model](docs/semantic-model.md#period-to-date)). Offsets
   still filter first; they are the next slice.
 
+- Date filters no longer cut the earlier period an offset reads (DEC-54). A request filter on
+  the request's time dimension now chooses the output rows, and each input read at an earlier
+  period still reads the whole earlier period of every row kept: "revenue vs last month" over
+  the last 90 days gives the first month of the range the revenue of the month before it,
+  instead of NULL. Other filters (status, region, row filters, a metric's own filter) still
+  apply to the facts first, the earlier period's included. **Filtered offset queries change
+  their numbers by design:** each row's shifted value is now the one the request gives without
+  its filters on the time dimension, while the unshifted inputs keep the filters (a filter that
+  starts inside the first month cuts that month's revenue, not the month before it). The
+  planner splits the same shapes as for rolling windows (DEC-34) and running totals (DEC-48):
+  the aggregate of the inputs read N earlier (`<model>_agg_offset_<N>_<unit>`) reads each bound
+  on the time dimension on the row a fact is read for (an upper bound at that row's start, a
+  lower bound at the start of the period after it), and the rows come from the model's
+  aggregate under the request's own filters (`<model>_agg`, with no measure when no input reads
+  the model unshifted), so the earlier period adds no rows. `NOT`, `<>`, `NOT IN`, functions of
+  the time dimension, the hour grain, `OR` with another member and filters on another time
+  dimension keep today's behaviour. The SQL of every reference request other than A36 is
+  unchanged on every dialect (855 request-dialect hashes on 9 dialects; only A36's 9 change),
+  and tests pin the `sql_hash` of offset requests without such a filter. Reference case A36
+  now expects the month after the gap its filter leaves to read that month; A66 (month over
+  month of completed orders for the last 90 days), A67 (a `NOT` filter that still cuts), A68
+  (a year back by month under a filter on the quarter) and A69 (a week back by week between two
+  bounds inside weeks) have hand-written SQL, and the randomized cross-database test draws 8
+  date-filtered offset requests. The evidence's `time.filters_applied` for offsets is
+  `time_after`, or `before` when an unsplit filter cuts them; unfiltered offset queries now
+  carry `time_after` too (they had `before`). The Power BI import warning for `DATEADD` and
+  `SAMEPERIODLASTYEAR` now names only a filter that cuts a period (DAX reads the same dates
+  moved back, Cosmos the whole earlier period), and the one for `PARALLELPERIOD` no longer names
+  date filters; the dbt and Cube warnings for offsets say both apply a filter on the time
+  dimension after the shift ([semantic model](docs/semantic-model.md#period-over-period)).
+
 ### Fixed
 
 - Flaky same-number tests (DEC-55). The replay test changed the shared `orders` table

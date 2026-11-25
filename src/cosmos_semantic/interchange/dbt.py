@@ -387,9 +387,9 @@ class _Builder:
         text = (
             f"metrics.{name}: `{ref}` is read `{offset}` earlier (`offset_window: {window}`), "
             f"queried by {' or '.join(fits)}. Cosmos moves the start of the query's period, "
-            "filters the facts before the shift and returns only periods with facts; "
-            "MetricFlow joins a time spine, so it also returns periods without facts whose "
-            "earlier period has some, and it applies filters on `metric_time` after the shift"
+            "returns only periods with facts and applies filters on the time dimension after "
+            "the shift; MetricFlow joins a time spine, so it also returns periods without facts "
+            "whose earlier period has some"
         )
         if coarser:
             text += (
@@ -972,9 +972,10 @@ class _DbtWriter:
             f"{', '.join(times)}; by {which} at the grains the engine accepts "
             f"({', '.join(grains)}) the periods both return have the same numbers. MetricFlow "
             "joins a time spine, so it also returns periods without facts whose earlier period "
-            "has some, and grains the engine refuses; it applies filters on `metric_time` after "
-            "the shift, while the engine filters the facts first, so a time filter leaves out "
-            "the earlier periods in the engine only"
+            "has some, and grains the engine refuses. Both apply a filter on that time "
+            "dimension after the shift, so the first period of a range reads the period before "
+            "it (the engine filters the facts first for a shape it cannot split, such as "
+            "`NOT`); other filters restrict the facts first in both"
         )
 
     def _measures(self, name: str) -> set[str]:

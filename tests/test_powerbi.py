@@ -1062,7 +1062,12 @@ def test_period_shifts_import_as_offset_inputs(tmp_path):
     assert "29, 30 and 31 March a month back are all the last day of February" in joined
     assert joined.count("gives DAX a partial earlier period") == 6
     assert "`Amount PP`: imported as `amount_pp_base` read 3 months earlier" in joined
-    assert "still gives DAX the whole earlier months" in joined
+    # PARALLELPERIOD reads the whole earlier months, as Cosmos does under a date filter
+    # (DEC-54): its warning names no difference for a filter that cuts a period.
+    parallel = next(w for w in warnings if w.startswith("measure `Amount PP`"))
+    assert (
+        "cuts a period" not in parallel and "where DAX moves a set of dates: grouping" in parallel
+    )
     # Adding or subtracting an offset metric: DAX counts BLANK as zero there.
     assert "`YoY`: adds or subtracts `amount_py`" in joined
     assert "`YoY Delta`: adds or subtracts `amount_py`" in joined
@@ -1425,9 +1430,9 @@ def test_period_shifts_match_hand_written_sql_and_dax(source, request, tmp_path)
                 mine = {k[0]: v[metric] for k, v in by_buyer.items() if k[1] == buyer}
                 assert mine == _dax(metric, "month", buyer=buyer), (metric, buyer)
 
-        # Documented differences. A filter that cuts a period: DAX moves the dates left in
-        # context (15 to 31 March 2025 read 15 to 28 February), PARALLELPERIOD takes the whole
-        # earlier month, and Cosmos filters the earlier period's facts too.
+        # A filter on the date chooses the rows; the earlier period is read whole (DEC-54).
+        # From 15 March 2025, March reads all of February, as PARALLELPERIOD does; DATEADD
+        # reads 15 to 28 February, the same here, since February's facts are on the 28th.
         since = dt.date(2025, 3, 15)
         cut = cosmos(
             ["amount", "amount_pm", "amount_pp", "amount_py"],
@@ -1439,14 +1444,29 @@ def test_period_shifts_match_hand_written_sql_and_dax(source, request, tmp_path)
         assert _dax("amount_pm", "month", after)[march] == 7.0
         assert _dax("amount_pp", "month", after)[march] == 7.0
         assert _dax("amount_py", "month", after)[march] == 8.0
-        assert cut[march] == {
-            "amount": 10.0,
-            "amount_pm": None,
-            "amount_pp": None,
-            "amount_py": None,
+        assert cut[march] == {"amount": 10.0, "amount_pm": 7.0, "amount_pp": 7.0, "amount_py": 8.0}
+        # The documented difference: a filter that cuts a period gives DATEADD the same dates
+        # moved back. From 10 February 2025, DAX's February a month back reads 10 to 31
+        # January, which has no facts; Cosmos and PARALLELPERIOD read all of January.
+        since = dt.date(2025, 2, 10)
+        cut = cosmos(
+            ["amount", "amount_pm", "amount_pp", "amount_py"],
+            "month",
+            filters=[f"{{calendar.cal_day}} >= DATE '{since.isoformat()}'"],
+        )
+        february = _period(since, "month")
+        after = lambda day: day >= since  # noqa: E731
+        assert _dax("amount_pm", "month", after)[february] is None
+        assert _dax("amount_pp", "month", after)[february] == 23.0
+        assert _dax("amount_py", "month", after)[february] == 6.0
+        assert cut[february] == {
+            "amount": 7.0,
+            "amount_pm": 23.0,
+            "amount_pp": 23.0,
+            "amount_py": 6.0,
         }
-        # A filter of whole periods (the year 2025) cuts nothing in DAX, whose January still
-        # reads December 2024; in Cosmos the first period's earlier period is filtered out.
+        # A filter of whole periods (the year 2025): DAX's January still reads December 2024
+        # and January 2024, and so does Cosmos, whose filter chooses the rows only.
         year_2025 = cosmos(
             ["amount_pm", "amount_py"],
             "month",
@@ -1456,12 +1476,12 @@ def test_period_shifts_match_hand_written_sql_and_dax(source, request, tmp_path)
         in_2025 = lambda day: day.year == 2025  # noqa: E731
         assert _dax("amount_pm", "month", in_2025)[january] == 2.0
         assert _dax("amount_py", "month", in_2025)[january] == 10.0
-        assert year_2025[january] == {"amount_pm": None, "amount_py": None}
-        # February reads a January inside the filter, so the month offset agrees again; the
-        # year offset reads February 2024, which the filter removes in Cosmos only.
-        assert year_2025[january + 1] == {"amount_pm": 23.0, "amount_py": None}
+        assert year_2025[january] == {"amount_pm": 2.0, "amount_py": 10.0}
         assert _dax("amount_pm", "month", in_2025)[january + 1] == 23.0
         assert _dax("amount_py", "month", in_2025)[january + 1] == 6.0
+        assert year_2025[january + 1] == {"amount_pm": 23.0, "amount_py": 6.0}
+        # The rows are those the filter keeps: 2024 is not output.
+        assert set(year_2025) == {p for p in _dax("amount_pm", "month", in_2025)}
         # Periods without facts: Power BI shows April 2025, whose March has facts; Cosmos
         # outputs only the periods with facts.
         assert _period(dt.date(2025, 4, 1), "month") not in cosmos(["amount_pm"], "month")

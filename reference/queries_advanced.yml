@@ -726,28 +726,35 @@ cases:
         FROM monthly cur
         LEFT JOIN monthly prev ON prev.k = cur.k - 1
 
-  # A 70-day gap in the facts always holds a whole calendar month with no rows: that month is
-  # not in the output, and the month after it has no revenue of the month before (NULL, so the
-  # growth is NULL too). Each status is shifted on its own.
+  # The filter leaves out 70 days, which always hold a whole calendar month: that month is not
+  # in the output. Since DEC-54 the filter only chooses the rows, so the month after the gap
+  # still reads the month before it, which the filter leaves out; each month's growth compares
+  # its own filtered revenue with the whole month before. Each status is shifted on its own.
+  # A67 keeps the gap with a filter the planner cannot split.
   - id: A36
     category: tempo
     phase: 3
-    title: Revenue of the month before by status, with a month without orders
+    title: Revenue of the month before by status, read across a gap the filter leaves
     request:
       metrics: [revenue_prev_month, revenue_mom_growth]
       dimensions: [orders.status, orders.ordered_at__month]
       filters:
         - "{orders.ordered_at} < CURRENT_DATE - INTERVAL '300' DAY OR {orders.ordered_at} >= CURRENT_DATE - INTERVAL '230' DAY"
     sql: |
-      WITH f AS (
-        SELECT status, ordered_at, amount FROM public.orders
-        WHERE ordered_at < CURRENT_DATE - INTERVAL '300' DAY
-           OR ordered_at >= CURRENT_DATE - INTERVAL '230' DAY
-      ), monthly AS (
+      WITH monthly AS (
         SELECT status, DATE_TRUNC('month', ordered_at) AS mon,
                EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
                SUM(amount) AS revenue
-        FROM f
+        FROM public.orders
+        GROUP BY status, DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      ), kept AS (
+        SELECT status, DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM public.orders
+        WHERE ordered_at < CURRENT_DATE - INTERVAL '300' DAY
+           OR ordered_at >= CURRENT_DATE - INTERVAL '230' DAY
         GROUP BY status, DATE_TRUNC('month', ordered_at),
                  EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
       )
@@ -755,28 +762,32 @@ cases:
              prev.revenue AS revenue_prev_month,
              CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
                AS revenue_mom_growth
-      FROM monthly cur
+      FROM kept cur
       LEFT JOIN monthly prev
         ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
         AND prev.k = cur.k - 1
     sql_by_dialect:
       tsql: |
-        WITH f AS (
-          SELECT status, ordered_at, amount FROM public.orders
-          WHERE ordered_at < DATEADD(day, -300, CAST(GETDATE() AS DATE))
-             OR ordered_at >= DATEADD(day, -230, CAST(GETDATE() AS DATE))
-        ), monthly AS (
+        WITH monthly AS (
           SELECT status, DATETRUNC(month, ordered_at) AS mon,
                  YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
                  SUM(amount) AS revenue
-          FROM f
+          FROM public.orders
+          GROUP BY status, DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        ), kept AS (
+          SELECT status, DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
+                 SUM(amount) AS revenue
+          FROM public.orders
+          WHERE ordered_at < DATEADD(day, -300, CAST(GETDATE() AS DATE))
+             OR ordered_at >= DATEADD(day, -230, CAST(GETDATE() AS DATE))
           GROUP BY status, DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
         )
         SELECT cur.status AS orders__status, cur.mon AS orders__ordered_at__month,
                prev.revenue AS revenue_prev_month,
                CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
                  AS revenue_mom_growth
-        FROM monthly cur
+        FROM kept cur
         LEFT JOIN monthly prev
           ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
           AND prev.k = cur.k - 1
@@ -1470,3 +1481,201 @@ cases:
         SELECT status AS orders__status, d AS orders__ordered_at__day,
                SUM(r) OVER (PARTITION BY status, DATETRUNC(month, d) ORDER BY d ROWS UNBOUNDED PRECEDING) AS revenue_month_to_date
         FROM d
+
+  # -- Date filters choose the rows of an offset (DEC-54) ------------------------------------
+  # A request filter on the time dimension chooses the output rows; each input read at an
+  # earlier period still reads that whole period, before the filter's range too. Other filters
+  # apply to the facts first, the earlier period's included. The hand-written SQL aggregates
+  # all the facts the other filters keep, keeps the rows the date filter keeps, and pairs
+  # periods by a number, never by date arithmetic.
+
+  # "Vs last month" over the last 90 days, of completed orders: the first month (cut by the
+  # filter) reads the whole month before it, outside the range; the status filter still applies
+  # to that month. Its growth compares its own filtered revenue with that whole month.
+  - id: A66
+    category: tempo
+    phase: 3
+    title: Month-over-month revenue of completed orders for the last 90 days
+    request:
+      metrics: [revenue, revenue_prev_month, revenue_mom_growth]
+      dimensions: [orders.ordered_at__month]
+      filters:
+        - "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '90' DAY"
+        - "{orders.status} = 'completed'"
+    sql: |
+      WITH c AS (SELECT ordered_at, amount FROM public.orders WHERE status = 'completed'),
+      monthly AS (
+        SELECT EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM c GROUP BY EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      ), kept AS (
+        SELECT DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM c WHERE ordered_at >= CURRENT_DATE - INTERVAL '90' DAY
+        GROUP BY DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+             prev.revenue AS revenue_prev_month,
+             CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
+               AS revenue_mom_growth
+      FROM kept cur LEFT JOIN monthly prev ON prev.k = cur.k - 1
+    sql_by_dialect:
+      tsql: |
+        WITH c AS (SELECT ordered_at, amount FROM public.orders WHERE status = 'completed'),
+        monthly AS (
+          SELECT YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k, SUM(amount) AS revenue
+          FROM c GROUP BY YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        ), kept AS (
+          SELECT DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k, SUM(amount) AS revenue
+          FROM c WHERE ordered_at >= DATEADD(day, -90, CAST(GETDATE() AS DATE))
+          GROUP BY DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+               prev.revenue AS revenue_prev_month,
+               CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
+                 AS revenue_mom_growth
+        FROM kept cur LEFT JOIN monthly prev ON prev.k = cur.k - 1
+
+  # A filter shape the planner cannot split (NOT) keeps the behaviour before DEC-54: it
+  # restricts the facts first, the earlier periods' too. The 70 days it leaves out hold a whole
+  # month without orders, so the month after it gets NULL (A36 before DEC-54).
+  - id: A67
+    category: tempo
+    phase: 3
+    title: A NOT filter on the time dimension still cuts the month before, across a gap
+    request:
+      metrics: [revenue_prev_month, revenue_mom_growth]
+      dimensions: [orders.status, orders.ordered_at__month]
+      filters:
+        - "NOT ({orders.ordered_at} >= CURRENT_DATE - INTERVAL '300' DAY AND {orders.ordered_at} < CURRENT_DATE - INTERVAL '230' DAY)"
+    sql: |
+      WITH f AS (
+        SELECT status, ordered_at, amount FROM public.orders
+        WHERE ordered_at < CURRENT_DATE - INTERVAL '300' DAY
+           OR ordered_at >= CURRENT_DATE - INTERVAL '230' DAY
+      ), monthly AS (
+        SELECT status, DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM f
+        GROUP BY status, DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.status AS orders__status, cur.mon AS orders__ordered_at__month,
+             prev.revenue AS revenue_prev_month,
+             CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
+               AS revenue_mom_growth
+      FROM monthly cur
+      LEFT JOIN monthly prev
+        ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
+        AND prev.k = cur.k - 1
+    sql_by_dialect:
+      tsql: |
+        WITH f AS (
+          SELECT status, ordered_at, amount FROM public.orders
+          WHERE ordered_at < DATEADD(day, -300, CAST(GETDATE() AS DATE))
+             OR ordered_at >= DATEADD(day, -230, CAST(GETDATE() AS DATE))
+        ), monthly AS (
+          SELECT status, DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
+                 SUM(amount) AS revenue
+          FROM f
+          GROUP BY status, DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT cur.status AS orders__status, cur.mon AS orders__ordered_at__month,
+               prev.revenue AS revenue_prev_month,
+               CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
+                 AS revenue_mom_growth
+        FROM monthly cur
+        LEFT JOIN monthly prev
+          ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
+          AND prev.k = cur.k - 1
+
+  # A year back by month, under a filter on the quarter (another grain than the query's): the
+  # months of the quarters that start 200 days ago or later are kept, and each reads the same
+  # month a year before, all of it before the range.
+  - id: A68
+    category: tempo
+    phase: 3
+    title: Year-over-year revenue growth by month, for the quarters from 200 days ago
+    request:
+      metrics: [revenue, revenue_yoy_growth]
+      dimensions: [orders.ordered_at__month]
+      filters:
+        - "{orders.ordered_at__quarter} >= CURRENT_DATE - INTERVAL '200' DAY"
+    sql: |
+      WITH monthly AS (
+        SELECT EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM public.orders
+        GROUP BY EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      ), kept AS (
+        SELECT DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM public.orders
+        WHERE DATE_TRUNC('quarter', ordered_at) >= CURRENT_DATE - INTERVAL '200' DAY
+        GROUP BY DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+             CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
+               AS revenue_yoy_growth
+      FROM kept cur LEFT JOIN monthly prev ON prev.k = cur.k - 12
+    sql_by_dialect:
+      tsql: |
+        WITH monthly AS (
+          SELECT YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k, SUM(amount) AS revenue
+          FROM public.orders GROUP BY YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        ), kept AS (
+          SELECT DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k, SUM(amount) AS revenue
+          FROM public.orders
+          WHERE DATETRUNC(quarter, ordered_at) >= DATEADD(day, -200, CAST(GETDATE() AS DATE))
+          GROUP BY DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+               CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
+                 AS revenue_yoy_growth
+        FROM kept cur LEFT JOIN monthly prev ON prev.k = cur.k - 12
+
+  # A week back by week, between two bounds on the timestamp that fall inside weeks: the weeks
+  # with orders in the range are kept, the first one cut by the lower bound, and each reads all
+  # of the week before it. The earlier week is the 7 days before the week's Monday.
+  - id: A69
+    category: tempo
+    phase: 3
+    title: Orders of the week before, by week, between 60 and 10 days ago
+    request:
+      metrics: [order_count_7_days_earlier]
+      dimensions: [orders.ordered_at__week]
+      filters:
+        - "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '60' DAY"
+        - "{orders.ordered_at} < CURRENT_DATE - INTERVAL '10' DAY"
+    sql: |
+      WITH w AS (
+        SELECT DISTINCT DATE_TRUNC('week', ordered_at) AS wk FROM public.orders
+        WHERE ordered_at >= CURRENT_DATE - INTERVAL '60' DAY
+          AND ordered_at < CURRENT_DATE - INTERVAL '10' DAY
+      )
+      SELECT w.wk AS orders__ordered_at__week,
+             NULLIF(COUNT(o.order_id), 0) AS order_count_7_days_earlier
+      FROM w LEFT JOIN public.orders o
+        ON o.ordered_at >= w.wk - INTERVAL '7' DAY AND o.ordered_at < w.wk
+      GROUP BY w.wk
+    sql_by_dialect:
+      tsql: |
+        WITH w AS (
+          SELECT DISTINCT CAST(DATEADD(day, -((DATEPART(weekday, ordered_at) + @@DATEFIRST - 2) % 7), CAST(ordered_at AS DATE)) AS DATETIME2) AS wk
+          FROM public.orders
+          WHERE ordered_at >= DATEADD(day, -60, CAST(GETDATE() AS DATE))
+            AND ordered_at < DATEADD(day, -10, CAST(GETDATE() AS DATE))
+        )
+        SELECT w.wk AS orders__ordered_at__week,
+               NULLIF(COUNT(o.order_id), 0) AS order_count_7_days_earlier
+        FROM w LEFT JOIN public.orders o
+          ON o.ordered_at >= DATEADD(day, -7, w.wk) AND o.ordered_at < w.wk
+        GROUP BY w.wk

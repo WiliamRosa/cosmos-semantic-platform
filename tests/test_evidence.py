@@ -229,7 +229,7 @@ def test_cumulative_and_offset_metrics_carry_a_time_block(graph, connector, tmp_
         "shifts": [{"metric": "revenue_prev_month", "input": "revenue", "offset": "1 month"}],
         "time_dimension": "orders.ordered_at__month",
         "query_grain": "month",
-        "filters_applied": "before",
+        "filters_applied": "time_after",
     }
 
     found = times(
@@ -266,11 +266,11 @@ def test_time_block_is_null_for_metrics_without_time_semantics(graph):
 
 
 def test_filters_applied_matches_the_planner(graph, duckdb_connector, tmp_path):
-    """`filters_applied` (DEC-37) is what the planner does. `before`: a filter on the time
-    dimension also removes the earlier periods an offset reads. `time_after` (DEC-34): a
-    rolling window still reads the days before the filtered range, and a grain-to-date metric
-    (DEC-48) its period from the start; a filter shape the planner cannot split (here `NOT`)
-    keeps `before` and cuts the window or the running total."""
+    """`filters_applied` (DEC-37) is what the planner does. `time_after` (DEC-34): a rolling
+    window still reads the days before the filtered range, a grain-to-date metric (DEC-48) its
+    period from the start, and an offset (DEC-54) the period before the range; a filter shape
+    the planner cannot split (here `NOT`) keeps `before` and cuts the window, the running total
+    or the earlier period."""
     service = make_service(graph, duckdb_connector, tmp_path)
 
     def rows(metrics, dimension, filters=()):
@@ -285,15 +285,22 @@ def test_filters_applied_matches_the_planner(graph, duckdb_connector, tmp_path):
     def since(day):
         return [f"{{orders.ordered_at}} >= DATE '{day}'"]
 
-    # Offset: a month whose previous month has revenue gets NULL once the filter starts there.
+    # Offset: a month whose previous month has revenue keeps it once the filter starts there,
+    # and gets NULL under a filter that cannot be split.
     month_col = "orders.ordered_at__month"
-    unfiltered, _ = rows(["revenue", "revenue_prev_month"], month_col)
-    month = next(
-        key(r["orders__ordered_at__month"])
-        for r in unfiltered
-        if r["revenue_prev_month"] is not None
-    )
+    unfiltered, times = rows(["revenue", "revenue_prev_month"], month_col)
+    assert times["revenue_prev_month"]["filters_applied"] == "time_after"
+    full = next(r for r in unfiltered if r["revenue_prev_month"] is not None)
+    month = key(full["orders__ordered_at__month"])
     filtered, times = rows(["revenue", "revenue_prev_month"], month_col, since(month))
+    assert times["revenue_prev_month"]["filters_applied"] == "time_after"
+    assert min(key(r["orders__ordered_at__month"]) for r in filtered) == month
+    first = next(r for r in filtered if key(r["orders__ordered_at__month"]) == month)
+    assert first["revenue"] == pytest.approx(full["revenue"])
+    assert first["revenue_prev_month"] == pytest.approx(full["revenue_prev_month"])
+
+    unsplit = [f"NOT ({{orders.ordered_at}} < DATE '{month}')"]
+    filtered, times = rows(["revenue", "revenue_prev_month"], month_col, unsplit)
     assert times["revenue_prev_month"]["filters_applied"] == "before"
     first = next(r for r in filtered if key(r["orders__ordered_at__month"]) == month)
     assert first["revenue"] is not None
