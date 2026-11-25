@@ -318,9 +318,13 @@ def tpch_source(kind: str):
         pytest.skip(f"set {variable} to run against {kind}")
     if kind == "postgres":
         connector = connect(DataSourceConfig(type=kind, uri=uri))
-        connector.run_script(f"CREATE SCHEMA IF NOT EXISTS {TPCH_SCHEMA}")
-        # A session setting, committed: queries roll back their own transactions only.
-        connector.run_script(f"SET search_path TO {TPCH_SCHEMA}")
+        try:
+            connector.run_script(f"CREATE SCHEMA IF NOT EXISTS {TPCH_SCHEMA}")
+            # A session setting, committed: queries roll back their own transactions only.
+            connector.run_script(f"SET search_path TO {TPCH_SCHEMA}")
+        except BaseException:
+            connector.close()
+            raise
         return connector
     return connect(DataSourceConfig(type=kind, uri=_tpch_database(uri, kind)))
 
@@ -344,21 +348,39 @@ def _tpch_database(uri: str, kind: str) -> str:
     return url.set(database=TPCH_SCHEMA).render_as_string(hide_password=False)
 
 
+# The TPC-H primary keys. Declared so that joins find an index: MariaDB has no hash join by
+# default, and lineitem JOIN orders without one could exceed the statement timeout.
+_TPCH_KEYS = {
+    "lineitem": ("l_orderkey", "l_linenumber"),
+    "orders": ("o_orderkey",),
+    "customer": ("c_custkey",),
+    "nation": ("n_nationkey",),
+    "region": ("r_regionkey",),
+    "part": ("p_partkey",),
+}
+
+
 def load_tpch(connector, tables: dict, chunk: int = 500) -> None:
     """Replaces each table in the connection's default schema with a copy of ``tables``, with
-    exact types: DECIMAL(15,2) stays a decimal, never a float. Rows go in multi-row INSERTs of
-    ``chunk`` rows (SQL Server takes at most 1,000 per statement), with literals written here
-    rather than through SQLGlot, which would take longer than the inserts; on Oracle, where a
-    long statement is slow to parse, through bind variables in batches instead. Checks the
-    row count of each table after the load."""
+    exact types (DECIMAL(15,2) stays a decimal, never a float) and the TPC-H primary key when
+    its columns are loaded. Rows go in multi-row INSERTs of ``chunk`` rows (SQL Server takes
+    at most 1,000 per statement), with literals written here rather than through SQLGlot,
+    which would take longer than the inserts. The statements go straight to the driver's
+    cursor without parameters, so nothing in a string (``:name``, ``%``) is read as a bind
+    parameter; strings are quoted by doubling ``'``, and on MySQL and MariaDB by doubling the
+    backslash as well. On Oracle, where a long statement is slow to parse, rows go through
+    bind variables in batches instead. Checks the row count of each table after the load."""
     dialect = connector.dialect
     for name, table in tables.items():
         connector.run_script(f"DROP TABLE IF EXISTS {name}")
-        columns = ", ".join(
+        columns = [
             f"{field.name} {_tpch_type(table.column(field.name), dialect)}"
             for field in table.schema
-        )
-        connector.run_script(f"CREATE TABLE {name} ({columns})")
+        ]
+        key = _TPCH_KEYS.get(name, ())
+        if key and all(c in table.column_names for c in key):
+            columns.append(f"PRIMARY KEY ({', '.join(key)})")
+        connector.run_script(f"CREATE TABLE {name} ({', '.join(columns)})")
         names = ", ".join(table.column_names)
         if dialect == "oracle":
             binds = ", ".join(f":{i}" for i in range(1, table.num_columns + 1))
@@ -374,9 +396,30 @@ def load_tpch(connector, tables: dict, chunk: int = 500) -> None:
                 values = ", ".join(
                     "(" + ", ".join(_tpch_literal(v, dialect) for v in row) + ")" for row in rows
                 )
-                connector.run_script(f"INSERT INTO {name} ({names}) VALUES {values}")
+                _run_unparameterized(connector, f"INSERT INTO {name} ({names}) VALUES {values}")
         loaded = connector.execute(f"SELECT COUNT(*) AS n FROM {name}").to_pylist()[0]["n"]
         assert loaded == table.num_rows, f"{name}: {loaded} rows loaded of {table.num_rows}"
+
+
+def _run_unparameterized(connector, sql: str) -> None:
+    """Runs ``sql`` on the driver's own cursor with no parameters. SQLAlchemy's ``text()``
+    would read ``:name`` as a bind parameter, and pymysql and pymssql format ``%`` whenever
+    parameters are passed, even empty ones. DuckDB and ADBC Postgres take no parameters here."""
+    from cosmos_semantic.connectors import SQLAlchemyConnector
+
+    if not isinstance(connector, SQLAlchemyConnector):
+        connector.run_script(sql)
+        return
+    con = connector._engine.raw_connection()
+    try:
+        cur = con.cursor()
+        try:
+            cur.execute(sql)
+        finally:
+            cur.close()
+        con.commit()
+    finally:
+        con.close()
 
 
 def _tpch_type(column, dialect: str) -> str:
