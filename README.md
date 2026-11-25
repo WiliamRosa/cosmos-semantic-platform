@@ -146,6 +146,11 @@ uv run cosmos export cube -m examples/ecommerce/semantic -o model/cubes/ecommerc
 # same numbers. Row filters, sensitivity and cumulative metrics are not exported yet, so the example needs both flags
 uv run cosmos export dbt -m examples/ecommerce/semantic -o models/semantic_models.yml --allow-policy-loss --allow-metric-loss
 
+# The model as Databricks metric view YAML, one view per model with measures. Row filters and
+# sensitivity stay in Cosmos, and cumulative metrics, offsets and cross-model metrics are not
+# exported yet, so the example needs both flags
+uv run cosmos export databricks -m examples/ecommerce/semantic --catalog main -o metric_views.yml --allow-policy-loss --allow-metric-loss
+
 # Draft a model from the database catalog (keys, joins, measures, LGPD suggestions), then review it
 uv run cosmos bootstrap -c examples/ecommerce/connections.yml -o semantic/draft.yml
 
@@ -224,7 +229,7 @@ Editors validate and autocomplete model files through the JSON Schema in [schema
 | [Product vision](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/product-vision.md) | Problem, audience, positioning, free and paid editions |
 | [Architecture](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/architecture.md) | Components, query planner, cross-database guarantees, security, deployment |
 | [Semantic model](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/semantic-model.md) | The authoring format, the generated SQL and the exports |
-| [Interoperability](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/interoperability.md) | Mapping to Apache Ossie, dbt and Cube (import and export), and Power BI import |
+| [Interoperability](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/interoperability.md) | Mapping to Apache Ossie, dbt and Cube (import and export), Power BI import, and Databricks metric view export |
 | [Roadmap](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/docs/roadmap.md) | Phases, MVP scope and exit criteria |
 | [Changelog](https://github.com/WiliamRosa/cosmos-semantic-platform/blob/main/CHANGELOG.md) | What changed in each release |
 | [Architecture decisions](https://github.com/WiliamRosa/cosmos-semantic-platform/tree/main/docs/decisions/) | Decision records (ADRs); 0004 supersedes 0001, 0005 sets the name and license, 0006 puts the ontology in the MVP, 0007 sets connectors, data sources, identity and import, 0008 makes verifiable numbers the phase 2 differentiator, 0009 makes business context the phase 3 differentiator and pauses connected BI and the managed product, 0010 adds Snowflake as a data source, 0011 adds MySQL, MariaDB and Oracle, 0012 adds the read-only console, 0013 sets up the supervised agent team, 0014 adds the social media agent, 0016 adds BigQuery |
