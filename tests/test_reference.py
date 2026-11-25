@@ -8,7 +8,7 @@ from cosmos_semantic.compiler import compile_project
 from cosmos_semantic.errors import ModelError
 from cosmos_semantic.evidence import EvidenceBuilder, sql_hash
 from cosmos_semantic.loader import load_project
-from cosmos_semantic.planner import Planner, QueryRequest
+from cosmos_semantic.planner import Planner, Principal, QueryRequest
 from cosmos_semantic.reference import ReferenceCase, load_cases, run_case
 from cosmos_semantic.spec import Project
 
@@ -453,3 +453,203 @@ def test_windows_in_weeks_compile_to_days(week_window_graph):
     assert (time["kind"], time["window"], time["days"]) == ("window", "2 weeks", 14)
     assert builder.time("revenue_rolling_1_week", cases[0].request)["window"] == "1 week"
     assert "over the 2 weeks ending on each day" in builder.formula("revenue_rolling_2_weeks")
+
+
+# -- Rolling windows over a distinct count (DEC-49) ----------------------------------------
+# Not in the example, as the windows in weeks above: the dbt and Cube exports refuse them until
+# checked, and each export test counts the example's metrics. The hand-written SQL picks the
+# output days, then counts the distinct customers of each day's whole window from the facts,
+# so a customer who buys on several days of a window counts once.
+DISTINCT_WINDOW_METRICS = [
+    {
+        "name": "buyers_rolling_7_days",
+        "type": "cumulative",
+        "measure": "buyers",
+        "window": "7 days",
+    },
+    {
+        "name": "buyers_rolling_30_days",
+        "type": "cumulative",
+        "measure": "buyers",
+        "window": "30 days",
+    },
+    {
+        "name": "buyers_rolling_2_weeks",
+        "type": "cumulative",
+        "measure": "buyers",
+        "window": "2 weeks",
+    },
+]
+DISTINCT_WINDOW_CASES = [
+    ReferenceCase(
+        id="A56",
+        category="tempo",
+        phase=3,
+        title="Distinct buyers of the 7 days ending on each day, with the day's buyers alongside",
+        request=QueryRequest(
+            metrics=["buyers_rolling_7_days", "buyers"], dimensions=["orders.ordered_at__day"]
+        ),
+        sql="""
+SELECT d.dd AS orders__ordered_at__day,
+       COUNT(DISTINCT o.customer_id) AS buyers_rolling_7_days,
+       COUNT(DISTINCT CASE WHEN o.ordered_at >= d.dd THEN o.customer_id END) AS buyers
+FROM (SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM public.orders) d
+JOIN public.orders o
+  ON o.ordered_at >= d.dd - INTERVAL '6' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
+GROUP BY d.dd
+""",
+        sql_by_dialect={
+            "tsql": """
+SELECT d.dd AS orders__ordered_at__day,
+       COUNT(DISTINCT o.customer_id) AS buyers_rolling_7_days,
+       COUNT(DISTINCT CASE WHEN o.ordered_at >= d.dd THEN o.customer_id END) AS buyers
+FROM (SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM public.orders) d
+JOIN public.orders o
+  ON o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
+GROUP BY d.dd
+"""
+        },
+    ),
+    # A filter on the time dimension chooses the output days and each window still reads the
+    # 29 days before them (DEC-34); the status filter and the row filter on customers restrict
+    # the facts first, and a null segment is a group of its own.
+    ReferenceCase(
+        id="A57",
+        category="tempo",
+        phase=3,
+        title="Distinct buyers of 30 days by segment and day, last 45 days, under a row filter",
+        request=QueryRequest(
+            metrics=["buyers_rolling_30_days", "buyers"],
+            dimensions=["customers.segment", "orders.ordered_at__day"],
+            filters=[
+                "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '45' DAY",
+                "{orders.status} = 'completed'",
+            ],
+        ),
+        user={"region": "Northeast"},
+        sql="""
+WITH f AS (
+  SELECT c.segment, o.ordered_at, o.customer_id
+  FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+  WHERE o.status = 'completed' AND c.region = 'Northeast'
+)
+SELECT d.segment AS customers__segment, d.dd AS orders__ordered_at__day,
+       COUNT(DISTINCT f.customer_id) AS buyers_rolling_30_days,
+       COUNT(DISTINCT CASE WHEN f.ordered_at >= d.dd THEN f.customer_id END) AS buyers
+FROM (
+  SELECT DISTINCT segment, DATE_TRUNC('day', ordered_at) AS dd FROM f
+  WHERE ordered_at >= CURRENT_DATE - INTERVAL '45' DAY
+) d
+JOIN f
+  ON (f.segment = d.segment OR (f.segment IS NULL AND d.segment IS NULL))
+  AND f.ordered_at >= d.dd - INTERVAL '29' DAY AND f.ordered_at < d.dd + INTERVAL '1' DAY
+GROUP BY d.segment, d.dd
+""",
+        sql_by_dialect={
+            "tsql": """
+WITH f AS (
+  SELECT c.segment, o.ordered_at, o.customer_id
+  FROM public.orders o LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+  WHERE o.status = 'completed' AND c.region = 'Northeast'
+)
+SELECT d.segment AS customers__segment, d.dd AS orders__ordered_at__day,
+       COUNT(DISTINCT f.customer_id) AS buyers_rolling_30_days,
+       COUNT(DISTINCT CASE WHEN f.ordered_at >= d.dd THEN f.customer_id END) AS buyers
+FROM (
+  SELECT DISTINCT segment, DATETRUNC(day, ordered_at) AS dd FROM f
+  WHERE ordered_at >= DATEADD(day, -45, CAST(GETDATE() AS DATE))
+) d
+JOIN f
+  ON (f.segment = d.segment OR (f.segment IS NULL AND d.segment IS NULL))
+  AND f.ordered_at >= DATEADD(day, -29, d.dd) AND f.ordered_at < DATEADD(day, 1, d.dd)
+GROUP BY d.segment, d.dd
+"""
+        },
+    ),
+    # A window in weeks (DEC-27) is 14 days, here under a range on the day; the hand-written
+    # SQL selects the days by a range on the column.
+    ReferenceCase(
+        id="A58",
+        category="tempo",
+        phase=3,
+        title="Distinct buyers of 2 weeks by day, for the days between 60 and 30 days ago",
+        request=QueryRequest(
+            metrics=["buyers_rolling_2_weeks"],
+            dimensions=["orders.ordered_at__day"],
+            filters=[
+                "{orders.ordered_at__day} >= CURRENT_DATE - INTERVAL '60' DAY "
+                "AND {orders.ordered_at__day} < CURRENT_DATE - INTERVAL '30' DAY"
+            ],
+        ),
+        sql="""
+SELECT d.dd AS orders__ordered_at__day, COUNT(DISTINCT o.customer_id) AS buyers_rolling_2_weeks
+FROM (
+  SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM public.orders
+  WHERE ordered_at >= CURRENT_DATE - INTERVAL '60' DAY
+    AND ordered_at < CURRENT_DATE - INTERVAL '30' DAY
+) d
+JOIN public.orders o
+  ON o.ordered_at >= d.dd - INTERVAL '13' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
+GROUP BY d.dd
+""",
+        sql_by_dialect={
+            "tsql": """
+SELECT d.dd AS orders__ordered_at__day, COUNT(DISTINCT o.customer_id) AS buyers_rolling_2_weeks
+FROM (
+  SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM public.orders
+  WHERE ordered_at >= DATEADD(day, -60, CAST(GETDATE() AS DATE))
+    AND ordered_at < DATEADD(day, -30, CAST(GETDATE() AS DATE))
+) d
+JOIN public.orders o
+  ON o.ordered_at >= DATEADD(day, -13, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
+GROUP BY d.dd
+"""
+        },
+    ),
+]
+
+
+@pytest.fixture(scope="module")
+def distinct_window_graph():
+    data = load_project(EXAMPLE).model_dump(mode="json")
+    data["metrics"].extend(DISTINCT_WINDOW_METRICS)
+    return compile_project(Project.model_validate(data))
+
+
+def test_distinct_window_case_ids_are_free():
+    """A56 to A58 live here; `reference/queries_advanced.yml` must not reuse their ids."""
+    taken = {c.id for c in ALL + ADVANCED + WEEK_WINDOW_CASES}
+    assert not taken & {c.id for c in DISTINCT_WINDOW_CASES}
+
+
+@pytest.mark.parametrize("source", SOURCES)
+@pytest.mark.parametrize("case", DISTINCT_WINDOW_CASES, ids=lambda c: c.id)
+def test_reference_distinct_count_windows(case, source, distinct_window_graph, request):
+    _check(case, distinct_window_graph, request.getfixturevalue(source))
+
+
+def test_distinct_count_windows_differ_from_summed_daily_counts(
+    distinct_window_graph, duckdb_connector
+):
+    """A56 proves what it claims on the demo data: on some days a customer buys on several days
+    of the window, so the window's distinct count is below the sum of the daily ones."""
+    compiled = Planner(distinct_window_graph, "duckdb").plan(DISTINCT_WINDOW_CASES[0].request)
+    rows = duckdb_connector.execute(compiled.sql).to_pylist()
+    daily = {r["orders__ordered_at__day"]: r["buyers"] for r in rows}
+    below = 0
+    for r in rows:
+        day = r["orders__ordered_at__day"]
+        summed = sum(n for d, n in daily.items() if 0 <= (day - d).days <= 6)
+        assert r["buyers_rolling_7_days"] <= summed
+        below += r["buyers_rolling_7_days"] < summed
+    assert below > 0
+
+
+def test_distinct_count_windows_apply_the_row_filter_to_the_facts(distinct_window_graph):
+    """The facts each window reads pass the same row filters as the daily aggregate."""
+    case = DISTINCT_WINDOW_CASES[1]
+    principal = Principal(user=case.user)
+    for dialect in DIALECTS:
+        compiled = Planner(distinct_window_graph, dialect).plan(case.request, principal)
+        applied = {f["applied_in"] for f in compiled.trace.row_filters}
+        assert {"orders_agg", "buyers_facts_lookback_30_days"} <= applied, dialect

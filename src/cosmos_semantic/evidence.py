@@ -25,6 +25,7 @@ from cosmos_semantic.expressions import REF_RE
 from cosmos_semantic.ontology import Glossary, rule_logic, run_rule_tests
 from cosmos_semantic.planner import CompiledQuery, Principal, QueryRequest, QueryTrace
 from cosmos_semantic.spec import (
+    RECOMPUTED_WINDOW_AGGS,
     CumulativeMetric,
     DerivedMetric,
     RatioMetric,
@@ -270,7 +271,9 @@ class EvidenceBuilder:
         """The time semantics of a cumulative or offset metric (DEC-37), None for the others.
 
         ``kind`` is ``grain_to_date`` (``period`` null for a running total over all time),
-        ``window`` (``window`` as written and its ``days``) or ``offset`` (each input read at
+        ``window`` (``window`` as written and its ``days``; with ``from_facts`` true when the
+        window is recomputed from the facts of each window, as a distinct count is, DEC-49,
+        rather than combined from daily values) or ``offset`` (each input read at
         an earlier period, through nested metrics too). ``time_dimension`` and ``query_grain``
         are the request's time dimension and its grain. ``filters_applied`` says when the
         request's ``filters`` and the row filters restrict the rows: ``before`` the window
@@ -293,6 +296,9 @@ class EvidenceBuilder:
                     "window": metric.window,
                     "days": metric.window_days(),
                 }
+                if self._recomputed(metric):
+                    # Only present for such a window, so other envelopes keep their shape.
+                    time["from_facts"] = True
             else:
                 time = {"kind": "grain_to_date", "period": metric.grain_to_date}
         else:
@@ -312,6 +318,13 @@ class EvidenceBuilder:
             "query_grain": ref.grain if ref else None,
             "filters_applied": applied,
         }
+
+    def _recomputed(self, metric: CumulativeMetric) -> bool:
+        """Whether a rolling window is recomputed from the facts of each window (DEC-49)."""
+        owner = self.graph.measure_owner.get(metric.measure)
+        if owner is None:
+            return False
+        return self.graph.models[owner].measures[metric.measure].agg in RECOMPUTED_WINDOW_AGGS
 
     def _shifts(self, name: str, seen: frozenset[str] = frozenset()) -> list[dict[str, str]]:
         """The inputs read at an earlier period under ``name`` (DEC-18), each with the metric
@@ -415,6 +428,8 @@ class EvidenceBuilder:
         if isinstance(metric, CumulativeMetric):
             inner = self.formula(metric.measure, seen)
             if metric.window:
+                if self._recomputed(metric):
+                    return f"{inner} recomputed over the {metric.window} ending on each day"
                 return f"{inner} over the {metric.window} ending on each day"
             period = metric.grain_to_date or "all time"
             owner = g.measure_owner.get(metric.measure)

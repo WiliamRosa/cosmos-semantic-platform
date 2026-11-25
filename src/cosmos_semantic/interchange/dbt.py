@@ -44,10 +44,10 @@ from cosmos_semantic.spec import (
     Project,
     RatioMetric,
     SimpleMetric,
+    combined_window_refusal,
     cumulative_agg_problem,
     offset_grain_problem,
     parse_offset,
-    window_agg_refusal,
     window_parts,
 )
 
@@ -455,7 +455,9 @@ class _Builder:
         """Drops the cumulative metrics model validation refuses: a running total, to-date or
         not, or a rolling window over a measure whose per-period values do not combine (`avg`,
         `count_distinct`), and the metrics that use them, each with a warning (DEC-32). The
-        condition is the validator's own (``cumulative_agg_problem``, ``window_agg_refusal``)."""
+        condition is the validator's own (``cumulative_agg_problem``), and for windows
+        ``combined_window_refusal``: a `count_distinct` window is valid in Cosmos (DEC-49) but
+        not imported until MetricFlow's numbers are checked against the engine's."""
         aggs = {m["name"]: m["agg"] for model in self.models for m in model.get("measures", [])}
         skipped: set[str] = set()
         for metric in self.metrics:
@@ -463,7 +465,9 @@ class _Builder:
                 continue
             agg = aggs[metric["measure"]]
             spec = CumulativeMetric.model_validate(metric)
-            problem = window_agg_refusal(agg) if spec.window else cumulative_agg_problem(spec, agg)
+            problem = (
+                combined_window_refusal(agg) if spec.window else cumulative_agg_problem(spec, agg)
+            )
             if problem:
                 self.warnings.append(
                     f"metrics.{metric['name']}: over measure `{metric['measure']}`: {problem}; "
@@ -815,7 +819,7 @@ class _DbtWriter:
                 "engine computes"
             )
         node, measure = self.graph.measure(metric.measure)
-        problem = window_agg_refusal(measure.agg)
+        problem = combined_window_refusal(measure.agg)
         if problem:
             raise _NotExported(problem)
         owner, spec = node.spec.name, node.spec

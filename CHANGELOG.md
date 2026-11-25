@@ -29,6 +29,20 @@ format or the API; such changes are listed under **Changed**.
   --json` reports gain `diff`, every row that does not match (up to 1,000), and their totals
   are summed exactly (`math.fsum`), so they no longer depend on row order.
 
+- Rolling windows over a distinct count (DEC-49): a cumulative metric with a `window` over a
+  `count_distinct` measure is now valid, and is recomputed over each window from the facts,
+  never added up from daily values, so a customer who buys on several days of the window
+  counts once ("weekly active customers", "customers active in the last 30 days"). Each output
+  day is joined to a facts CTE of the distinct values of each day (`<measure>_facts`) under the
+  same filters and row filters; a filter on the time dimension still chooses the output days
+  without cutting the windows short (DEC-34), and windows in weeks (DEC-27) work too. The
+  evidence marks such a window with `time.from_facts: true`. Its cost grows with the output
+  days times the window's days. The dbt and Cube exports refuse it as metric loss, and the dbt,
+  Cube and Power BI imports skip it with a warning, until their numbers are checked against the
+  engine's. A rolling window over an `avg` measure is still refused. Reference cases A56 to A58
+  check the numbers against hand-written SQL on every database. Requests without such a window
+  keep their SQL and `sql_hash` on every dialect.
+
 - `cosmos export databricks` writes the model as Databricks Unity Catalog metric view YAML
   (`version: 0.1`), first slice (DEC-42): one metric view per model with measures, with its
   one-step joins (`on: source.<key> = <model>.<key>`), its dimensions and those of the joined
