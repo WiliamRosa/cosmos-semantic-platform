@@ -363,7 +363,8 @@ _TPCH_KEYS = {
 def load_tpch(connector, tables: dict, chunk: int = 500) -> None:
     """Replaces each table in the connection's default schema with a copy of ``tables``, with
     exact types (DECIMAL(15,2) stays a decimal, never a float) and the TPC-H primary key when
-    its columns are loaded. Rows go in multi-row INSERTs of ``chunk`` rows (SQL Server takes
+    its columns are loaded (not on Oracle: the test user may create tables in the TPCH schema
+    but has no INDEX privilege there, and Oracle hash-joins without keys anyway). Rows go in multi-row INSERTs of ``chunk`` rows (SQL Server takes
     at most 1,000 per statement), with literals written here rather than through SQLGlot,
     which would take longer than the inserts. The statements go straight to the driver's
     cursor without parameters, so nothing in a string (``:name``, ``%``) is read as a bind
@@ -378,7 +379,7 @@ def load_tpch(connector, tables: dict, chunk: int = 500) -> None:
             for field in table.schema
         ]
         key = _TPCH_KEYS.get(name, ())
-        if key and all(c in table.column_names for c in key):
+        if dialect != "oracle" and key and all(c in table.column_names for c in key):
             columns.append(f"PRIMARY KEY ({', '.join(key)})")
         connector.run_script(f"CREATE TABLE {name} ({', '.join(columns)})")
         names = ", ".join(table.column_names)
