@@ -52,6 +52,7 @@ from cosmos_semantic.expressions import (
 )
 from cosmos_semantic.ontology import RULE_DIALECT, bind_rule, rule_logic
 from cosmos_semantic.spec import (
+    RECOMPUTED_WINDOW_AGGS,
     WINDOW_AGGS,
     CumulativeMetric,
     DerivedMetric,
@@ -222,9 +223,15 @@ class _Group:
     # N for the facts a rolling window of N days reads (DEC-34): the request's filters on the
     # time dimension reach back far enough to fill the window of every day they keep.
     lookback: int | None = None
+    # The measure whose distinct values, by the requested dimensions, a rolling window
+    # recomputes from the facts (DEC-49): the CTE groups without aggregating.
+    facts: str | None = None
 
     @property
     def cte(self) -> str:
+        if self.facts is not None:
+            name = f"{self.facts}_facts"
+            return name if self.lookback is None else f"{name}_lookback_{self.lookback}_days"
         if self.lookback is not None:
             return f"{self.model}_agg_lookback_{self.lookback}_days"
         if self.offset is None:
@@ -318,19 +325,34 @@ class Planner:
             used_models |= joined
         # Rolling windows read their facts from a CTE of their own when the request filters
         # the time dimension (DEC-34); without such a filter the SQL is unchanged.
+        # A window over a distinct count (DEC-49) reads the distinct values of each day from a
+        # facts CTE, under the same filters, widened as above when they can be.
         lookbacks: dict[tuple[str, int], tuple[_Group, list[Template]]] = {}
+        facts: dict[tuple[str, int | None], tuple[_Group, list[Template]]] = {}
         sources: dict[str, str] = {}
         for name, metric in windows.items():
             widened = self._lookback_filters(name, metric, dims, filters)
-            if widened is None:
-                continue
             days = metric.window_days()
             assert days is not None
             owner = g.measure_owner[metric.measure]
+            if g.models[owner].measures[metric.measure].agg in RECOMPUTED_WINDOW_AGGS:
+                reach = None if widened is None else days
+                group, _ = facts.setdefault(
+                    (metric.measure, reach),
+                    (
+                        _Group(owner, lookback=reach, facts=metric.measure),
+                        filters if widened is None else widened,
+                    ),
+                )
+                group.inputs.setdefault(_Input(metric.measure, None), metric.measure)
+                sources[name] = group.cte
+                continue
+            if widened is None:
+                continue
             group, _ = lookbacks.setdefault((owner, days), (_Group(owner, lookback=days), widened))
             group.inputs.setdefault(_Input(metric.measure, None), metric.measure)
             sources[name] = group.cte
-        for group, widened in lookbacks.values():
+        for group, widened in [*lookbacks.values(), *facts.values()]:
             select, joined = self._group_select(group, dims, widened, principal)
             ctes.append((group.cte, select))
             used_models |= joined
@@ -803,6 +825,14 @@ class Planner:
                 if item.filter
                 else None
             )
+            if group.facts is not None:
+                # The distinct values themselves, grouped with the dimensions (DEC-49).
+                value = qualify(measure.expr or measure.name, base, self.dialect)
+                if condition is not None:
+                    value = exp.Case(ifs=[exp.If(this=condition, true=value)])
+                dim_exprs.append(value)
+                projections.append(value.copy().as_(alias))
+                continue
             projections.append(self._aggregate(measure, base, condition).as_(alias))
 
         # Row filters of every participating model, including models joined only because
@@ -1122,7 +1152,11 @@ class Planner:
         With ``lookback`` (DEC-34), ``prev`` reads that CTE instead: the same daily aggregate,
         with the request's filters on the time dimension widened to reach N - 1 days further
         back. ``cur`` keeps the request's filters, so they choose the output days, and the
-        window of each day is full."""
+        window of each day is full.
+
+        A window over a distinct count (DEC-49) is recomputed: ``prev`` is ``lookback``, the
+        facts CTE of the distinct values of each day, and the window counts the values of its
+        days once each, so a customer seen on several days of the window counts once."""
         time = self._time_dim(metric, dims)
         if time.grain != "day":
             raise QueryError(
@@ -1141,7 +1175,23 @@ class Planner:
         ] + [exp.NullSafeEQ(this=prev[d], expression=cur[d]) for d in dims if d != time]
         owner = self.graph.measure_owner[metric.measure]
         agg = self.graph.models[owner].measures[metric.measure].agg
-        combined = _COMBINE_AGGS[agg](this=exp.column(value.name, table="prev"))
+        if agg in RECOMPUTED_WINDOW_AGGS:
+            assert lookback is not None
+            distinct = exp.Count(
+                this=exp.Distinct(expressions=[exp.column(value.name, table="prev")])
+            )
+            # A null day matches no day, as in the other windows: its value is null, not 0.
+            combined: exp.Expression = exp.Case(
+                ifs=[
+                    exp.If(
+                        this=exp.Is(this=cur[time].copy(), expression=exp.null()),
+                        true=exp.null(),
+                    )
+                ],
+                default=distinct,
+            )
+        else:
+            combined = _COMBINE_AGGS[agg](this=exp.column(value.name, table="prev"))
         return (
             exp.select(*[c.copy().as_(d.alias) for d, c in cur.items()], combined.as_(value.name))
             .from_(source.copy().as_("cur"))
