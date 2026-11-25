@@ -282,7 +282,8 @@ def test_credentials_file_comes_from_options_and_is_never_logged(
         connector.execute("SELECT * FROM missing_table")
     connector.close()
 
-    assert FakeCredentials.files == [str(key)]  # the ~ is expanded
+    # The ~ is expanded. Compared as paths: on Windows, expanduser keeps the "/" of the option.
+    assert [Path(f) for f in FakeCredentials.files] == [key]
     (client,) = fake_bigquery.instances
     assert isinstance(client.kwargs["credentials"], FakeCredentials)
     printed = capsys.readouterr()
