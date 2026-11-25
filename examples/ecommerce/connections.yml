@@ -60,9 +60,12 @@ data_sources:
     options:
       project: ${COSMOS_BIGQUERY_PROJECT:-cosmos-test}
       location: ${COSMOS_BIGQUERY_LOCATION:-}
+      # Without a key file, the client uses Application Default Credentials (recommended).
       credentials_file: ${COSMOS_BIGQUERY_CREDENTIALS_FILE:-}
-      # The local emulator (`--profile bigquery`); leave it empty for BigQuery itself.
-      api_endpoint: ${COSMOS_BIGQUERY_ENDPOINT:-http://localhost:19050}
+      maximum_bytes_billed: ${COSMOS_BIGQUERY_MAXIMUM_BYTES_BILLED:-1000000000}   # 1 GB a query
+      # Only for the local emulator (`--profile bigquery`): COSMOS_BIGQUERY_ENDPOINT=http://localhost:19050.
+      # It takes no credentials, so a source that sets both is refused.
+      api_endpoint: ${COSMOS_BIGQUERY_ENDPOINT:-}
     schema_map: { public: "${COSMOS_BIGQUERY_DATASET:-cosmos}" }   # a schema is a dataset
 
   trino:
