@@ -77,6 +77,14 @@ format or the API; such changes are listed under **Changed**.
 
 ### Changed
 
+- Reading expressions as standard SQL (DEC-53) changes three forms that some models may use.
+  Check models for them when you upgrade:
+  - on MySQL, MariaDB and BigQuery, a double-quoted string such as `status = "paid"` is now a
+    column name, so the query usually fails with an unknown column; write `'paid'`;
+  - a backslash in a string that standard SQL still reads (`'a\\b'` on MySQL, `'\n'` on
+    BigQuery) is now a literal backslash, with no error;
+  - on MySQL, `||` is now string concatenation, not `OR`.
+
 - Date filters no longer cut year-, quarter-, month-, week- or day-to-date metrics short
   (DEC-48). A request filter on a `grain_to_date` metric's time dimension now chooses the output
   rows, and each row still reads its period from the start: "year-to-date revenue for October"
@@ -110,6 +118,25 @@ format or the API; such changes are listed under **Changed**.
   them off by exactly 1.00: the `*_export_same_numbers` tests and the divergence zoo (Z04 on
   MariaDB) failed now and then. The replay test now changes a private copy of the table,
   dropped afterwards.
+
+- Model and filter expressions are read as standard SQL on every data source (DEC-53), as
+  documented, and written in each source's dialect. They used to be read in the source's own
+  dialect: on MySQL, MariaDB, Databricks and BigQuery a double-quoted name (`"status" =
+  'paid'`) was a string, so the condition was always false; on Databricks `'O''Brien'` became
+  `CONCAT('O', 'Brien')`, and BigQuery refused it in a dimension or measure; on BigQuery and
+  Snowflake a LIKE pattern lost its backslash (`'a\_b%'` matched more rows). Numbers change by
+  design only for expressions with these forms, on those databases. This covers dimension,
+  measure and entity expressions, metric and measure filters, row filters, derived metric
+  expressions and the expression strings in `filters` (`query`, `show_sql`,
+  `dimension_values`). An expression standard SQL cannot read (T-SQL brackets, MySQL
+  backticks, a quote escaped with a backslash) is still read in the source's dialect, and any
+  parse error, the tokenizer's included, is now a model or query error instead of an
+  unhandled exception. The SQL of every existing reference, TPC-H and divergence zoo request
+  is unchanged on all nine dialects, except four TPC-H requests on Oracle, where a `DATE
+  '1998-09-02'` literal is now written `CAST('1998-09-02' AS DATE)` instead of `TO_DATE(...)`
+  (the same date). Reference cases A63 to A65 check request filters, a dimension and a metric
+  filter with double-quoted names, doubled quotes and LIKE escapes against hand-written SQL on
+  every database.
 
 ## [0.5.0] - 2026-11-23
 
