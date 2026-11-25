@@ -43,6 +43,18 @@ format or the API; such changes are listed under **Changed**.
   check the numbers against hand-written SQL on every database. Requests without such a window
   keep their SQL and `sql_hash` on every dialect.
 
+- `cosmos export databricks` writes the model as Databricks Unity Catalog metric view YAML
+  (`version: 0.1`), first slice (DEC-42): one metric view per model with measures, with its
+  one-step joins (`on: source.<key> = <model>.<key>`), its dimensions and those of the joined
+  models, its measures, and the simple, ratio and derived metrics over its own measures, each
+  as one aggregate expression built as the planner builds it (filters inside the aggregation,
+  real division, null on a zero denominator). `--catalog` qualifies `schema.table` names. Row
+  filters and sensitivity are not exported (governance stays in Cosmos) and are refused until
+  `--allow-policy-loss`; running totals, rolling windows, offsets, metrics spanning models and
+  filters on another model, a time grain, a rule or `$user` are refused until
+  `--allow-metric-loss`, each with a warning. On DuckDB, 57 exported measure-and-grouping pairs
+  return the planner's numbers; the same test runs on Databricks when its credentials are set.
+
 ### Fixed
 
 - Flaky same-number tests (DEC-55). The replay test changed the shared `orders` table

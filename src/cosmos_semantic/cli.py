@@ -1174,6 +1174,68 @@ def export_dbt_cmd(
     )
 
 
+@export_app.command("databricks")
+def export_databricks_cmd(
+    model: ModelOpt = Path("semantic"),
+    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+    catalog: Annotated[
+        str | None,
+        typer.Option(
+            "--catalog",
+            help="Unity Catalog catalog written before each schema.table name in `source`.",
+        ),
+    ] = None,
+    allow_policy_loss: Annotated[
+        bool,
+        typer.Option(
+            "--allow-policy-loss",
+            help="Export even though row filters and sensitivity are not exported.",
+        ),
+    ] = False,
+    allow_metric_loss: Annotated[
+        bool,
+        typer.Option(
+            "--allow-metric-loss",
+            help=(
+                "Export even though metrics a metric view cannot carry here are dropped: "
+                "cumulative metrics, offsets, metrics spanning models, metrics filtered by "
+                "another model, a time grain, a business rule or $user, derived metrics over "
+                "bare columns, and metrics that use one of these."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Exports the model as Databricks Unity Catalog metric view YAML (version 0.1): one view
+    per model with measures, with its one-step joins, its dimensions and those of the joined
+    models, its measures, and the simple, ratio and derived metrics over its own measures. The
+    documents are separated by `---`, each after a comment naming its model. What is not
+    exported is listed as warnings on standard error. A model with row filters or sensitivity
+    is refused unless --allow-policy-loss is given, and one with metrics a metric view cannot
+    carry here unless --allow-metric-loss is given."""
+    from cosmos_semantic.interchange.databricks import export_databricks
+
+    try:
+        result = export_databricks(
+            load_project(model),
+            catalog=catalog,
+            allow_policy_loss=allow_policy_loss,
+            allow_metric_loss=allow_metric_loss,
+        )
+    except (errors.CosmosError, ValueError) as exc:
+        _fail(exc)
+    for warning in result.warnings:
+        typer.secho(f"warning: {warning}", fg=typer.colors.YELLOW, err=True)
+    if output is None:
+        typer.echo(result.text, nl=False)
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(result.text, encoding="utf-8", newline="\n")
+    typer.secho(
+        f"Databricks metric views written to {output} ({len(result.warnings)} warnings)",
+        fg=typer.colors.GREEN,
+    )
+
+
 @app.command("bootstrap")
 def bootstrap_cmd(
     output: Annotated[Path, typer.Option("--output", "-o", help="Draft model file (.yml).")],
