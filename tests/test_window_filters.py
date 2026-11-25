@@ -39,16 +39,12 @@ UNCHANGED = {
         "metrics": ["customers_rolling_30_days"],
         "dimensions": ["customers.segment", "customers.last_order_at__day"],
     },
-    # A date filter without a rolling window, and under a running total: unchanged too.
+    # A date filter without a rolling window: unchanged too. (Under a running total it changes
+    # since DEC-48, by design; tests/test_to_date_filters.py pins the requests it leaves alone.)
     "85b87c827c245efd": {
         "metrics": ["revenue", "order_count"],
         "dimensions": [DAY],
         "filters": ["{orders.ordered_at} >= CURRENT_DATE - INTERVAL '45' DAY"],
-    },
-    "e4e93947c0b92440": {
-        "metrics": ["revenue_year_to_date"],
-        "dimensions": ["orders.ordered_at__month"],
-        "filters": ["{orders.ordered_at} >= CURRENT_DATE - INTERVAL '400' DAY"],
     },
 }
 

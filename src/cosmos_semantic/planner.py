@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
@@ -28,6 +29,7 @@ from sqlglot.dialects.dialect import Dialect
 
 from cosmos_semantic import dialects
 from cosmos_semantic.compiler import (
+    TIME_GRAINS,
     DimensionRef,
     JoinEdge,
     SemanticGraph,
@@ -199,9 +201,10 @@ class QueryTrace:
     one_to_many: list[dict[str, Any]] = field(default_factory=list)
     # Conditions on metric values (DEC-29), as applied: {"metric", "op", "value", "text"}.
     metric_filters: list[dict[str, Any]] = field(default_factory=list)
-    # Rolling windows (DEC-34): per metric, the request filters on its time dimension that
-    # choose the output days after the window ("after") and those that still restrict the
-    # facts before it, because their shape cannot be split ("before").
+    # Rolling windows (DEC-34) and grain-to-date metrics (DEC-48): per metric, the request
+    # filters on its time dimension that choose the output rows after the window or running
+    # total ("after") and those that still restrict the facts before it, because their shape
+    # cannot be split ("before").
     window_filters: dict[str, dict[str, list[str]]] = field(default_factory=dict)
 
 
@@ -222,6 +225,10 @@ class _Group:
     # N for the facts a rolling window of N days reads (DEC-34): the request's filters on the
     # time dimension reach back far enough to fill the window of every day they keep.
     lookback: int | None = None
+    # The period of a grain-to-date metric (DEC-48): the request's filters on the time
+    # dimension reach back to the start of the period of every row they keep.
+    to_date: str | None = None
+
     # The measure whose distinct values, by the requested dimensions, a rolling window
     # recomputes from the facts (DEC-49): the CTE groups without aggregating.
     facts: str | None = None
@@ -233,6 +240,8 @@ class _Group:
             return name if self.lookback is None else f"{name}_lookback_{self.lookback}_days"
         if self.lookback is not None:
             return f"{self.model}_agg_lookback_{self.lookback}_days"
+        if self.to_date is not None:
+            return f"{self.model}_agg_from_{self.to_date}_start"
         if self.offset is None:
             return f"{self.model}_agg"
         amount, unit = self.offset
@@ -360,6 +369,30 @@ class Planner:
             window = self._window_select(column, metric, dims, sources.get(name))
             ctes.append((f"{name}_window", window))
             metric_exprs[name] = exp.column(column.name, table=f"{name}_window")
+        # Grain-to-date metrics read their facts from a CTE of their own when the request
+        # filters the time dimension (DEC-48); without such a filter the SQL is unchanged.
+        periods: dict[tuple[str, str], tuple[_Group, list[Template]]] = {}
+        starts: dict[str, _Group] = {}
+        for name, metric in cumulative.items():
+            widened = self._to_date_filters(name, metric, dims, filters)
+            if widened is None:
+                continue
+            assert metric.grain_to_date is not None
+            owner = g.measure_owner[metric.measure]
+            key = (owner, metric.grain_to_date)
+            group, _ = periods.setdefault(key, (_Group(owner, to_date=key[1]), widened))
+            group.inputs.setdefault(_Input(metric.measure, None), metric.measure)
+            starts[name] = group
+        for group, widened in periods.values():
+            select, joined = self._group_select(group, dims, widened, principal)
+            ctes.append((group.cte, select))
+            used_models |= joined
+        for name, group in starts.items():
+            column = metric_exprs[name]
+            assert isinstance(column, exp.Column)
+            running = self._to_date_select(column, cumulative.pop(name), dims, group.cte)
+            ctes.append((f"{name}_running", running))
+            metric_exprs[name] = exp.column(column.name, table=f"{name}_running")
 
         final = self._final_select(
             ctes, dims, metric_exprs, cumulative, request, shifts, time, kept
@@ -758,7 +791,7 @@ class Planner:
             for edge in g.join_path(base, model):
                 joins.setdefault(edge.target, edge)
 
-        def dim_sql(ref: DimensionRef, condition: bool = False, shift: int = 0) -> exp.Expression:
+        def dim_sql(ref: DimensionRef, condition: bool = False, move: str = "") -> exp.Expression:
             if ref.model != base and ref.model not in g.reachable(base):
                 raise QueryError(
                     f"`{ref.model}.{ref.name}` is not reachable from `{base}` "
@@ -773,9 +806,10 @@ class Planner:
                 )
                 expr, read = self._rule_expr(ref), RULE_DIALECT
             column = qualify(expr, ref.model, read)
-            if shift:
-                # A time reference read N days later (DEC-34): shifted before the truncation.
-                column = dialects.add_days(column, shift)
+            if move:
+                # A time reference read later or earlier (DEC-34, DEC-48): moved before the
+                # truncation.
+                column = self._moved(column, move)
             if ref.grain:
                 column = self._trunc(column, ref.grain)
             if dim.type == "boolean" and self.dialect == "tsql":
@@ -783,10 +817,10 @@ class Planner:
             return column
 
         def request_ref(r: str, condition: bool = False) -> exp.Expression:
-            r, shift = _unshifted(r)
+            r, move = _unshifted(r)
             ref = g.resolve_dimension(r, context=base if r.startswith("rule.") else None)
             self._check_sensitivity(ref, principal)
-            return dim_sql(ref, condition, shift)
+            return dim_sql(ref, condition, move)
 
         def model_ref(context: str):
             return lambda r, condition: dim_sql(g.resolve_dimension(r, context=context), condition)
@@ -1102,6 +1136,58 @@ class Planner:
         days = metric.window_days()
         if time.grain != "day" or days is None:
             return None  # refused by `_window_select`
+
+        def later(ref: DimensionRef) -> str:
+            return _days(days if ref.grain is None else days - 1)
+
+        def earlier(ref: DimensionRef) -> str:
+            return _days(-1 if ref.grain is None else 0)
+
+        return self._split_time_filters(name, time, filters, later, earlier)
+
+    def _to_date_filters(
+        self,
+        name: str,
+        metric: CumulativeMetric,
+        dims: list[DimensionRef],
+        filters: list[Template],
+    ) -> list[Template] | None:
+        """The request's filters for the facts a grain-to-date metric reads (DEC-48), or None
+        when none of them is on the time dimension or none can be split.
+
+        The shapes split are those of a rolling window (``_lookback_filters``). Each lower bound
+        is read at the start of the next period (``trunc(t, period) + 1 period``), so the facts
+        reach back to the start of the period of every row the filter keeps. Each upper bound is
+        read at the start of the row (``trunc(t, query grain)``), so a bound inside the last row
+        does not cut that row's later facts out of its total; at a grain whose periods hold
+        whole rows it stays as written. A running total over all time (no ``grain_to_date``) is
+        not split: the filter still restricts its facts."""
+        period = metric.grain_to_date
+        if not filters or period is None:
+            return None
+        time = self._time_dim(metric, dims)
+        if to_date_grain_problem(period, time.grain):
+            return None  # refused by `_cumulative`
+        row = time.grain or "day"  # a time dimension without a grain: at least whole days
+
+        def later(ref: DimensionRef) -> str:
+            return f"{_END}{period}"
+
+        def earlier(ref: DimensionRef) -> str:
+            return "" if ref.grain and _nests(row, ref.grain) else f"{_START}{row}"
+
+        return self._split_time_filters(name, time, filters, later, earlier)
+
+    def _split_time_filters(
+        self,
+        name: str,
+        time: DimensionRef,
+        filters: list[Template],
+        later: _Move,
+        earlier: _Move,
+    ) -> list[Template] | None:
+        """``filters`` with those on ``time``'s dimension widened by ``_widen``, or None when
+        none of them is on it or none can be split; records the split in the trace."""
         widened: list[Template] = []
         after: list[str] = []
         before: list[str] = []
@@ -1114,7 +1200,7 @@ class Planner:
             if not hits:
                 widened.append(template)
                 continue
-            split = _widen(template, hits, days)
+            split = _widen(template, hits, later, earlier)
             if split is None:
                 widened.append(template)
                 before.append(template.text)
@@ -1197,6 +1283,42 @@ class Planner:
             .group_by(*[c.copy() for c in cur.values()])
         )
 
+    def _to_date_select(
+        self, value: exp.Column, metric: CumulativeMetric, dims: list[DimensionRef], start: str
+    ) -> exp.Select:
+        """A grain-to-date metric under a filter on its time dimension (DEC-48): the running
+        total over ``start`` (the aggregate whose filters on the time dimension reach back to
+        the start of each period), on the rows of the metric's own aggregate ``cur``. The
+        request's filters choose the output rows and each row reads its period from the start.
+        """
+        cur = {d: exp.column(d.alias, table="cur") for d in dims}
+        acc = {d: exp.column(d.alias, table="acc") for d in dims}
+        total = self._cumulative(
+            exp.column(value.name), metric, dims, lambda d: exp.column(d.alias)
+        )
+        totals = exp.select(*[exp.column(d.alias) for d in dims], total.as_(value.name)).from_(
+            exp.to_table(start)
+        )
+        on = [exp.NullSafeEQ(this=acc[d], expression=cur[d]) for d in dims]
+        return (
+            exp.select(
+                *[c.copy().as_(d.alias) for d, c in cur.items()],
+                exp.column(value.name, table="acc").as_(value.name),
+            )
+            .from_(exp.to_table(value.table).as_("cur"))
+            .join(totals.subquery("acc"), on=exp.and_(*on), join_type="left")
+        )
+
+    def _moved(self, column: exp.Expression, move: str) -> exp.Expression:
+        """``column`` read as a widened template's reference says (see ``_unshifted``)."""
+        if move.startswith(_END):
+            period = move[len(_END) :]
+            amount, unit = _PERIOD_LENGTHS[period]
+            return dialects.shift(self._trunc(column, period), amount, unit)
+        if move.startswith(_START):
+            return self._trunc(column, move[len(_START) :])
+        return dialects.add_days(column, int(move))
+
     def _cumulative(self, value, metric: CumulativeMetric, dims, dim_out) -> exp.Expression:
         time = self._time_dim(metric, dims)
         problem = metric.grain_to_date and to_date_grain_problem(metric.grain_to_date, time.grain)
@@ -1238,8 +1360,20 @@ class Planner:
 # -- rolling windows under a filter on their time dimension (DEC-34) -------------------------
 
 # A reference read N days later is written ``{member}@N`` in a widened template's refs; the
-# ``{member}`` syntax cannot produce ``@``, so a request never does.
+# ``{member}`` syntax cannot produce ``@``, so a request never does. For a grain-to-date
+# metric (DEC-48), ``{member}@end:<period>`` is read at the start of the next period and
+# ``{member}@start:<grain>`` at the start of its row.
 _SHIFT = "@"
+_END = "end:"
+_START = "start:"
+# The length of each period, as ``dialects.shift`` adds it to the period's start.
+_PERIOD_LENGTHS = {
+    "day": (1, "day"),
+    "week": (7, "day"),
+    "month": (1, "month"),
+    "quarter": (3, "month"),
+    "year": (12, "month"),
+}
 # Grains whose period holds whole days: a bound on them holds for the whole day or not at all.
 _WHOLE_DAY_GRAINS = ("day", "week", "month", "quarter", "year")
 _FLIPPED: dict[type[exp.Expression], type[exp.Expression]] = {
@@ -1251,15 +1385,41 @@ _FLIPPED: dict[type[exp.Expression], type[exp.Expression]] = {
 }
 
 
-def _unshifted(r: str) -> tuple[str, int]:
-    """A reference of a widened template and the days it is read later (0 for the others)."""
-    head, mark, days = r.partition(_SHIFT)
-    return (head, int(days)) if mark else (r, 0)
+# How a bound's reference is read in a widened template: a move (see ``_unshifted``), or ""
+# to keep it as written.
+_Move = Callable[[DimensionRef], str]
 
 
-def _widen(template: Template, hits: dict[int, DimensionRef], days: int) -> Template | None:
-    """``template`` with its bounds on the time dimension reaching ``days`` - 1 days further
-    back (see ``Planner._lookback_filters``), or None when its shape cannot be split.
+def _days(days: int) -> str:
+    """The move of a reference read ``days`` days later ("" for none)."""
+    return str(days) if days else ""
+
+
+def _nests(fine: str, coarse: str) -> bool:
+    """Whether every ``fine`` period lies inside one ``coarse`` period (a week only in a week)."""
+    order = TIME_GRAINS.index
+    return order(fine) <= order(coarse) and (fine != "week" or coarse == "week")
+
+
+def _unshifted(r: str) -> tuple[str, str]:
+    """A reference of a widened template and how it is read: ``N`` days later, ``end:<period>``
+    or ``start:<grain>`` ("" when as written)."""
+    head, mark, move = r.partition(_SHIFT)
+    return (head, move) if mark else (r, "")
+
+
+def _widen(
+    template: Template, hits: dict[int, DimensionRef], later: _Move, earlier: _Move
+) -> Template | None:
+    """``template`` with its lower bounds on the time dimension read as ``later`` says and its
+    upper bounds as ``earlier`` says, or None when its shape cannot be split.
+
+    For a rolling window (see ``Planner._lookback_filters``) the bounds reach N - 1 days
+    further back. For a grain-to-date metric (``Planner._to_date_filters``, DEC-48) they reach
+    back to the start of the period: ``later`` reads a lower bound at the start of the next
+    period, after every moment of the period up to a kept row, and ``earlier`` reads an upper
+    bound at the start of the row, which no fact of the row or of an earlier row is after. The
+    argument below is the rolling window's; the same monotonicity holds for both.
 
     The result only has to keep a superset of the facts the windows need: the output days are
     chosen by the original filter, and the self-join keeps only the N days of each window. For
@@ -1286,30 +1446,25 @@ def _widen(template: Template, hits: dict[int, DimensionRef], days: int) -> Temp
         # Request filters reach columns only through references (check_request_expression).
         return not any(True for _ in node.find_all(exp.Column))
 
-    def moved(node: exp.Expression, shift: int) -> exp.Expression:
+    def moved(node: exp.Expression, how: _Move) -> exp.Expression:
         index = ref_index(node)
         assert index is not None
-        if shift == 0:
+        move = how(hits[index])
+        if not move:
             return node.copy()
-        refs.append(f"{template.refs[index]}{_SHIFT}{shift}")
+        refs.append(f"{template.refs[index]}{_SHIFT}{move}")
         return ref_placeholder(len(refs) - 1)
 
-    def column(node: exp.Expression) -> bool:
-        index = ref_index(node)
-        return index is not None and hits[index].grain is None
+    def lower(node: exp.Expression) -> exp.Expression:
+        return moved(node, later)
 
-    def later(node: exp.Expression) -> exp.Expression:
-        """For a lower bound: N days later on the column, N - 1 at a whole-day grain."""
-        return moved(node, days if column(node) else days - 1)
-
-    def earlier(node: exp.Expression) -> exp.Expression:
-        """For an upper bound: one day earlier on the column, as written at a grain."""
-        return moved(node, -1 if column(node) else 0)
+    def upper(node: exp.Expression) -> exp.Expression:
+        return moved(node, earlier)
 
     def equal(ref: exp.Expression, value: exp.Expression) -> exp.Expression:
         return exp.And(
-            this=exp.LTE(this=earlier(ref), expression=value.copy()),
-            expression=exp.GTE(this=later(ref), expression=value.copy()),
+            this=exp.LTE(this=upper(ref), expression=value.copy()),
+            expression=exp.GTE(this=lower(ref), expression=value.copy()),
         )
 
     def bound(node: exp.Expression) -> exp.Expression | None:
@@ -1323,8 +1478,8 @@ def _widen(template: Template, hits: dict[int, DimensionRef], days: int) -> Temp
             if op is exp.EQ:
                 return exp.Paren(this=equal(ref, value))
             if op in (exp.GT, exp.GTE):
-                return op(this=later(ref), expression=value.copy())
-            return op(this=earlier(ref), expression=value.copy())
+                return op(this=lower(ref), expression=value.copy())
+            return op(this=upper(ref), expression=value.copy())
         if isinstance(node, exp.Between):
             low, high = node.args.get("low"), node.args.get("high")
             if node.args.get("symmetric") or not time_ref(node.this):
@@ -1333,8 +1488,8 @@ def _widen(template: Template, hits: dict[int, DimensionRef], days: int) -> Temp
                 return None
             return exp.Paren(
                 this=exp.And(
-                    this=exp.GTE(this=later(node.this), expression=low.copy()),
-                    expression=exp.LTE(this=earlier(node.this), expression=high.copy()),
+                    this=exp.GTE(this=lower(node.this), expression=low.copy()),
+                    expression=exp.LTE(this=upper(node.this), expression=high.copy()),
                 )
             )
         if isinstance(node, exp.In):

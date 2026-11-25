@@ -200,8 +200,9 @@ def test_offset_formula_names_the_earlier_period(graph):
 
 def test_cumulative_and_offset_metrics_carry_a_time_block(graph, connector, tmp_path):
     """Cumulative and offset metrics state their time semantics as fields (DEC-37), not only
-    in the formula text; the request's filters apply before a running total or a shift, and a
-    filter on the time dimension chooses a rolling window's output days (DEC-34)."""
+    in the formula text; the request's filters apply before a shift, and a filter on the time
+    dimension chooses the output rows of a rolling window (DEC-34) or a grain-to-date metric
+    (DEC-48)."""
     service = make_service(graph, connector, tmp_path)
 
     def times(request: QueryRequest) -> dict:
@@ -221,7 +222,7 @@ def test_cumulative_and_offset_metrics_carry_a_time_block(graph, connector, tmp_
         "period": "year",
         "time_dimension": "orders.ordered_at__month",
         "query_grain": "month",
-        "filters_applied": "before",
+        "filters_applied": "time_after",
     }
     assert found["revenue_mom_growth"] == {
         "kind": "offset",
@@ -267,8 +268,9 @@ def test_time_block_is_null_for_metrics_without_time_semantics(graph):
 def test_filters_applied_matches_the_planner(graph, duckdb_connector, tmp_path):
     """`filters_applied` (DEC-37) is what the planner does. `before`: a filter on the time
     dimension also removes the earlier periods an offset reads. `time_after` (DEC-34): a
-    rolling window still reads the days before the filtered range; a filter shape the planner
-    cannot split (here `NOT`) keeps `before` and cuts the window."""
+    rolling window still reads the days before the filtered range, and a grain-to-date metric
+    (DEC-48) its period from the start; a filter shape the planner cannot split (here `NOT`)
+    keeps `before` and cuts the window or the running total."""
     service = make_service(graph, duckdb_connector, tmp_path)
 
     def rows(metrics, dimension, filters=()):
@@ -321,3 +323,27 @@ def test_filters_applied_matches_the_planner(graph, duckdb_connector, tmp_path):
     assert times["revenue_rolling_7_days"]["filters_applied"] == "before"
     first = next(r for r in filtered if key(r["orders__ordered_at__day"]) == day)
     assert first["revenue_rolling_7_days"] == pytest.approx(first["revenue"])
+
+    # Grain to date: a month whose year started earlier keeps its year-to-date total once the
+    # filter starts there, and sums only from that month under a filter that cannot be split.
+    unfiltered, times = rows(["revenue", "revenue_year_to_date"], month_col)
+    assert times["revenue_year_to_date"]["filters_applied"] == "time_after"
+    full = next(
+        r
+        for r in unfiltered
+        if r["orders__ordered_at__month"] is not None
+        and r["revenue"] is not None
+        and r["revenue_year_to_date"] > r["revenue"] + 0.005
+    )
+    month = key(full["orders__ordered_at__month"])
+    filtered, times = rows(["revenue", "revenue_year_to_date"], month_col, since(month))
+    assert times["revenue_year_to_date"]["filters_applied"] == "time_after"
+    first = next(r for r in filtered if key(r["orders__ordered_at__month"]) == month)
+    assert first["revenue_year_to_date"] == pytest.approx(full["revenue_year_to_date"])
+    assert first["revenue"] == pytest.approx(full["revenue"])
+
+    unsplit = [f"NOT ({{orders.ordered_at}} < DATE '{month}')"]
+    filtered, times = rows(["revenue", "revenue_year_to_date"], month_col, unsplit)
+    assert times["revenue_year_to_date"]["filters_applied"] == "before"
+    first = next(r for r in filtered if key(r["orders__ordered_at__month"]) == month)
+    assert first["revenue_year_to_date"] == pytest.approx(first["revenue"])
