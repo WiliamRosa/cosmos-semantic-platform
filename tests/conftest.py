@@ -250,3 +250,169 @@ def tpch_connector(scale_factor: float):
 @pytest.fixture(scope="session")
 def tpch_graph():
     return compile_project(load_project(TPCH / "semantic"))
+
+
+# -- TPC-H on the container databases (DEC-47) -------------------------------------------------
+#
+# The TPC-H data comes from DuckDB (`tpch_connector`) and is copied into each configured
+# container database, where the same cases run. The tables live apart from the e-commerce demo
+# (whose `orders` would collide): in the schema `tpch` on Postgres (first on the search path)
+# and Oracle (the session's current schema; the user is created by deploy/oracle-setup.sql), and
+# in a database `tpch` on SQL Server, MySQL and MariaDB. The model's tables are unqualified, so
+# they resolve there as they would for a user whose connection points at the TPC-H data.
+
+TPCH_SCHEMA = "tpch"
+TPCH_SOURCES = ("postgres", "sqlserver", "mysql", "mariadb", "oracle")
+_TPCH_URI_VARIABLES = {
+    "postgres": "COSMOS_PG_URI",
+    "sqlserver": "COSMOS_MSSQL_URI",
+    "mysql": "COSMOS_MYSQL_URI",
+    "mariadb": "COSMOS_MARIADB_URI",
+}
+
+
+def tpch_tables(duckdb_connector) -> dict:
+    """The tables of the TPC-H model as Arrow tables, read from a ``tpch_connector``. The
+    free-text ``*_comment`` columns are left out: nothing reads them, and they are a third of
+    the bytes to insert."""
+    con = duckdb_connector.connection
+    out = {}
+    for model in load_project(TPCH / "semantic").semantic_models:
+        columns = con.sql(f"SELECT * FROM {model.table}").columns
+        keep = ", ".join(c for c in columns if not c.endswith("_comment"))
+        out[model.table] = con.sql(f"SELECT {keep} FROM {model.table}").to_arrow_table()
+    return out
+
+
+def tpch_source(kind: str):
+    """A connector to ``kind`` whose unqualified tables resolve in the TPC-H schema or
+    database, created if needed. Skips when the database's variable is not set."""
+    env = os.environ.get
+    if kind == "oracle":
+        if not env("COSMOS_ORACLE_DSN"):
+            pytest.skip(
+                "set COSMOS_ORACLE_DSN (with COSMOS_ORACLE_USER and COSMOS_ORACLE_PASSWORD)"
+            )
+        connector = connect(
+            DataSourceConfig(
+                type="oracle",
+                options={
+                    "dsn": env("COSMOS_ORACLE_DSN"),
+                    "user": env("COSMOS_ORACLE_USER", "cosmos"),
+                    "password": env("COSMOS_ORACLE_PASSWORD"),
+                },
+            )
+        )
+        try:
+            connector.run_script(f"ALTER SESSION SET CURRENT_SCHEMA = {TPCH_SCHEMA}")
+        except Exception as exc:
+            connector.close()
+            pytest.fail(
+                f"Oracle has no {TPCH_SCHEMA.upper()} schema ({exc}); run deploy/oracle-setup.sql "
+                "again as SYSTEM"
+            )
+        return connector
+    variable = _TPCH_URI_VARIABLES[kind]
+    uri = env(variable)
+    if not uri:
+        pytest.skip(f"set {variable} to run against {kind}")
+    if kind == "postgres":
+        connector = connect(DataSourceConfig(type=kind, uri=uri))
+        connector.run_script(f"CREATE SCHEMA IF NOT EXISTS {TPCH_SCHEMA}")
+        # A session setting, committed: queries roll back their own transactions only.
+        connector.run_script(f"SET search_path TO {TPCH_SCHEMA}")
+        return connector
+    return connect(DataSourceConfig(type=kind, uri=_tpch_database(uri, kind)))
+
+
+def _tpch_database(uri: str, kind: str) -> str:
+    """Creates the database ``tpch`` on the server of ``uri`` and returns a URI that points at
+    it. CREATE DATABASE cannot run inside a transaction on SQL Server, hence AUTOCOMMIT."""
+    import sqlalchemy as sa
+
+    url = sa.engine.make_url(uri)
+    if kind == "sqlserver":
+        create = f"IF DB_ID('{TPCH_SCHEMA}') IS NULL CREATE DATABASE {TPCH_SCHEMA}"
+    else:
+        create = f"CREATE DATABASE IF NOT EXISTS {TPCH_SCHEMA}"
+    engine = sa.create_engine(url, isolation_level="AUTOCOMMIT")
+    try:
+        with engine.connect() as con:
+            con.execute(sa.text(create))
+    finally:
+        engine.dispose()
+    return url.set(database=TPCH_SCHEMA).render_as_string(hide_password=False)
+
+
+def load_tpch(connector, tables: dict, chunk: int = 500) -> None:
+    """Replaces each table in the connection's default schema with a copy of ``tables``, with
+    exact types: DECIMAL(15,2) stays a decimal, never a float. Rows go in multi-row INSERTs of
+    ``chunk`` rows (SQL Server takes at most 1,000 per statement), with literals written here
+    rather than through SQLGlot, which would take longer than the inserts; on Oracle, where a
+    long statement is slow to parse, through bind variables in batches instead. Checks the
+    row count of each table after the load."""
+    dialect = connector.dialect
+    for name, table in tables.items():
+        connector.run_script(f"DROP TABLE IF EXISTS {name}")
+        columns = ", ".join(
+            f"{field.name} {_tpch_type(table.column(field.name), dialect)}"
+            for field in table.schema
+        )
+        connector.run_script(f"CREATE TABLE {name} ({columns})")
+        names = ", ".join(table.column_names)
+        if dialect == "oracle":
+            binds = ", ".join(f":{i}" for i in range(1, table.num_columns + 1))
+            con = connector.connection
+            with con.cursor() as cur:
+                for batch in table.to_batches(max_chunksize=10_000):
+                    rows = list(zip(*(c.to_pylist() for c in batch.columns), strict=True))
+                    cur.executemany(f"INSERT INTO {name} ({names}) VALUES ({binds})", rows)
+            con.commit()
+        else:
+            for batch in table.to_batches(max_chunksize=chunk):
+                rows = zip(*(column.to_pylist() for column in batch.columns), strict=True)
+                values = ", ".join(
+                    "(" + ", ".join(_tpch_literal(v, dialect) for v in row) + ")" for row in rows
+                )
+                connector.run_script(f"INSERT INTO {name} ({names}) VALUES {values}")
+        loaded = connector.execute(f"SELECT COUNT(*) AS n FROM {name}").to_pylist()[0]["n"]
+        assert loaded == table.num_rows, f"{name}: {loaded} rows loaded of {table.num_rows}"
+
+
+def _tpch_type(column, dialect: str) -> str:
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    from sqlglot import exp
+
+    kind = column.type
+    if pa.types.is_integer(kind):
+        sql = "INT" if kind.bit_width <= 32 else "BIGINT"
+    elif pa.types.is_decimal(kind):
+        sql = f"DECIMAL({kind.precision}, {kind.scale})"
+    elif pa.types.is_string(kind):
+        longest = pc.max(pc.utf8_length(column)).as_py() or 1
+        sql = f"VARCHAR({longest})"
+    elif pa.types.is_date32(kind):
+        sql = "DATE"
+    else:
+        raise TypeError(f"no SQL type for the TPC-H column type {kind}")
+    return exp.DataType.build(sql).sql(dialect=dialect)
+
+
+def _tpch_literal(value, dialect: str) -> str:
+    import decimal
+
+    if value is None:
+        return "NULL"
+    if isinstance(value, decimal.Decimal):
+        return format(value, "f")
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, dt.date):
+        # T-SQL has no DATE literal; it converts an ISO string to a DATE column exactly.
+        return f"'{value.isoformat()}'" if dialect == "tsql" else f"DATE '{value.isoformat()}'"
+    if isinstance(value, str):
+        if dialect == "mysql":  # a backslash escapes in MySQL and MariaDB string literals
+            value = value.replace("\\", "\\\\")
+        return "'" + value.replace("'", "''") + "'"
+    raise TypeError(f"no SQL literal for the TPC-H value {value!r}")
