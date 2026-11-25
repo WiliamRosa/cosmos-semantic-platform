@@ -35,7 +35,12 @@ from typing import Any
 
 from cosmos_semantic.interchange import ImportResult
 from cosmos_semantic.interchange.cube import _table_from_sql
-from cosmos_semantic.spec import OFFSET_GRAINS, WINDOW_AGGS, Project, window_agg_refusal
+from cosmos_semantic.spec import (
+    OFFSET_GRAINS,
+    WINDOW_AGGS,
+    Project,
+    combined_window_refusal,
+)
 
 _DATA_TYPES = {
     "string": "categorical",
@@ -1147,7 +1152,7 @@ class _Translator:
         inner = self.operand(args[0], f"{name}_base")
         if not self.is_measure(inner):
             raise _Unsupported("DATESINPERIOD over a metric; only measures roll")
-        problem = window_agg_refusal(self.measure_agg(inner))
+        problem = combined_window_refusal(self.measure_agg(inner))
         if problem:
             raise _Unsupported(f"DATESINPERIOD over `{inner}`: {problem}")
         owner = next(
