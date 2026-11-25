@@ -10,7 +10,7 @@ from typing import Any
 
 import sqlglot
 from sqlglot import exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import SqlglotError
 
 from cosmos_semantic.errors import ModelError, QueryError
 
@@ -20,6 +20,18 @@ _REF_PREFIX = "__cosmos_ref_"
 _USER_PREFIX = "__cosmos_user_"
 
 _FORBIDDEN_IN_REQUESTS = (exp.Query, exp.Subquery, exp.Table, exp.Star, exp.Command)
+
+# Model and filter expressions are written in standard SQL (DEC-53): double quotes delimit an
+# identifier, a quote inside a string is doubled ('O''Brien') and a backslash is an ordinary
+# character. SQLGlot reads them with its PostgreSQL dialect, the reading of the hand-written
+# reference SQL and of business rules, and writes them in each data source's dialect. Read in
+# the source's own dialect, MySQL, MariaDB, Databricks and BigQuery took "status" for a
+# string, Databricks turned 'O''Brien' into CONCAT('O', 'Brien') (BigQuery refused it), and
+# BigQuery and Snowflake read the backslash of LIKE 'a\_b%' as a string escape and dropped it.
+STANDARD_SQL = "postgres"
+# Square brackets are not standard SQL in an expression: PostgreSQL reads `[status]` as an
+# array, SQL Server as a quoted identifier. An expression with them is read in the dialect.
+_NOT_STANDARD = (exp.Array, exp.Bracket)
 
 
 @dataclass
@@ -45,20 +57,36 @@ def parse_template(text: str, dialect: str, *, error: type[Exception] = ModelErr
         return f"{_USER_PREFIX}{len(users) - 1}"
 
     masked = USER_RE.sub(user_sub, REF_RE.sub(ref_sub, text))
+    tree = read_expression(masked, dialect, text=text, error=error)
+    return Template(text=text, tree=portable(tree), refs=refs, user_fields=users)
+
+
+def read_expression(
+    sql: str, dialect: str, *, text: str | None = None, error: type[Exception] = ModelError
+) -> exp.Expression:
+    """Parses an expression written in standard SQL (``STANDARD_SQL``), for ``dialect``.
+
+    An expression standard SQL cannot read (a T-SQL ``[column]``, a MySQL backtick, a string
+    escaped with a backslash) is read in ``dialect``, as before DEC-53, so a model written in
+    its source's own dialect keeps working. Any SQLGlot error, the tokenizer's included,
+    becomes ``error``; a query is refused."""
+    text = sql if text is None else text
+    tree: exp.Expression | None = None
+    failure: SqlglotError | None = None
     try:
-        tree = sqlglot.parse_one(masked, read=dialect)
-    except ParseError as exc:
-        if dialect != "bigquery":
-            raise error(f"invalid expression `{text}`: {exc}") from exc
-        # Model expressions are standard SQL, where a quote inside a string is doubled
-        # ('O''Brien'); BigQuery escapes it with a backslash and reads '' as two literals.
+        tree = sqlglot.parse_one(sql, read=STANDARD_SQL)
+    except SqlglotError as exc:
+        failure = exc
+    if dialect != STANDARD_SQL and (tree is None or any(tree.find_all(*_NOT_STANDARD))):
         try:
-            tree = sqlglot.parse_one(masked, read="postgres")
-        except ParseError:
-            raise error(f"invalid expression `{text}`: {exc}") from exc
+            tree = sqlglot.parse_one(sql, read=dialect)
+        except SqlglotError as exc:
+            failure = failure or exc
+    if tree is None:
+        raise error(f"invalid expression `{text}`: {failure}") from failure
     if isinstance(tree, exp.Query):
         raise error(f"invalid expression `{text}`: queries are not allowed")
-    return Template(text=text, tree=portable(tree), refs=refs, user_fields=users)
+    return tree
 
 
 def ref_index(node: exp.Expression) -> int | None:
@@ -176,13 +204,9 @@ def _in_condition(node: exp.Expression) -> bool:
 
 
 def qualify(text: str, alias: str, dialect: str) -> exp.Expression:
-    """Parses a model column expression and prefixes bare columns with the model alias."""
-    try:
-        tree = sqlglot.parse_one(text, read=dialect)
-    except ParseError as exc:
-        raise ModelError(f"invalid expression `{text}`: {exc}") from exc
-    if isinstance(tree, exp.Query):
-        raise ModelError(f"invalid expression `{text}`: queries are not allowed")
+    """Parses a model column expression (standard SQL, read as ``read_expression`` does) and
+    prefixes bare columns with the model alias."""
+    tree = read_expression(text, dialect)
 
     def add_table(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Column) and not node.table:
@@ -269,9 +293,8 @@ _VALUE_PREFIX = "__cosmos_value_"
 
 
 def _filter_tree(op: str, value: object, dialect: str) -> exp.Expression:
-    """The operator is parsed by the dialect from a fixed skeleton (``ref op value``), so the
-    tree has the shape the dialect's parser gives an expression string (PostgreSQL reads
-    ``IS NOT NULL`` as one node, DuckDB as ``NOT ... IS NULL``); the values are then put in
+    """The operator is parsed from a fixed skeleton (``ref op value``) as ``parse_template``
+    parses an expression string, so the tree has the same shape; the values are then put in
     as literals and never parsed."""
     if op in COMPARISONS:
         values = [value]
@@ -288,7 +311,7 @@ def _filter_tree(op: str, value: object, dialect: str) -> exp.Expression:
     else:
         raise QueryError(f"unknown filter operator `{op}`; use one of {', '.join(FILTER_OPS)}")
     literals = [value_literal(v) for v in values]
-    tree = sqlglot.parse_one(skeleton, read=dialect)
+    tree = read_expression(skeleton, dialect, error=QueryError)
 
     def put(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Column) and node.name.startswith(_VALUE_PREFIX):

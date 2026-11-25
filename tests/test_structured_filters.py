@@ -46,7 +46,7 @@ TRICKY = ["O'Brien", "a\\'b", "x' OR '1'='1", "back\\", "\\\\''"]
 
 # (metric, expression string, the same filter as an object)
 EQUIVALENT = [
-    # `{lit}` is the value as a literal of the dialect, as a careful client would write it.
+    # `{lit}` is the value as a standard SQL literal, as a careful client would write it.
     ("customer_count", "{customers.segment} = {lit}", ("customers.segment", "=", "O'Brien")),
     ("customer_count", "{customers.segment} <> 'SMB'", ("customers.segment", "!=", "SMB")),
     ("customer_count", "{customers.segment} <> 'SMB'", ("customers.segment", "<>", "SMB")),
@@ -103,7 +103,8 @@ def _string_literals(sql: str, dialect: str) -> list[str]:
 )
 def test_string_and_structured_filters_give_the_same_sql(graph, dialect, metric, text, item):
     if "{lit}" in text:
-        text = text.replace("{lit}", exp.Literal.string(item[2]).sql(dialect=dialect))
+        # Expression strings are standard SQL on every dialect (DEC-53): the quote is doubled.
+        text = text.replace("{lit}", exp.Literal.string(item[2]).sql(dialect="postgres"))
     planner = Planner(graph, dialect)
     as_text = planner.plan(QueryRequest(metrics=[metric], filters=[text]), MIDWEST)
     as_object = planner.plan(QueryRequest(metrics=[metric], filters=[_structured(*item)]), MIDWEST)
