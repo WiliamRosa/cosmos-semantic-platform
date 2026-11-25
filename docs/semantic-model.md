@@ -137,6 +137,8 @@ A `foreign` entity in model A and the same `primary` or `unique` entity in model
 
 `type` accepts `categorical`, `time`, `number` and `boolean`. `expr` is optional; without it, the column with the same name is used. `sensitivity` accepts `personal` (personal data) and `sensitive` (sensitive personal data, such as health): these columns never reach an agent as raw values, only aggregated or masked.
 
+`column_type` (time dimensions only) accepts `timestamp`, for a column that holds an instant in UTC rather than a date or a date and time without a time zone. It matters on BigQuery, where a `TIMESTAMP` does not compare with a `DATE` or `DATETIME`: the engine reads such a column as its date and time in UTC, `DATETIME(column, 'UTC')`, before any grain, filter, window or offset, so a `__day` grouping is a UTC day. `cosmos bootstrap` sets it on BigQuery `TIMESTAMP` columns; a BigQuery `DATETIME` or `DATE` column needs nothing. Other data sources ignore it (DEC-57).
+
 Time dimensions accept a grain suffix in requests: `orders.ordered_at__day`, `__week` (ISO, starting on Monday), `__month`, `__quarter`, `__year` and `__hour`.
 
 ### Measures
