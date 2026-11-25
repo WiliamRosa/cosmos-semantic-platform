@@ -321,17 +321,34 @@ def parse_window(text: str | None) -> int | None:
 # cumulative metric (DEC-21, DEC-22): sums and counts add up, minima and maxima take the
 # extreme. An average or a distinct count cannot be rebuilt from per-period values.
 WINDOW_AGGS = ("sum", "count", "min", "max")
+# Aggregations a rolling window recomputes over each window from the facts instead (DEC-49): a
+# customer seen on several days of the window counts once. Running totals still refuse them.
+RECOMPUTED_WINDOW_AGGS = ("count_distinct",)
 
 
 def window_agg_refusal(agg: str) -> str | None:
     """Why a rolling window cannot run over a measure with this aggregation; None if it can.
     Model validation and the planner give the same reason."""
-    if agg in WINDOW_AGGS:
+    if agg in WINDOW_AGGS or agg in RECOMPUTED_WINDOW_AGGS:
         return None
     return (
         f"a rolling window over a `{agg}` measure is not supported; "
-        "it cannot be combined from daily values (use sum, count, min or max)"
+        "it cannot be combined from daily values (use sum, count, count_distinct, min or max)"
     )
+
+
+def combined_window_refusal(agg: str) -> str | None:
+    """Why a rolling window over a measure with this aggregation is not carried by the
+    interchange formats (dbt, Cube, Power BI), which only translate windows combined from
+    daily values; None if it is. A `count_distinct` window runs in the engine (DEC-49), but
+    the imports and exports keep refusing it until their results are checked against it."""
+    if agg in RECOMPUTED_WINDOW_AGGS:
+        return (
+            f"a rolling window over a `{agg}` measure is recomputed from the facts of each "
+            "window in Cosmos (DEC-49), and the interchange formats do not carry it until "
+            "their results are checked against the engine's"
+        )
+    return window_agg_refusal(agg)
 
 
 class CumulativeMetric(_MetricBase):

@@ -1864,7 +1864,8 @@ def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
             {"trailing": "7 day"},
             "count_distinct",
             None,
-            "of type `count_distinct` cannot be combined",
+            "of type `count_distinct` is recomputed from the facts of each window in Cosmos "
+            "(DEC-49), and the Cube import does not carry it",
         ),
         (
             {"trailing": "1 month"},
@@ -1877,8 +1878,9 @@ def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
 def test_cube_import_trailing_windows(tmp_path, window, kind, metric, warning):
     """A trailing window in days ending at the bucket's end, over a measure whose daily values
     combine, is a Cosmos window in days and validates; one that does not end on the row's day,
-    or over an `avg` or `count_distinct` measure, is skipped with its base measure; other units
-    stay refused at query time."""
+    or over an `avg` measure, is skipped with its base measure, as is one over a
+    `count_distinct` measure until Cube's numbers are checked against the engine's (DEC-49);
+    other units stay refused at query time."""
     doc = {
         "cubes": [
             {
