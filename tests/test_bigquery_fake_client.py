@@ -28,8 +28,9 @@ from typer.testing import CliRunner
 
 from cosmos_semantic.cli import app
 from cosmos_semantic.connectors import DataSourceConfig, connect, load_connections
-from cosmos_semantic.errors import ConnectorError
+from cosmos_semantic.errors import ConnectorError, ModelError
 
+EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "ecommerce"
 SECRET = "-----BEGIN PRIVATE KEY-----\nNOT-A-REAL-KEY-0123456789\n-----END PRIVATE KEY-----\n"
 
 
@@ -326,14 +327,97 @@ def test_the_emulator_endpoint_uses_anonymous_credentials(fake_bigquery, monkeyp
         "google.auth.credentials",
         _module("google.auth.credentials", AnonymousCredentials=anonymous),
     )
-    connector = connect(
-        _source(api_endpoint="http://localhost:9050", credentials_file="/never/read.json")
-    )
+    connector = connect(_source(api_endpoint="http://localhost:9050", credentials_file=""))
     kwargs = fake_bigquery.instances[0].kwargs
     assert isinstance(kwargs["credentials"], anonymous)
     assert kwargs["client_options"].api_endpoint == "http://localhost:9050"
     assert connector.emulated
     assert FakeCredentials.files == []
+
+
+def test_an_endpoint_with_a_key_file_is_refused(fake_bigquery):
+    """The endpoint would win with anonymous credentials and ignore the key without a word."""
+    with pytest.raises(ModelError, match="both options.api_endpoint and options.credentials_file"):
+        connect(_source(api_endpoint="http://localhost:9050", credentials_file="/never/read.json"))
+    assert fake_bigquery.instances == []
+    assert FakeCredentials.files == []
+
+
+# -- cosmos check warnings -----------------------------------------------------------------
+
+
+def _write_connections(path: Path, sources: dict) -> Path:
+    path.write_text(yaml.safe_dump({"data_sources": sources}, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_check_warns_about_a_bigquery_source_without_a_byte_cap(tmp_path, monkeypatch):
+    monkeypatch.delenv("COSMOS_RUNS_LOG", raising=False)
+    connections = _write_connections(
+        tmp_path / "connections.yml",
+        {
+            "local": {"type": "duckdb", "path": "x.duckdb"},
+            "uncapped": {"type": "bigquery", "options": {"project": "p"}},
+            "empty_cap": {
+                "type": "bigquery",
+                "options": {"project": "p", "maximum_bytes_billed": ""},
+            },
+            "capped": {
+                "type": "bigquery",
+                "options": {"project": "p", "maximum_bytes_billed": 1_000_000_000},
+            },
+            "emulator": {
+                "type": "bigquery",
+                "options": {"project": "p", "api_endpoint": "http://localhost:19050"},
+            },
+        },
+    )
+    result = CliRunner().invoke(
+        app, ["check", "-m", str(EXAMPLE / "semantic"), "-c", str(connections)]
+    )
+    assert result.exit_code == 0, result.output
+    warnings = [line for line in result.stderr.splitlines() if line.startswith("warning:")]
+    assert len(warnings) == 2
+    assert "'uncapped' (bigquery) has no options.maximum_bytes_billed" in warnings[0]
+    assert "'empty_cap'" in warnings[1]
+    assert "warning:" not in result.stdout
+
+
+def test_check_does_not_warn_about_the_example_connections(monkeypatch):
+    monkeypatch.delenv("COSMOS_RUNS_LOG", raising=False)
+    for var in (
+        "COSMOS_BIGQUERY_ENDPOINT",
+        "COSMOS_BIGQUERY_CREDENTIALS_FILE",
+        "COSMOS_BIGQUERY_MAXIMUM_BYTES_BILLED",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    result = CliRunner().invoke(
+        app,
+        [
+            "check",
+            "-m",
+            str(EXAMPLE / "semantic"),
+            "-c",
+            str(EXAMPLE / "connections.yml"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "warning:" not in result.stderr
+    # Without the endpoint the example source is BigQuery itself, capped at 1 GB, and a key
+    # file alone does not trip the endpoint refusal.
+    options = load_connections(EXAMPLE / "connections.yml").data_sources["bigquery"].options
+    assert options["api_endpoint"] == ""
+    assert int(options["maximum_bytes_billed"]) == 1_000_000_000
+
+
+def test_the_example_with_a_key_file_and_no_endpoint_connects(fake_bigquery, tmp_path, monkeypatch):
+    key = tmp_path / "key.json"
+    key.write_text(SECRET, encoding="utf-8")
+    monkeypatch.delenv("COSMOS_BIGQUERY_ENDPOINT", raising=False)
+    monkeypatch.setenv("COSMOS_BIGQUERY_CREDENTIALS_FILE", str(key))
+    connect(load_connections(EXAMPLE / "connections.yml").data_sources["bigquery"])
+    assert [Path(f) for f in FakeCredentials.files] == [key]
+    assert "client_options" not in fake_bigquery.instances[0].kwargs
 
 
 # -- load_bigquery -------------------------------------------------------------------------

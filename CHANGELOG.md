@@ -86,6 +86,21 @@ format or the API; such changes are listed under **Changed**.
 
 ### Changed
 
+- BigQuery safety guards (DEC-56, from the security review of #100):
+  - a BigQuery source that sets both `options.api_endpoint` and `options.credentials_file` is
+    refused with an error. Before, the endpoint won silently with anonymous credentials and
+    the key was ignored. `api_endpoint` is only for the emulator;
+  - `cosmos check` warns on standard error about a BigQuery source without `api_endpoint` that
+    has no `options.maximum_bytes_billed`, since its queries can scan, and bill, any amount;
+  - in `examples/ecommerce/connections.yml`, the BigQuery source's `api_endpoint` is empty
+    unless `COSMOS_BIGQUERY_ENDPOINT` is set (it pointed at the emulator), and
+    `maximum_bytes_billed` defaults to 1 GB (`COSMOS_BIGQUERY_MAXIMUM_BYTES_BILLED`). To use
+    the emulator with this file, set `COSMOS_BIGQUERY_ENDPOINT=http://localhost:19050`;
+  - `deploy/docker-compose.yml` publishes every database port on `127.0.0.1` only, as Trino
+    already did, so the test passwords are not reachable from the network;
+  - `deploy/bigquery-setup.md` recommends workload identity or Application Default
+    Credentials over downloaded service account keys.
+
 - Reading expressions as standard SQL (DEC-53) changes three forms that some models may use.
   Check models for them when you upgrade:
   - on MySQL, MariaDB and BigQuery, a double-quoted string such as `status = "paid"` is now a
