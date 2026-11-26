@@ -54,6 +54,7 @@ from cosmos_semantic.expressions import REF_RE, USER_RE
 from cosmos_semantic.interchange import ExportResult, ImportResult
 from cosmos_semantic.spec import (
     RECOMPUTED_WINDOW_AGGS,
+    RECOMPUTED_WINDOW_DECISIONS,
     WINDOW_AGGS,
     CumulativeMetric,
     DerivedMetric,
@@ -508,8 +509,9 @@ def _measure(cube, model, measure, dims, metrics, warnings, notes) -> bool:
         # Cosmos accumulates per-period values, which only sums, counts, minima and maxima
         # allow (DEC-21), so model validation refuses any running total or window over this
         # measure (spec.cumulative_agg_problem, spec.window_agg_refusal). Importing it would
-        # make the model fail validation (DEC-32). A trailing window over a distinct count is
-        # valid in Cosmos (DEC-49), but is not imported until Cube's numbers are checked.
+        # make the model fail validation (DEC-32). A trailing window over a distinct count
+        # (DEC-49) or an average (DEC-60) is valid in Cosmos, but is not imported until Cube's
+        # numbers are checked.
         if window.get("type") == "to_date":
             warnings.append(
                 f"{where}: a to-date window over a measure of type `{kind}` cannot be "
@@ -520,8 +522,9 @@ def _measure(cube, model, measure, dims, metrics, warnings, notes) -> bool:
         elif _AGG[kind] in RECOMPUTED_WINDOW_AGGS:
             warnings.append(
                 f"{where}: a trailing window over a measure of type `{kind}` is recomputed from "
-                "the facts of each window in Cosmos (DEC-49), and the Cube import does not carry "
-                "it until Cube's numbers are checked against the engine's; measure skipped"
+                f"the facts of each window in Cosmos ({RECOMPUTED_WINDOW_DECISIONS[_AGG[kind]]}), "
+                "and the Cube import does not carry it until Cube's numbers are checked against "
+                "the engine's; measure skipped"
             )
         else:
             warnings.append(
@@ -1331,7 +1334,8 @@ class _CubeWriter:
             if measure.agg in RECOMPUTED_WINDOW_AGGS:
                 raise _NotExported(
                     f"it is a rolling window over a `{measure.agg}` measure, which Cosmos "
-                    "recomputes from the facts of each window (DEC-49); the Cube export does not "
+                    "recomputes from the facts of each window "
+                    f"({RECOMPUTED_WINDOW_DECISIONS[measure.agg]}); the Cube export does not "
                     "carry it until Cube's numbers are checked against the engine's"
                 )
             if measure.agg not in WINDOW_AGGS:

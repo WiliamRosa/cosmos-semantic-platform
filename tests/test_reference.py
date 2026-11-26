@@ -790,3 +790,228 @@ def test_distinct_count_windows_apply_the_row_filter_to_the_facts(distinct_windo
         compiled = Planner(distinct_window_graph, dialect).plan(case.request, principal)
         applied = {f["applied_in"] for f in compiled.trace.row_filters}
         assert {"orders_agg", "buyers_facts_lookback_30_days"} <= applied, dialect
+
+
+# -- Rolling windows over an average (DEC-60) ------------------------------------------------
+# Not in the example, for the same reason as the distinct-count windows above. The hand-written
+# SQL picks the output days, then takes AVG over the facts of each day's whole window, so the
+# reference is the true average of the window's rows, never an average of daily averages. A71
+# averages an integer column (no database may divide integers) and A72 a measure that is NULL
+# on most orders (AVG skips them, and so must the window).
+AVG_WINDOW_MEASURES = [
+    {"name": "order_value", "agg": "avg", "expr": "amount"},
+    {"name": "given_discount", "agg": "avg", "expr": "NULLIF(discount, 0)"},
+]
+AVG_WINDOW_METRICS = [
+    {
+        "name": "order_value_rolling_7_days",
+        "type": "cumulative",
+        "measure": "order_value",
+        "window": "7 days",
+    },
+    {
+        "name": "avg_quantity_rolling_30_days",
+        "type": "cumulative",
+        "measure": "avg_quantity",
+        "window": "30 days",
+    },
+    {
+        "name": "given_discount_rolling_2_weeks",
+        "type": "cumulative",
+        "measure": "given_discount",
+        "window": "2 weeks",
+    },
+]
+AVG_WINDOW_CASES = [
+    ReferenceCase(
+        id="A70",
+        category="tempo",
+        phase=3,
+        title="Average order value of the 7 days ending on each day, with the day's average",
+        request=QueryRequest(
+            metrics=["order_value_rolling_7_days", "order_value"],
+            dimensions=["orders.ordered_at__day"],
+        ),
+        sql="""
+SELECT d.dd AS orders__ordered_at__day,
+       AVG(o.amount) AS order_value_rolling_7_days,
+       AVG(CASE WHEN o.ordered_at >= d.dd THEN o.amount END) AS order_value
+FROM (SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM public.orders) d
+JOIN public.orders o
+  ON o.ordered_at >= d.dd - INTERVAL '6' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
+GROUP BY d.dd
+""",
+        sql_by_dialect={
+            "tsql": """
+SELECT d.dd AS orders__ordered_at__day,
+       AVG(o.amount) AS order_value_rolling_7_days,
+       AVG(CASE WHEN o.ordered_at >= d.dd THEN o.amount END) AS order_value
+FROM (SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM public.orders) d
+JOIN public.orders o
+  ON o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
+GROUP BY d.dd
+"""
+        },
+    ),
+    # Units per item of the items of completed orders, over 30 days, by the order's customer
+    # segment: a filter on the time dimension chooses the output days and each window still
+    # reads the 29 days before them (DEC-34); the status filter and the row filter on customers
+    # restrict the facts first, and a null segment is a group of its own.
+    ReferenceCase(
+        id="A71",
+        category="tempo",
+        phase=3,
+        title="Average units per item of 30 days by segment and day, last 45 days, row filter",
+        request=QueryRequest(
+            metrics=["avg_quantity_rolling_30_days", "avg_quantity"],
+            dimensions=["customers.segment", "orders.ordered_at__day"],
+            filters=[
+                "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '45' DAY",
+                "{orders.status} = 'completed'",
+            ],
+        ),
+        user={"region": "Northeast"},
+        sql="""
+WITH f AS (
+  SELECT c.segment, o.ordered_at, CAST(i.quantity AS DOUBLE PRECISION) AS quantity
+  FROM public.order_items i
+  LEFT JOIN public.orders o ON o.order_id = i.order_id
+  LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+  WHERE o.status = 'completed' AND c.region = 'Northeast'
+)
+SELECT d.segment AS customers__segment, d.dd AS orders__ordered_at__day,
+       AVG(f.quantity) AS avg_quantity_rolling_30_days,
+       AVG(CASE WHEN f.ordered_at >= d.dd THEN f.quantity END) AS avg_quantity
+FROM (
+  SELECT DISTINCT segment, DATE_TRUNC('day', ordered_at) AS dd FROM f
+  WHERE ordered_at >= CURRENT_DATE - INTERVAL '45' DAY
+) d
+JOIN f
+  ON (f.segment = d.segment OR (f.segment IS NULL AND d.segment IS NULL))
+  AND f.ordered_at >= d.dd - INTERVAL '29' DAY AND f.ordered_at < d.dd + INTERVAL '1' DAY
+GROUP BY d.segment, d.dd
+""",
+        sql_by_dialect={
+            "tsql": """
+WITH f AS (
+  SELECT c.segment, o.ordered_at, CAST(i.quantity AS FLOAT) AS quantity
+  FROM public.order_items i
+  LEFT JOIN public.orders o ON o.order_id = i.order_id
+  LEFT JOIN public.customers c ON c.customer_id = o.customer_id
+  WHERE o.status = 'completed' AND c.region = 'Northeast'
+)
+SELECT d.segment AS customers__segment, d.dd AS orders__ordered_at__day,
+       AVG(f.quantity) AS avg_quantity_rolling_30_days,
+       AVG(CASE WHEN f.ordered_at >= d.dd THEN f.quantity END) AS avg_quantity
+FROM (
+  SELECT DISTINCT segment, DATETRUNC(day, ordered_at) AS dd FROM f
+  WHERE ordered_at >= DATEADD(day, -45, CAST(GETDATE() AS DATE))
+) d
+JOIN f
+  ON (f.segment = d.segment OR (f.segment IS NULL AND d.segment IS NULL))
+  AND f.ordered_at >= DATEADD(day, -29, d.dd) AND f.ordered_at < DATEADD(day, 1, d.dd)
+GROUP BY d.segment, d.dd
+"""
+        },
+    ),
+    # A window in weeks (DEC-27) is 14 days, here under a range on the day. The measure is NULL
+    # for the orders without a discount, which count in neither the sum nor the count; the
+    # output days include the days whose orders have no discount.
+    ReferenceCase(
+        id="A72",
+        category="tempo",
+        phase=3,
+        title="Average discount given, of 2 weeks by day, for the days between 60 and 30 days ago",
+        request=QueryRequest(
+            metrics=["given_discount_rolling_2_weeks", "given_discount"],
+            dimensions=["orders.ordered_at__day"],
+            filters=[
+                "{orders.ordered_at__day} >= CURRENT_DATE - INTERVAL '60' DAY "
+                "AND {orders.ordered_at__day} < CURRENT_DATE - INTERVAL '30' DAY"
+            ],
+        ),
+        sql="""
+SELECT d.dd AS orders__ordered_at__day,
+       AVG(NULLIF(o.discount, 0)) AS given_discount_rolling_2_weeks,
+       AVG(CASE WHEN o.ordered_at >= d.dd THEN NULLIF(o.discount, 0) END) AS given_discount
+FROM (
+  SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM public.orders
+  WHERE ordered_at >= CURRENT_DATE - INTERVAL '60' DAY
+    AND ordered_at < CURRENT_DATE - INTERVAL '30' DAY
+) d
+JOIN public.orders o
+  ON o.ordered_at >= d.dd - INTERVAL '13' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
+GROUP BY d.dd
+""",
+        sql_by_dialect={
+            "tsql": """
+SELECT d.dd AS orders__ordered_at__day,
+       AVG(NULLIF(o.discount, 0)) AS given_discount_rolling_2_weeks,
+       AVG(CASE WHEN o.ordered_at >= d.dd THEN NULLIF(o.discount, 0) END) AS given_discount
+FROM (
+  SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM public.orders
+  WHERE ordered_at >= DATEADD(day, -60, CAST(GETDATE() AS DATE))
+    AND ordered_at < DATEADD(day, -30, CAST(GETDATE() AS DATE))
+) d
+JOIN public.orders o
+  ON o.ordered_at >= DATEADD(day, -13, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
+GROUP BY d.dd
+"""
+        },
+    ),
+]
+
+
+@pytest.fixture(scope="module")
+def avg_window_graph():
+    data = load_project(EXAMPLE).model_dump(mode="json")
+    orders = next(m for m in data["semantic_models"] if m["name"] == "orders")
+    orders["measures"].extend(AVG_WINDOW_MEASURES)
+    data["metrics"].extend(AVG_WINDOW_METRICS)
+    return compile_project(Project.model_validate(data))
+
+
+def test_avg_window_case_ids_are_free():
+    """A70 to A72 live here; `reference/queries_advanced.yml` must not reuse their ids."""
+    others = [
+        *ALL,
+        *ADVANCED,
+        *WEEKS_YEARS_CASES,
+        *WEEK_WINDOW_CASES,
+        *STANDARD_SQL_CASES,
+        *DISTINCT_WINDOW_CASES,
+    ]
+    assert not {c.id for c in others} & {c.id for c in AVG_WINDOW_CASES}
+
+
+@pytest.mark.parametrize("source", SOURCES)
+@pytest.mark.parametrize("case", AVG_WINDOW_CASES, ids=lambda c: c.id)
+def test_reference_avg_windows(case, source, avg_window_graph, request):
+    _check(case, avg_window_graph, request.getfixturevalue(source))
+
+
+def test_avg_windows_differ_from_the_average_of_daily_averages(avg_window_graph, duckdb_connector):
+    """A70 and A71 prove what they claim on the demo data: days have different numbers of
+    orders, so the window's average is not the average of its daily averages; and the average
+    of whole units per item is not a whole number, so nothing divided integers."""
+    case = AVG_WINDOW_CASES[0]
+    compiled = Planner(avg_window_graph, "duckdb").plan(case.request)
+    rows = duckdb_connector.execute(compiled.sql).to_pylist()
+    daily = {r["orders__ordered_at__day"]: r["order_value"] for r in rows}
+    differ = 0
+    for r in rows:
+        day = r["orders__ordered_at__day"]
+        averages = [v for d, v in daily.items() if 0 <= (day - d).days <= 6]
+        differ += abs(r["order_value_rolling_7_days"] - sum(averages) / len(averages)) > 1e-6
+    assert differ > 0
+
+    case = AVG_WINDOW_CASES[1]
+    compiled = Planner(avg_window_graph, "duckdb").plan(case.request, Principal(user=case.user))
+    values = [
+        r["avg_quantity_rolling_30_days"]
+        for r in duckdb_connector.execute(compiled.sql).to_pylist()
+    ]
+    assert values and any(v != int(v) for v in values)
+    # The facts each window reads pass the same row filters as the daily aggregate.
+    applied = {f["applied_in"] for f in compiled.trace.row_filters}
+    assert {"order_items_agg", "avg_quantity_facts_lookback_30_days"} <= applied

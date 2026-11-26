@@ -9,6 +9,22 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Rolling windows over an average (DEC-60, second slice of DEC-49): a cumulative metric with a
+  `window` over an `avg` measure ("7-day average order value") is now valid, and is recomputed
+  over each window from the facts as the window's sum over its count of values, never as an
+  average of daily averages. As in SQL `AVG`, a NULL value counts in neither, and a window
+  without a non-null value is NULL; the values are summed as floating point, as the daily
+  `avg` is, so no database divides integers. Each output day is joined to the facts CTE
+  (`<measure>_facts`) of DEC-49, which holds each day's sum and count under the same filters
+  and row filters; a filter on the time dimension still chooses the output days without
+  cutting the windows short (DEC-34), and windows in weeks (DEC-27) work too. The evidence
+  marks such a window with `time.from_facts: true`, and its formula reads `SUM(...) /
+  COUNT(...) recomputed over the 7 days ending on each day`. The dbt and Cube exports refuse
+  it as metric loss, and the dbt, Cube and Power BI imports skip it with a warning, until
+  their numbers are checked against the engine's. Reference cases A70 to A72 check the
+  numbers against hand-written SQL on every database. Requests without such a window keep
+  their SQL and `sql_hash` on every dialect.
+
 - TPC-H on the container databases (DEC-47): the `examples/tpch` reference cases run on
   Postgres, SQL Server, MySQL, MariaDB and Oracle as well as DuckDB. `tests/test_tpch.py`
   copies DuckDB's scale-factor-0.01 data (about 79,000 rows, decimals and dates kept exact)

@@ -272,9 +272,9 @@ class EvidenceBuilder:
 
         ``kind`` is ``grain_to_date`` (``period`` null for a running total over all time),
         ``window`` (``window`` as written and its ``days``; with ``from_facts`` true when the
-        window is recomputed from the facts of each window, as a distinct count is, DEC-49,
-        rather than combined from daily values) or ``offset`` (each input read at
-        an earlier period, through nested metrics too). ``time_dimension`` and ``query_grain``
+        window is recomputed from the facts of each window, as a distinct count is, DEC-49, and
+        an average is, DEC-60, rather than combined from daily values) or ``offset`` (each
+        input read at an earlier period, through nested metrics too). ``time_dimension`` and ``query_grain``
         are the request's time dimension and its grain. ``filters_applied`` says when the
         request's ``filters`` and the row filters restrict the rows: ``before`` the running
         total, so a filter on the time dimension also leaves out the earlier periods it would
@@ -323,7 +323,8 @@ class EvidenceBuilder:
         }
 
     def _recomputed(self, metric: CumulativeMetric) -> bool:
-        """Whether a rolling window is recomputed from the facts of each window (DEC-49)."""
+        """Whether a rolling window is recomputed from the facts of each window: a distinct
+        count (DEC-49) or an average (DEC-60)."""
         owner = self.graph.measure_owner.get(metric.measure)
         if owner is None:
             return False
@@ -432,6 +433,12 @@ class EvidenceBuilder:
             inner = self.formula(metric.measure, seen)
             if metric.window:
                 if self._recomputed(metric):
+                    owner = g.measure_owner[metric.measure]
+                    if g.models[owner].measures[metric.measure].agg == "avg":
+                        # The window's sum over its count of non-null values (DEC-60), never an
+                        # average of daily averages.
+                        column = inner.removeprefix("AVG(").removesuffix(")")
+                        inner = f"SUM({column}) / COUNT({column})"
                     return f"{inner} recomputed over the {metric.window} ending on each day"
                 return f"{inner} over the {metric.window} ending on each day"
             period = metric.grain_to_date or "all time"
