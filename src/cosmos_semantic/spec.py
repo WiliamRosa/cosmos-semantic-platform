@@ -394,6 +394,16 @@ def combined_window_refusal(agg: str) -> str | None:
     return window_agg_refusal(agg)
 
 
+# Why the dbt and Cube imports skip a rolling window in months (DEC-59), as they skip a
+# distinct-count window (DEC-49): the engine computes it by calendar months, which the source
+# tool may not (MetricFlow subtracts the interval from each day of a time spine), and no import
+# is checked against the source tool's numbers yet.
+MONTH_WINDOW_IMPORT_REFUSAL = (
+    "a rolling window in months is computed by calendar months in Cosmos since DEC-59, and "
+    "the import is not checked against the source tool's numbers"
+)
+
+
 class CumulativeMetric(_MetricBase):
     type: Literal["cumulative"]
     measure: Name

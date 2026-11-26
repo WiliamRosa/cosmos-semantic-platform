@@ -21,7 +21,12 @@ format or the API; such changes are listed under **Changed**.
   example gains `revenue_rolling_3_months`, `order_count_rolling_12_months` and
   `largest_order_rolling_3_months`, with reference cases A76 to A79 (a year boundary and a
   month without orders inside the window). The dbt, Cube and Databricks exports refuse such a
-  metric as metric loss. Requests without a window in months keep their SQL and `sql_hash`.
+  metric as metric loss, and the dbt and Cube imports skip a window in months (MetricFlow's
+  `window: 1 month`, Cube's `trailing: 3 month`) with a warning, with the metrics that use it,
+  as they skip a distinct-count window (DEC-49): before DEC-59 such a window was imported and
+  refused at query time; now no imported metric changes meaning. The randomized cross-database
+  test draws month windows at month grain, with and without a date filter. Requests without a
+  window in months keep their SQL and `sql_hash`.
 
 - TPC-H on the container databases (DEC-47): the `examples/tpch` reference cases run on
   Postgres, SQL Server, MySQL, MariaDB and Oracle as well as DuckDB. `tests/test_tpch.py`

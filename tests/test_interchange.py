@@ -1883,11 +1883,21 @@ def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
             "of type `count_distinct` is recomputed from the facts of each window in Cosmos "
             "(DEC-49), and the Cube import does not carry it",
         ),
+        # A window in months is skipped (DEC-59): the engine combines calendar months, and the
+        # import is not checked against Cube's numbers.
+        ({"trailing": "1 month"}, "sum", None, "a rolling window in months is computed by"),
+        ({"trailing": "3 month"}, "sum", None, "a rolling window in months is computed by"),
         (
-            {"trailing": "1 month"},
+            {"trailing": "3 month", "offset": "start"},
+            "count",
+            None,
+            "a rolling window in months is computed by",
+        ),
+        (
+            {"trailing": "1 year"},
             "sum",
-            {"window": "1 month"},
-            "only rolling windows in days or weeks",
+            {"window": "1 year"},
+            "a trailing window not in days, weeks or months is kept as written",
         ),
     ],
 )
@@ -2312,6 +2322,60 @@ def test_cube_import_time_shifts(graph, duckdb_connector, tmp_path):
         )
 
 
+@pytest.mark.parametrize("window", ["1 month", "3 months"])
+def test_dbt_import_skips_a_window_in_months(tmp_path, window):
+    """MetricFlow's `window: N month` subtracts the interval from each day of its time spine;
+    the engine combines calendar months (DEC-59). The import skips it, with the metrics that
+    use it, as it skips a distinct-count window (DEC-49), so no metric changes meaning."""
+    doc = {
+        "semantic_models": [
+            {
+                "name": "orders",
+                "model": "ref('orders')",
+                "entities": [{"name": "order", "type": "primary", "expr": "order_id"}],
+                "dimensions": [{"name": "ordered_at", "type": "time"}],
+                "measures": [{"name": "revenue", "agg": "sum", "expr": "amount"}],
+            }
+        ],
+        "metrics": [
+            {
+                "name": "revenue_1m",
+                "type": "cumulative",
+                "type_params": {
+                    "measure": "revenue",
+                    "cumulative_type_params": {"window": window},
+                },
+            },
+            {
+                "name": "revenue_7d",
+                "type": "cumulative",
+                "type_params": {
+                    "measure": "revenue",
+                    "cumulative_type_params": {"window": "7 days"},
+                },
+            },
+            {
+                "name": "revenue_1m_doubled",
+                "type": "derived",
+                "type_params": {"expr": "revenue_1m * 2", "metrics": ["revenue_1m"]},
+            },
+        ],
+    }
+    path = tmp_path / "semantic_models.yml"
+    path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    result = import_model("dbt", path, schema="public")
+    assert {m.name for m in result.project.metrics} == {"revenue_7d"}
+    joined = "\n".join(result.warnings)
+    assert (
+        "metrics.revenue_1m: over measure `revenue`: a rolling window in months is computed by "
+        "calendar months in Cosmos since DEC-59, and the import is not checked against the "
+        "source tool's numbers; metric skipped"
+    ) in joined
+    assert "metrics.revenue_1m_doubled: depends on `revenue_1m`" in joined
+    assert "only windows in days or weeks" not in joined
+    compile_project(result.project)  # validates
+
+
 @pytest.mark.parametrize("spec", ["legacy", "latest"])
 @pytest.mark.parametrize("agg", ["average", "count_distinct"])
 def test_dbt_import_skips_to_date_over_avg_or_distinct_count(tmp_path, spec, agg):
@@ -2621,9 +2685,8 @@ def test_dbt_export_round_trip(graph, tmp_path):
     )
     assert back.warnings == [
         *(
-            f"metrics.{name}: rolling window `{days} days`: only windows in days or weeks, "
-            "queried by day, are supported, and only days with data appear (MetricFlow "
-            "uses a time spine)"
+            f"metrics.{name}: rolling window `{days} days`: queried by day only, and only days "
+            "with data appear (MetricFlow uses a time spine)"
             for name, days in zip(ROLLING, (30, 7, 7), strict=True)
         ),
         "metrics.revenue_prev_month: `revenue` is read `1 month` earlier (`offset_window: 1 "
