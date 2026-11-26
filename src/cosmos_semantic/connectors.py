@@ -333,14 +333,35 @@ class SnowflakeConnector(Connector):
         self._con.close()
 
 
+def _set_options(config: DataSourceConfig) -> dict[str, Any]:
+    """The options with a value: an unset ``${VAR:-}`` counts as absent."""
+    return {k: v for k, v in config.options.items() if v not in (None, "")}
+
+
+def source_warnings(conns: ConnectionsFile) -> list[str]:
+    """Settings that work but are risky, for ``cosmos check`` to print."""
+    warnings = []
+    for name, config in conns.data_sources.items():
+        if config.type != "bigquery":
+            continue
+        opts = _set_options(config)
+        if not opts.get("api_endpoint") and not opts.get("maximum_bytes_billed"):
+            warnings.append(
+                f"data source {name!r} (bigquery) has no options.maximum_bytes_billed: "
+                "a query can scan, and bill, any amount of data"
+            )
+    return warnings
+
+
 class BigQueryConnector(Connector):
     """Google BigQuery through the official client; results come back as Arrow.
 
     ``options``: ``project`` (required), ``location``, ``credentials_file`` (a service account
     key; without it the client uses Application Default Credentials, as after
     ``gcloud auth application-default login``), ``maximum_bytes_billed`` (a query that would
-    scan more fails instead of running) and ``api_endpoint`` (an emulator, for tests). The
-    model's schemas are BigQuery datasets: map them with ``schema_map``, such as
+    scan more fails instead of running) and ``api_endpoint`` (an emulator, for tests, which
+    connects with anonymous credentials; a source that sets it with ``credentials_file`` is
+    refused). The model's schemas are BigQuery datasets: map them with ``schema_map``, such as
     ``public: cosmos_demo``.
     """
 
@@ -348,7 +369,7 @@ class BigQueryConnector(Connector):
         super().__init__(config)
         from google.cloud import bigquery
 
-        opts = {k: v for k, v in config.options.items() if v not in (None, "")}
+        opts = _set_options(config)
         if not opts.get("project"):
             raise ModelError("a bigquery source needs options.project")
         unknown = set(opts) - {
@@ -360,6 +381,13 @@ class BigQueryConnector(Connector):
         }
         if unknown:
             raise ModelError(f"unknown bigquery options: {', '.join(sorted(unknown))}")
+        if opts.get("api_endpoint") and opts.get("credentials_file"):
+            # The endpoint would win with anonymous credentials, and the key would be ignored
+            # without a word: a source meant for BigQuery could talk to whatever answers there.
+            raise ModelError(
+                "a bigquery source sets both options.api_endpoint and options.credentials_file: "
+                "api_endpoint is only for the emulator, which takes no credentials; unset one"
+            )
         kwargs: dict[str, Any] = {"project": opts["project"], "location": opts.get("location")}
         if opts.get("api_endpoint"):
             from google.api_core.client_options import ClientOptions

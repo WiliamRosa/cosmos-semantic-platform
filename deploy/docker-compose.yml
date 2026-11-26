@@ -1,6 +1,7 @@
 # Local environment: demo Postgres.
 #   docker compose -p cosmos-semantic -f deploy/docker-compose.yml up -d
 #   uv run cosmos demo-data --target postgres -c examples/ecommerce/connections.yml
+# Every port is published on 127.0.0.1 only: the passwords below are test values.
 services:
   postgres:
     image: postgres:16
@@ -9,7 +10,7 @@ services:
       POSTGRES_PASSWORD: cosmos
       POSTGRES_DB: cosmos
     ports:
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cosmos"]
       interval: 2s
@@ -25,7 +26,7 @@ services:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Cosmos!Passw0rd"
     ports:
-      - "14330:1433"
+      - "127.0.0.1:14330:1433"
 
   # Optional: ... --profile mysql up -d
   mysql:
@@ -34,7 +35,7 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: cosmos
     ports:
-      - "13306:3306"
+      - "127.0.0.1:13306:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pcosmos"]
       interval: 2s
@@ -47,7 +48,7 @@ services:
     environment:
       MARIADB_ROOT_PASSWORD: cosmos
     ports:
-      - "13307:3306"
+      - "127.0.0.1:13307:3306"
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 2s
@@ -62,7 +63,7 @@ services:
       APP_USER: cosmos
       APP_USER_PASSWORD: cosmos
     ports:
-      - "11521:1521"
+      - "127.0.0.1:11521:1521"
     healthcheck:
       test: ["CMD", "healthcheck.sh"]
       interval: 5s
@@ -74,7 +75,7 @@ services:
     profiles: [bigquery]
     command: ["--project=cosmos-test", "--dataset=cosmos"]
     ports:
-      - "19050:9050"
+      - "127.0.0.1:19050:9050"
 
   # Optional: ... --profile trino up -d  (Trino with an in-memory catalog for tests; data is
   # lost on restart). Listens on localhost only, without authentication.

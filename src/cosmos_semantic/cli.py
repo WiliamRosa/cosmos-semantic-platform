@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import datetime as dt
 import io
@@ -572,10 +573,13 @@ def check(
     as_json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """Runs the rule tests and the reconciliation cases and records the run, so the console
-    shows health over time. Exits with 1 when a test or a reconciliation fails (for CI)."""
+    shows health over time. Exits with 1 when a test or a reconciliation fails (for CI).
+    Risky data source settings, such as a BigQuery source without a byte cap, are warnings on
+    standard error."""
     import os
 
     from cosmos_semantic.checks import append_run, run_checks, run_ok
+    from cosmos_semantic.connectors import source_warnings
     from cosmos_semantic.evidence import EvidenceBuilder
     from cosmos_semantic.reconcile import cases_from_bytes
 
@@ -584,8 +588,16 @@ def check(
         graph = compile_project(load_project(model))
         loaded, cases_hash = cases_from_bytes(cases.read_bytes()) if cases else ([], None)
         name = None
+        conns = None
         if loaded:
             conns = load_connections(connections)
+        elif connections.exists():
+            # Only for the warnings: without cases the check does not need the connections.
+            with contextlib.suppress(Exception):
+                conns = load_connections(connections)
+        for warning in source_warnings(conns) if conns else []:
+            typer.secho(f"warning: {warning}", fg=typer.colors.YELLOW, err=True)
+        if loaded:
             name = source or conns.default or next(iter(conns.data_sources))
             connector = connect(conns.data_sources[name])
         run = run_checks(
