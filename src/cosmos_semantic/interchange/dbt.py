@@ -456,8 +456,9 @@ class _Builder:
         not, or a rolling window over a measure whose per-period values do not combine (`avg`,
         `count_distinct`), and the metrics that use them, each with a warning (DEC-32). The
         condition is the validator's own (``cumulative_agg_problem``), and for windows
-        ``combined_window_refusal``: a `count_distinct` window is valid in Cosmos (DEC-49) but
-        not imported until MetricFlow's numbers are checked against the engine's."""
+        ``combined_window_refusal``: a `count_distinct` (DEC-49) or `avg` (DEC-60) window is
+        valid in Cosmos but not imported until MetricFlow's numbers are checked against the
+        engine's."""
         aggs = {m["name"]: m["agg"] for model in self.models for m in model.get("measures", [])}
         skipped: set[str] = set()
         for metric in self.metrics:

@@ -1861,7 +1861,13 @@ def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
         ({"trailing": "2 week", "offset": "start"}, "sum", None, "does not end on the row's day"),
         ({"trailing": "7 day", "offset": "start"}, "sum", None, "does not end on the row's day"),
         ({"trailing": "7 day", "leading": "1 day"}, "sum", None, "does not end on the row's day"),
-        ({"trailing": "7 day"}, "avg", None, "of type `avg` cannot be combined"),
+        (
+            {"trailing": "7 day"},
+            "avg",
+            None,
+            "of type `avg` is recomputed from the facts of each window in Cosmos "
+            "(DEC-60), and the Cube import does not carry it",
+        ),
         (
             {"trailing": "7 day"},
             "count_distinct",
@@ -1880,9 +1886,9 @@ def test_cube_export_trailing_same_numbers(graph, tmp_path, source, request):
 def test_cube_import_trailing_windows(tmp_path, window, kind, metric, warning):
     """A trailing window in days ending at the bucket's end, over a measure whose daily values
     combine, is a Cosmos window in days and validates; one that does not end on the row's day,
-    or over an `avg` measure, is skipped with its base measure, as is one over a
-    `count_distinct` measure until Cube's numbers are checked against the engine's (DEC-49);
-    other units stay refused at query time."""
+    is skipped with its base measure, as is one over a `count_distinct` (DEC-49) or `avg`
+    (DEC-60) measure until Cube's numbers are checked against the engine's; other units stay
+    refused at query time."""
     doc = {
         "cubes": [
             {

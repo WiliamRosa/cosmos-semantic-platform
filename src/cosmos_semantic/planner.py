@@ -231,8 +231,9 @@ class _Group:
     # dimension reach back to the start of the period of every row they keep.
     to_date: str | None = None
 
-    # The measure whose distinct values, by the requested dimensions, a rolling window
-    # recomputes from the facts (DEC-49): the CTE groups without aggregating.
+    # The measure a rolling window recomputes from the facts: its distinct values by the
+    # requested dimensions (DEC-49), grouped without aggregating, or for an average the sum and
+    # the count of its non-null values by the requested dimensions (DEC-60).
     facts: str | None = None
 
     @property
@@ -360,8 +361,9 @@ class Planner:
             used_models |= joined
         # Rolling windows read their facts from a CTE of their own when the request filters
         # the time dimension (DEC-34); without such a filter the SQL is unchanged.
-        # A window over a distinct count (DEC-49) reads the distinct values of each day from a
-        # facts CTE, under the same filters, widened as above when they can be.
+        # A window over a distinct count (DEC-49) or an average (DEC-60) reads the distinct
+        # values, or the sum and count, of each day from a facts CTE, under the same filters,
+        # widened as above when they can be.
         lookbacks: dict[tuple[str, int], tuple[_Group, list[Template]]] = {}
         facts: dict[tuple[str, int | None], tuple[_Group, list[Template]]] = {}
         sources: dict[str, str] = {}
@@ -904,10 +906,18 @@ class Planner:
                 else None
             )
             if group.facts is not None:
-                # The distinct values themselves, grouped with the dimensions (DEC-49).
                 value = qualify(measure.expr or measure.name, base, self.dialect)
                 if condition is not None:
                     value = exp.Case(ifs=[exp.If(this=condition, true=value)])
+                if measure.agg == "avg":
+                    # The sum and the count of the non-null values (DEC-60), which add up over
+                    # any window: a null value counts in neither, as in AVG. Cast as the daily
+                    # AVG is, so no database divides integers.
+                    total = exp.Sum(this=exp.Cast(this=value, to=exp.DataType.build("double")))
+                    projections.append(total.as_(_avg_part(alias, "sum")))
+                    projections.append(exp.Count(this=value.copy()).as_(_avg_part(alias, "count")))
+                    continue
+                # The distinct values themselves, grouped with the dimensions (DEC-49).
                 dim_exprs.append(value)
                 projections.append(value.copy().as_(alias))
                 continue
@@ -1332,7 +1342,12 @@ class Planner:
 
         A window over a distinct count (DEC-49) is recomputed: ``prev`` is ``lookback``, the
         facts CTE of the distinct values of each day, and the window counts the values of its
-        days once each, so a customer seen on several days of the window counts once."""
+        days once each, so a customer seen on several days of the window counts once.
+
+        A window over an average (DEC-60) is recomputed the same way: ``prev`` is the facts CTE
+        of the sum and the count of the non-null values of each day, and the window divides
+        the sum of its days by their count, never averaging the daily averages. A window
+        without a non-null value (its count is 0) and a null day have a null value."""
         time = self._time_dim(metric, dims)
         if time.grain != "day":
             raise QueryError(
@@ -1351,13 +1366,22 @@ class Planner:
         ] + [exp.NullSafeEQ(this=prev[d], expression=cur[d]) for d in dims if d != time]
         owner = self.graph.measure_owner[metric.measure]
         agg = self.graph.models[owner].measures[metric.measure].agg
-        if agg in RECOMPUTED_WINDOW_AGGS:
+        if agg == "avg":
+            assert lookback is not None
+            total, count = (
+                exp.Sum(this=exp.column(_avg_part(value.name, part), table="prev"))
+                for part in ("sum", "count")
+            )
+            combined: exp.Expression = exp.Div(
+                this=total, expression=exp.Nullif(this=count, expression=exp.Literal.number(0))
+            )
+        elif agg in RECOMPUTED_WINDOW_AGGS:
             assert lookback is not None
             distinct = exp.Count(
                 this=exp.Distinct(expressions=[exp.column(value.name, table="prev")])
             )
             # A null day matches no day, as in the other windows: its value is null, not 0.
-            combined: exp.Expression = exp.Case(
+            combined = exp.Case(
                 ifs=[
                     exp.If(
                         this=exp.Is(this=cur[time].copy(), expression=exp.null()),
@@ -1627,6 +1651,13 @@ def _widen(
 # metric; other aggregations are refused (DEC-21).
 _COMBINE_AGGS = {"sum": exp.Sum, "count": exp.Sum, "min": exp.Min, "max": exp.Max}
 assert tuple(_COMBINE_AGGS) == WINDOW_AGGS
+
+
+def _avg_part(alias: str, part: str) -> str:
+    """The column of a facts CTE holding the ``sum`` or the ``count`` of the non-null values of
+    an `avg` measure for a rolling window (DEC-60)."""
+    return f"{alias}_{part}"
+
 
 _LEVEL = {"personal": "personal", "sensitive": "sensitive personal"}
 
