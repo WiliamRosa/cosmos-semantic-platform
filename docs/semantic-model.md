@@ -205,11 +205,15 @@ metrics:
 
   ```yaml
   metrics:
-    - name: active_customers_30_days
+    - name: active_customers_30d
       type: cumulative
       measure: buyers        # agg: count_distinct, expr: customer_id
       window: 30 days        # or 4 weeks (28 days)
   ```
+
+  The e-commerce example (`examples/ecommerce`) defines this metric, and the randomized
+  cross-database test (`tests/test_cross_db.py`) draws it by day on random requests, beside
+  other windows and metrics, by other dimensions and with filters on the time dimension.
 
   Everything above holds for it: the output days, a filter on the time dimension that chooses the days while each window still reads the N − 1 days before them (DEC-34), the other filters and the row filters that restrict the facts first, the other dimensions (null-safe), a null day whose value is null, and windows in weeks. The evidence marks such a window with `time.from_facts: true`, and its formula reads `COUNT(DISTINCT ...) recomputed over the 30 days ending on each day`. The dbt and Cube exports refuse it as metric loss (`--allow-metric-loss` drops it with a warning), and the dbt, Cube and Power BI imports skip such a window with a warning, until their numbers are checked against the engine's.
 - **Weeks.** A window in weeks is read as 7 days per week (DEC-27): `1 week` is `7 days`, `2 weeks` is `14 days`, singular or plural. It runs where the window in days runs (day grain only) and gives exactly its SQL, and so its `sql_hash`; the evidence (`time.window`, the formula) and the catalog keep the window as written, with the days in `time.days`. The dbt export writes it in weeks (`window: 2 weeks`, 14 days in MetricFlow) and its import reads it back as `2 weeks`; the Cube export writes its days (`trailing: 14 day`), because Cube does not render a week interval on every database, so a Cube round trip gives `14 days`, with the same numbers.

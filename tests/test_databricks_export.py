@@ -36,6 +36,7 @@ REFUSED = {
     "max_order_value_year_to_date",
     "revenue_rolling_7_days",
     "smallest_order_rolling_7_days",
+    "active_customers_30d",
     "revenue_prev_month",
     "revenue_mom_growth",
     "revenue_yoy_growth",
