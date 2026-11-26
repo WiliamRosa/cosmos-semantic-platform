@@ -599,6 +599,64 @@ def test_bootstrap_reads_the_dataset_information_schema_and_numeric_types(
         assert "secret-key-dir" not in text
 
 
+def test_bootstrap_marks_timestamp_columns_and_keeps_datetime_columns(fake_bigquery):
+    """A TIMESTAMP is an instant in UTC: the draft says so (`column_type: timestamp`) and the
+    planner reads it as its UTC date and time; a DATETIME column stays as before (DEC-57)."""
+    from cosmos_semantic.bootstrap import bootstrap
+    from cosmos_semantic.compiler import compile_project
+    from cosmos_semantic.planner import Planner, Principal, QueryRequest
+
+    backend = duckdb.connect()
+    backend.execute("CREATE SCHEMA cosmos_demo")
+    backend.execute(
+        "CREATE TABLE cosmos_demo.events (event_id BIGINT, kind VARCHAR, "
+        "happened_at TIMESTAMPTZ, logged_at TIMESTAMP, event_date DATE)"
+    )
+    backend.execute(
+        "INSERT INTO cosmos_demo.events VALUES (1, 'a', '2026-01-01 10:00+00', "
+        "'2026-01-01 10:00', '2026-01-01')"
+    )
+    fake_bigquery.backend = backend
+    fake_bigquery.catalog = {
+        "columns": [
+            {"table_name": "events", "column_name": c, "data_type": d}
+            for c, d in [
+                ("event_id", "INT64"),
+                ("kind", "STRING"),
+                ("happened_at", "TIMESTAMP"),
+                ("logged_at", "DATETIME"),
+                ("event_date", "DATE"),
+            ]
+        ],
+        "keys": [{"table_name": "events", "column_name": "event_id"}],
+    }
+    connector = connect(
+        DataSourceConfig(
+            type="bigquery", options={"project": "p"}, schema_map={"public": "cosmos_demo"}
+        )
+    )
+    project, report = bootstrap(connector)
+    dims = {d.name: d for d in project.semantic_models[0].dimensions}
+    assert dims["happened_at"].column_type == "timestamp"
+    assert dims["logged_at"].column_type is None and dims["event_date"].column_type is None
+    assert any("happened_at: TIMESTAMP" in w for w in report["warnings"])
+
+    planner = Planner(compile_project(project), "bigquery", {"public": "cosmos_demo"})
+    sql = planner.plan(
+        QueryRequest(
+            metrics=["events_count"],
+            dimensions=["events.happened_at__day", "events.logged_at__day"],
+            filters=["{events.happened_at} >= DATE '2026-01-01'"],
+            as_of=dt.date(2026, 1, 2),
+        ),
+        Principal(),
+    ).sql
+    sqlglot.parse_one(sql, read="bigquery")
+    assert "TIMESTAMP_TRUNC(DATETIME(events.happened_at, 'UTC'), DAY)" in sql
+    assert "DATETIME(events.happened_at, 'UTC') >= CAST('2026-01-01' AS DATE)" in sql
+    assert "TIMESTAMP_TRUNC(events.logged_at, DAY)" in sql
+
+
 # -- cosmos init ---------------------------------------------------------------------------
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import pytest
 import sqlglot
@@ -125,3 +126,112 @@ def test_reference_ctes_never_share_a_name_with_a_column():
     case = next(c for c in load_cases(CASES.with_name("queries_advanced.yml")) if c.id == "A08")
     sql = case.sql_for("bigquery")
     assert "WITH m_cte AS" in sql and "FROM m_cte" in sql
+
+
+# -- TIMESTAMP time columns (DEC-57) ---------------------------------------------------------
+
+TIME_COLUMNS = ("ordered_at", "paid_at", "created_at", "last_order_at")
+OTHER_DIALECTS = ("duckdb", "postgres", "tsql", "mysql", "oracle", "databricks", "snowflake")
+
+
+@pytest.fixture(scope="module")
+def timestamp_graph():
+    """The example model with every time dimension on a BigQuery TIMESTAMP column."""
+    from cosmos_semantic.compiler import compile_project
+    from cosmos_semantic.loader import load_project
+
+    from .conftest import EXAMPLE
+
+    project = load_project(EXAMPLE)
+    for model in project.semantic_models:
+        for dim in model.dimensions:
+            if dim.type == "time":
+                dim.column_type = "timestamp"
+    return compile_project(project)
+
+
+def _answered_cases():
+    cases = load_cases(CASES) + load_cases(CASES.with_name("queries_advanced.yml"))
+    return [c for c in cases if c.request is not None and not c.expect_error]
+
+
+def _sql(graph, case, dialect: str) -> str:
+    request = case.request.model_copy(update={"as_of": dt.date(2026, 11, 20)})
+    planner = Planner(graph, dialect, SCHEMA_MAP)
+    return planner.plan(request, Principal(user=case.user, channel=case.channel)).sql
+
+
+def test_a_timestamp_column_is_read_as_its_utc_civil_time(timestamp_graph):
+    """Every reference query plans, parses as BigQuery, and never touches a TIMESTAMP column
+    without `DATETIME(column, 'UTC')` first: a bare TIMESTAMP compared with a DATE or DATETIME
+    has no matching signature on BigQuery."""
+    planned = 0
+    for case in _answered_cases():
+        sql = _sql(timestamp_graph, case, "bigquery")
+        sqlglot.parse_one(sql, read="bigquery")
+        for column in TIME_COLUMNS:
+            for match in re.finditer(rf"(.{{0,9}})\b\w+\.{column}\b(.{{0,8}})", sql):
+                assert match.group(1).endswith("DATETIME("), (case.id, match.group(0))
+                assert match.group(2).startswith(", 'UTC')"), (case.id, match.group(0))
+        planned += 1
+    assert planned >= 50
+
+
+def test_timestamp_truncation_filters_and_windows(timestamp_graph):
+    weeks = _plan(
+        timestamp_graph,
+        QueryRequest(
+            metrics=["order_count"],
+            dimensions=["orders.ordered_at__week"],
+            filters=["{orders.ordered_at} >= DATE '2026-10-01'"],
+        ),
+    )
+    assert "TIMESTAMP_TRUNC(DATETIME(orders.ordered_at, 'UTC'), ISOWEEK)" in weeks
+    assert "DATETIME(orders.ordered_at, 'UTC') >= CAST('2026-10-01' AS DATE)" in weeks
+
+    case = next(c for c in _answered_cases() if c.id == "A48")  # rolling window up to noon
+    window = _sql(timestamp_graph, case, "bigquery")
+    # Date arithmetic on the civil time needs no further cast.
+    assert "DATETIME_ADD(DATETIME(orders.ordered_at, 'UTC'), INTERVAL 7 DAY)" in window
+    assert "CAST(DATETIME(" not in window
+
+
+def test_a_rule_input_bound_to_a_timestamp_column_is_read_in_utc(timestamp_graph):
+    case = next(c for c in _answered_cases() if c.id == "R16")  # {rule.active_customer}
+    sql = _sql(timestamp_graph, case, "bigquery")
+    assert "DATETIME(customers.last_order_at, 'UTC')" in sql
+    assert re.search(r"\(\s*DATETIME\(customers\.last_order_at, 'UTC'\)\s*\) >= DATE_ADD", sql)
+
+
+def test_the_time_range_of_a_timestamp_column(timestamp_graph):
+    sql = Planner(timestamp_graph, "bigquery", SCHEMA_MAP).plan_time_range("orders.ordered_at").sql
+    assert "TIMESTAMP_TRUNC(DATETIME(orders.ordered_at, 'UTC'), DAY)" in sql
+
+
+@pytest.mark.parametrize("dialect", OTHER_DIALECTS)
+def test_column_type_changes_no_sql_on_other_dialects(graph, timestamp_graph, dialect):
+    for case in _answered_cases():
+        assert _sql(timestamp_graph, case, dialect) == _sql(graph, case, dialect), case.id
+
+
+def test_without_column_type_the_bigquery_sql_and_model_hash_stay(graph):
+    """A DATETIME or DATE column (no `column_type`) keeps the SQL it had before DEC-57, and
+    the model dump (so the model hash in the evidence) has no new key."""
+    for case in _answered_cases():
+        assert "'UTC')" not in _sql(graph, case, "bigquery"), case.id
+    dumped = graph.project.model_dump(mode="json")
+    for model in dumped["semantic_models"]:
+        for dim in model["dimensions"]:
+            assert "column_type" not in dim
+
+
+def test_column_type_is_only_for_time_dimensions():
+    from pydantic import ValidationError
+
+    from cosmos_semantic.spec import Dimension
+
+    assert Dimension(name="t", type="time", column_type="timestamp").column_type == "timestamp"
+    with pytest.raises(ValidationError, match="time dimensions only"):
+        Dimension(name="status", type="categorical", column_type="timestamp")
+    with pytest.raises(ValidationError):
+        Dimension(name="t", type="time", column_type="timestamptz")

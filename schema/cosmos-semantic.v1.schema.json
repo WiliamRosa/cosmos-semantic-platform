@@ -529,6 +529,20 @@
           "default": null,
           "description": "LGPD (personal data) classification. AI agents never receive raw values.",
           "title": "Sensitivity"
+        },
+        "column_type": {
+          "anyOf": [
+            {
+              "const": "timestamp",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Time dimensions only: `timestamp` marks a column that holds an instant in UTC, such as a BigQuery `TIMESTAMP`. On BigQuery the engine reads it as its UTC date and time (`DATETIME(column, 'UTC')`); other data sources ignore it. Default: a date or a date and time without a time zone.",
+          "title": "Column Type"
         }
       },
       "required": [

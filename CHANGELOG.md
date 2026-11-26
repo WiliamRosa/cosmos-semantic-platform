@@ -136,6 +136,17 @@ format or the API; such changes are listed under **Changed**.
 
 ### Fixed
 
+- BigQuery `TIMESTAMP` time columns (DEC-57). A `TIMESTAMP` is an instant in UTC, and
+  BigQuery refuses to compare it with a `DATE` or `DATETIME` ("No matching signature for
+  operator"), so a filter, rolling window or offset on such a column failed; the demo loads
+  times as `DATETIME`, which is why the live run did not catch it. A time dimension now accepts
+  an optional `column_type: timestamp` (authoring format, backward compatible: without it the
+  model, its hash and every query are unchanged), and on BigQuery the engine reads such a
+  column as its date and time in UTC, `DATETIME(column, 'UTC')`, before any truncation,
+  comparison or date arithmetic, including in business rules bound to it. `cosmos bootstrap`
+  sets it on BigQuery `TIMESTAMP` columns and lists them in the report. Other data sources
+  ignore it, and their SQL and `sql_hash` do not change for any reference request.
+
 - Flaky same-number tests (DEC-55). The replay test changed the shared `orders` table
   (`amount + 1` on order 1, undone right after), and the database containers are shared by
   every test run on the machine, so a run comparing two queries meanwhile could see one of

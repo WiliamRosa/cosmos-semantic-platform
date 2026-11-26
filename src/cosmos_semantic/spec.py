@@ -39,6 +39,32 @@ class Dimension(_Base):
         None,
         description="LGPD (personal data) classification. AI agents never receive raw values.",
     )
+    column_type: Literal["timestamp"] | None = Field(
+        None,
+        description=(
+            "Time dimensions only: `timestamp` marks a column that holds an instant in UTC, "
+            "such as a BigQuery `TIMESTAMP`. On BigQuery the engine reads it as its UTC date "
+            "and time (`DATETIME(column, 'UTC')`); other data sources ignore it. Default: a "
+            "date or a date and time without a time zone."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _column_type_on_time(self) -> Dimension:
+        if self.column_type is not None and self.type != "time":
+            raise ValueError(
+                f"dimension `{self.name}`: `column_type` applies to time dimensions only"
+            )
+        return self
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_column_type(self, handler) -> dict[str, Any]:
+        # Without a column type the dump (and so the model hash) stays as it was before
+        # DEC-57, so evidence and replay of existing models do not change.
+        data = handler(self)
+        if self.column_type is None and isinstance(data, dict):
+            data.pop("column_type", None)
+        return data
 
 
 class Measure(_Base):
