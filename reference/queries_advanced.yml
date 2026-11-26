@@ -1791,7 +1791,7 @@ cases:
     sql: |
       WITH m AS (
         SELECT EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
-               MAX(amount) AS top, SUM(amount) AS revenue
+               MAX(amount) AS largest, SUM(amount) AS revenue
         FROM public.orders
         GROUP BY EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
       ), kept AS (
@@ -1802,7 +1802,7 @@ cases:
           AND ordered_at < CURRENT_DATE - INTERVAL '20' DAY
       )
       SELECT kept.mon AS orders__ordered_at__month,
-             MAX(m.top) AS largest_order_rolling_3_months,
+             MAX(m.largest) AS largest_order_rolling_3_months,
              SUM(m.revenue) AS revenue_rolling_3_months
       FROM kept LEFT JOIN m ON m.k BETWEEN kept.k - 2 AND kept.k
       GROUP BY kept.mon
@@ -1810,7 +1810,7 @@ cases:
       tsql: |
         WITH m AS (
           SELECT YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
-                 MAX(amount) AS top, SUM(amount) AS revenue
+                 MAX(amount) AS largest, SUM(amount) AS revenue
           FROM public.orders GROUP BY YEAR(ordered_at) * 12 + MONTH(ordered_at)
         ), kept AS (
           SELECT DISTINCT DATETRUNC(month, ordered_at) AS mon,
@@ -1820,7 +1820,7 @@ cases:
             AND ordered_at < DATEADD(day, -20, CAST(GETDATE() AS DATE))
         )
         SELECT kept.mon AS orders__ordered_at__month,
-               MAX(m.top) AS largest_order_rolling_3_months,
+               MAX(m.largest) AS largest_order_rolling_3_months,
                SUM(m.revenue) AS revenue_rolling_3_months
         FROM kept LEFT JOIN m ON m.k BETWEEN kept.k - 2 AND kept.k
         GROUP BY kept.mon
