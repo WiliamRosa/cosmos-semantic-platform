@@ -343,6 +343,16 @@ def parse_window(text: str | None) -> int | None:
     return parts[0] * WINDOW_UNITS[parts[1]] if parts else None
 
 
+def parse_month_window(text: str | None) -> int | None:
+    """N for a rolling window of ``N months`` (``1 month`` too, DEC-59); None for anything
+    else, such as `7 days` or `0 months`. A month window is a range of calendar months, queried
+    at month grain; the exports and imports do not carry it."""
+    match = re.fullmatch(r"\s*(\d+)\s+months?\s*", text or "", re.IGNORECASE)
+    if not match or int(match.group(1)) <= 0:
+        return None
+    return int(match.group(1))
+
+
 # Aggregations whose per-period values combine over a rolling window or a running (to-date)
 # cumulative metric (DEC-21, DEC-22): sums and counts add up, minima and maxima take the
 # extreme. An average or a distinct count cannot be rebuilt from per-period values.
@@ -352,9 +362,16 @@ WINDOW_AGGS = ("sum", "count", "min", "max")
 RECOMPUTED_WINDOW_AGGS = ("count_distinct",)
 
 
-def window_agg_refusal(agg: str) -> str | None:
+def window_agg_refusal(agg: str, in_months: bool = False) -> str | None:
     """Why a rolling window cannot run over a measure with this aggregation; None if it can.
-    Model validation and the planner give the same reason."""
+    A window in months (DEC-59, ``in_months``) only combines monthly values, so it refuses a
+    distinct count too. Model validation and the planner give the same reason."""
+    if in_months and agg not in WINDOW_AGGS:
+        return (
+            f"a rolling window in months over a `{agg}` measure is not supported; "
+            "it is combined from monthly values (use sum, count, min or max, or a window "
+            "in days or weeks for count_distinct)"
+        )
     if agg in WINDOW_AGGS or agg in RECOMPUTED_WINDOW_AGGS:
         return None
     return (
@@ -385,7 +402,9 @@ class CumulativeMetric(_MetricBase):
         None,
         description=(
             "Rolling window, such as `7 days`: the value on day D aggregates the measure over "
-            "the days D - (N - 1) to D. In days or weeks (7 days), queried at day grain."
+            "the days D - (N - 1) to D. In days or weeks (7 days), queried at day grain; or in "
+            "months, such as `3 months`, queried at month grain: the value of month M "
+            "aggregates the months M - (N - 1) to M."
         ),
     )
 
@@ -401,6 +420,10 @@ class CumulativeMetric(_MetricBase):
         so a window in weeks compiles to the SQL of its days; evidence and messages keep the
         window as written."""
         return parse_window(self.window)
+
+    def window_months(self) -> int | None:
+        """N for a `window` of `N months` (or `1 month`, DEC-59); None for any other window."""
+        return parse_month_window(self.window)
 
 
 def cumulative_agg_problem(metric: CumulativeMetric, agg: str) -> str | None:

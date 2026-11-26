@@ -312,16 +312,21 @@ def compile_project(project: Project, *, strict: bool = True) -> SemanticGraph:
         for ref in metric_refs(metric):
             if ref not in g.measure_owner and ref not in g.metrics:
                 err(loc, f"reference `{ref}` is neither a measure nor a metric")
-        if isinstance(metric, CumulativeMetric) and metric.window and not metric.window_days():
+        if (
+            isinstance(metric, CumulativeMetric)
+            and metric.window
+            and not metric.window_days()
+            and not metric.window_months()
+        ):
             warn(
                 loc,
-                "only windows in days or weeks, such as `7 days` or `2 weeks`, are supported; "
-                "queries will be refused",
+                "only windows in days, weeks or months, such as `7 days`, `2 weeks` or "
+                "`3 months`, are supported; queries will be refused",
             )
         if isinstance(metric, CumulativeMetric) and metric.measure in g.measure_owner:
             agg = g.models[g.measure_owner[metric.measure]].measures[metric.measure].agg
             if metric.window:
-                problem = window_agg_refusal(agg)
+                problem = window_agg_refusal(agg, metric.window_months() is not None)
             else:
                 problem = cumulative_agg_problem(metric, agg)
             if problem:

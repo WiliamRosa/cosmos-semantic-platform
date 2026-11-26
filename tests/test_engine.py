@@ -257,9 +257,10 @@ metrics:
 @pytest.mark.parametrize(
     ("metric", "dimensions", "message"),
     [
-        ("amount_1mo", ["sales.sold_at__day"], "only windows in days or weeks"),
-        ("amount_0d", ["sales.sold_at__day"], "only windows in days or weeks"),
-        ("amount_0w", ["sales.sold_at__day"], "only windows in days or weeks"),
+        ("amount_1mo", ["sales.sold_at__day"], "in months needs the time dimension at month"),
+        ("amount_1mo", ["sales.sold_at__quarter"], "in months needs the time dimension at month"),
+        ("amount_0d", ["sales.sold_at__day"], "only windows in days, weeks or months"),
+        ("amount_0w", ["sales.sold_at__day"], "only windows in days, weeks or months"),
         ("amount_2w", ["sales.sold_at__week"], "needs the time dimension at day grain"),
         ("amount_2w", ["sales.sold_at__month"], "needs the time dimension at day grain"),
         ("amount_7d", ["sales.sold_at__week"], "needs the time dimension at day grain"),
@@ -339,7 +340,9 @@ def test_rolling_windows_over_sum_count_min_and_max_pass_validation():
         "metrics.amount_2w",
     }
     # Windows in other units stay a warning: the model is valid, those queries are refused.
-    assert {"metrics.amount_1mo", "metrics.amount_0d", "metrics.amount_0w"} <= flagged
+    # A window in months is valid since DEC-59.
+    assert {"metrics.amount_0d", "metrics.amount_0w"} <= flagged
+    assert "metrics.amount_1mo" not in flagged
     # Validation and the planner accept the same aggregations.
     from cosmos_semantic import planner, spec
 

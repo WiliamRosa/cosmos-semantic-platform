@@ -184,7 +184,7 @@ metrics:
 
 #### Rolling windows
 
-A rolling window aggregates the measure over the last N days, today included (or the last N weeks, read as 7N days):
+A rolling window aggregates the measure over the last N days, today included (or the last N weeks, read as 7N days, or the last N months at month grain, see [Months](#rolling-windows) below):
 
 ```yaml
 metrics:
@@ -213,8 +213,19 @@ metrics:
 
   Everything above holds for it: the output days, a filter on the time dimension that chooses the days while each window still reads the N − 1 days before them (DEC-34), the other filters and the row filters that restrict the facts first, the other dimensions (null-safe), a null day whose value is null, and windows in weeks. The evidence marks such a window with `time.from_facts: true`, and its formula reads `COUNT(DISTINCT ...) recomputed over the 30 days ending on each day`. The dbt and Cube exports refuse it as metric loss (`--allow-metric-loss` drops it with a warning), and the dbt, Cube and Power BI imports skip such a window with a warning, until their numbers are checked against the engine's.
 - **Weeks.** A window in weeks is read as 7 days per week (DEC-27): `1 week` is `7 days`, `2 weeks` is `14 days`, singular or plural. It runs where the window in days runs (day grain only) and gives exactly its SQL, and so its `sql_hash`; the evidence (`time.window`, the formula) and the catalog keep the window as written, with the days in `time.days`. The dbt export writes it in weeks (`window: 2 weeks`, 14 days in MetricFlow) and its import reads it back as `2 weeks`; the Cube export writes its days (`trailing: 14 day`), because Cube does not render a week interval on every database, so a Cube round trip gives `14 days`, with the same numbers.
-- **Supported for now.** Only windows in days or weeks (`1 day`, `7 days`, `30 days`, `1 week`, `2 weeks`), queried with the time dimension at day grain (`orders.ordered_at__day`). Other units (`1 month`), a window of zero and other grains are refused with an error.
-- **SQL.** The daily aggregate is joined to itself on the date range, with no window frame, so the same SQL shape runs on every data source (SQL Server has no `RANGE` frame with an interval). A distinct-count window joins each output day instead to a facts CTE (`<measure>_facts`, or `<measure>_facts_lookback_<N>_days` under a date filter it widens): the distinct values of each day and combination of the other dimensions, read under the same filters and row filters, and counts `COUNT(DISTINCT ...)` over the N days of the window. Its cost grows with the output days times N times the distinct values of a day, so a 30-day window costs more than a 7-day one, and both more than a window of sums. Requests without such a window keep their SQL and `sql_hash`.
+- **Months.** A window in months (DEC-59), such as `3 months` (trailing 3 months) or `12 months` (last 12 months), singular or plural, is queried with the time dimension at month grain (`orders.ordered_at__month`): the value of month M combines the months M − (N − 1) to M, both included, so `3 months` on March covers January to March, and on January it reads November and December of the year before.
+
+  ```yaml
+  metrics:
+    - name: revenue_rolling_3_months
+      type: cumulative
+      measure: revenue
+      window: 3 months
+  ```
+
+  The window is a range of calendar months, never "the last N rows": a month without facts is not output, but it is still a month of every window that spans it. Everything else holds as for days: the other dimensions (null-safe), a null month whose value is null, and filters. A filter on the time dimension chooses the output months, and each month's window still reads its N whole months, the months before the range and the parts of the first and last months that a bound inside them cuts included; in the SQL, the monthly aggregate reads its facts from `<model>_agg_lookback_<N>_months`, where a lower bound reads `trunc(ordered_at, month) + N months` (N − 1 at month, quarter or year grain) and an upper bound on the column or at day or week grain reads `trunc(ordered_at, month)`. `sum` and `count` add up and `min` and `max` take the extreme of the monthly values; `count_distinct` and `avg` are refused for a window in months (the model is invalid), since a distinct count in months is not recomputed from the facts yet. A window in months queried at another grain (day, week, quarter, year, or the column without a grain) is refused. The evidence records `time.window` as written (`3 months`), `time.days` null and `time.months` (3), and the formula reads `SUM(orders.amount) over the 3 months ending on each month`. The dbt, Cube and Databricks exports refuse such a metric as metric loss (`--allow-metric-loss` drops it with a warning).
+- **Supported for now.** Windows in days or weeks (`1 day`, `7 days`, `30 days`, `1 week`, `2 weeks`), queried with the time dimension at day grain (`orders.ordered_at__day`), and windows in months (`1 month`, `3 months`, `12 months`) over `sum`, `count`, `min` or `max` measures, queried at month grain (`orders.ordered_at__month`). Other units, a window of zero and other grains are refused with an error.
+- **SQL.** The daily (or monthly) aggregate is joined to itself on the date range (for months, `prev.month <= cur.month AND prev.month + (N − 1) months >= cur.month`, on month starts, so no database clamps a day), with no window frame, so the same SQL shape runs on every data source (SQL Server has no `RANGE` frame with an interval). A distinct-count window joins each output day instead to a facts CTE (`<measure>_facts`, or `<measure>_facts_lookback_<N>_days` under a date filter it widens): the distinct values of each day and combination of the other dimensions, read under the same filters and row filters, and counts `COUNT(DISTINCT ...)` over the N days of the window. Its cost grows with the output days times N times the distinct values of a day, so a 30-day window costs more than a 7-day one, and both more than a window of sums. Requests without such a window keep their SQL and `sql_hash`.
 
 #### Period over period
 
@@ -628,4 +639,4 @@ Whatever Cube does not represent the same way produces a warning on export:
 
 - Conversion (funnel) metrics.
 - A time spine for series without gaps on days without data.
-- Rolling windows in units other than days or weeks, or at grains other than the day.
+- Rolling windows in units other than days, weeks or months, at grains other than the day (the month for windows in months), and windows in months over a distinct count or an average.

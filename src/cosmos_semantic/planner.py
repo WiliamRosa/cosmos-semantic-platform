@@ -225,8 +225,10 @@ class _Group:
     # (N, unit) for the inputs read N days or months earlier (DEC-18); one CTE per offset.
     offset: tuple[int, str] | None = None
     # N for the facts a rolling window of N days reads (DEC-34): the request's filters on the
-    # time dimension reach back far enough to fill the window of every day they keep.
+    # time dimension reach back far enough to fill the window of every day they keep. A window
+    # of N months (DEC-59) reads N months, at ``lookback_unit`` month.
     lookback: int | None = None
+    lookback_unit: str = "day"
     # The period of a grain-to-date metric (DEC-48): the request's filters on the time
     # dimension reach back to the start of the period of every row they keep.
     to_date: str | None = None
@@ -241,7 +243,7 @@ class _Group:
             name = f"{self.facts}_facts"
             return name if self.lookback is None else f"{name}_lookback_{self.lookback}_days"
         if self.lookback is not None:
-            return f"{self.model}_agg_lookback_{self.lookback}_days"
+            return f"{self.model}_agg_lookback_{self.lookback}_{self.lookback_unit}s"
         if self.to_date is not None:
             return f"{self.model}_agg_from_{self.to_date}_start"
         if self.offset is None:
@@ -362,15 +364,17 @@ class Planner:
         # the time dimension (DEC-34); without such a filter the SQL is unchanged.
         # A window over a distinct count (DEC-49) reads the distinct values of each day from a
         # facts CTE, under the same filters, widened as above when they can be.
-        lookbacks: dict[tuple[str, int], tuple[_Group, list[Template]]] = {}
+        lookbacks: dict[tuple[str, int, str], tuple[_Group, list[Template]]] = {}
         facts: dict[tuple[str, int | None], tuple[_Group, list[Template]]] = {}
         sources: dict[str, str] = {}
         for name, metric in windows.items():
             widened = self._lookback_filters(name, metric, dims, filters)
-            days = metric.window_days()
-            assert days is not None
+            reach = _window_reach(metric)
+            assert reach is not None
+            days, unit = reach
             owner = g.measure_owner[metric.measure]
             if g.models[owner].measures[metric.measure].agg in RECOMPUTED_WINDOW_AGGS:
+                assert unit == "day"  # `window_agg_refusal` refuses a distinct count in months
                 reach = None if widened is None else days
                 group, _ = facts.setdefault(
                     (metric.measure, reach),
@@ -384,7 +388,9 @@ class Planner:
                 continue
             if widened is None:
                 continue
-            group, _ = lookbacks.setdefault((owner, days), (_Group(owner, lookback=days), widened))
+            group, _ = lookbacks.setdefault(
+                (owner, days, unit), (_Group(owner, lookback=days, lookback_unit=unit), widened)
+            )
             group.inputs.setdefault(_Input(metric.measure, None), metric.measure)
             sources[name] = group.cte
         for group, widened in [*lookbacks.values(), *facts.values()]:
@@ -694,15 +700,15 @@ class Planner:
             return exp.Paren(this=substitute(template, resolve))
         if isinstance(metric, CumulativeMetric):
             if metric.window:
-                if metric.window_days() is None:
+                if _window_reach(metric) is None:
                     raise QueryError(
-                        f"`{name}`: window `{metric.window}` is not supported; "
-                        "only windows in days or weeks, such as `7 days` or `2 weeks`"
+                        f"`{name}`: window `{metric.window}` is not supported; only windows "
+                        "in days, weeks or months, such as `7 days`, `2 weeks` or `3 months`"
                     )
             agg = g.models[g.measure_owner[metric.measure]].measures[metric.measure].agg
             # Model validation refuses both too; kept for graphs compiled without `strict`.
             if metric.window:
-                problem = window_agg_refusal(agg)
+                problem = window_agg_refusal(agg, metric.window_months() is not None)
             else:
                 problem = cumulative_agg_problem(metric, agg)
             if problem:
@@ -1184,6 +1190,9 @@ class Planner:
         if not filters:
             return None
         time = self._time_dim(metric, dims)
+        months = metric.window_months()
+        if months is not None:
+            return self._month_lookback_filters(name, months, time, filters)
         days = metric.window_days()
         if time.grain != "day" or days is None:
             return None  # refused by `_window_select`
@@ -1193,6 +1202,33 @@ class Planner:
 
         def earlier(ref: DimensionRef) -> str:
             return _days(-1 if ref.grain is None else 0)
+
+        return self._split_time_filters(name, time, filters, later, earlier)
+
+    def _month_lookback_filters(
+        self, name: str, months: int, time: DimensionRef, filters: list[Template]
+    ) -> list[Template] | None:
+        """The request's filters for the facts a rolling window of N months reads (DEC-59), as
+        ``_lookback_filters`` splits them for days.
+
+        A fact in month P is read by the windows of the months P to P + (N - 1). Each lower
+        bound is read at the start of P moved N months later
+        (``trunc(t, month) + N months``), after every moment of those months; on the month,
+        quarter or year it is moved N - 1 months, since such a bound holds on a whole month.
+        Each upper bound is read at the start of P (``trunc(t, month)``), which no moment of a
+        later month is before, so a bound inside the last month keeps all of it; at month
+        grain or coarser it stays as written. The window of every month the filter keeps then
+        reads its N whole months."""
+        if time.grain != "month":
+            return None  # refused by `_window_select`
+
+        def later(ref: DimensionRef) -> str:
+            whole = ref.grain is not None and _nests("month", ref.grain)
+            amount = months - 1 if whole else months
+            return f"{_PRIOR}month:{amount}:month" if amount else ""
+
+        def earlier(ref: DimensionRef) -> str:
+            return "" if ref.grain and _nests("month", ref.grain) else f"{_START}month"
 
         return self._split_time_filters(name, time, filters, later, earlier)
 
@@ -1332,22 +1368,35 @@ class Planner:
 
         A window over a distinct count (DEC-49) is recomputed: ``prev`` is ``lookback``, the
         facts CTE of the distinct values of each day, and the window counts the values of its
-        days once each, so a customer seen on several days of the window counts once."""
+        days once each, so a customer seen on several days of the window counts once.
+
+        A window of N months (DEC-59) is the same self-join of the monthly aggregate on the
+        month range [cur - (N - 1) months, cur]: a month without facts is not a row but still
+        a month of the window, which a frame of N rows would get wrong."""
         time = self._time_dim(metric, dims)
-        if time.grain != "day":
+        reach = _window_reach(metric)
+        assert reach is not None
+        days, unit = reach
+        if time.grain != unit:
             raise QueryError(
-                f"`{metric.name}`: a rolling window needs the time dimension at day grain "
-                f"(`{_dim_member(time)}` requested); other grains are not supported yet"
+                f"`{metric.name}`: a rolling window in {unit}s needs the time dimension at "
+                f"{unit} grain (`{_dim_member(time)}` requested); other grains are not "
+                "supported yet"
             )
-        days = metric.window_days()
-        assert days is not None
         source = exp.to_table(value.table)
         earlier = exp.to_table(lookback) if lookback else source
         cur = {d: exp.column(d.alias, table="cur") for d in dims}
         prev = {d: exp.column(d.alias, table="prev") for d in dims}
+        # A month is read at its start, so adding months never meets a day the target month
+        # lacks (DEC-59): the window of month M is the range [M - (N - 1) months, M].
+        end = (
+            dialects.add_days(prev[time], days - 1)
+            if unit == "day"
+            else dialects.shift(prev[time], days - 1, unit)
+        )
         on = [
             exp.LTE(this=prev[time], expression=cur[time]),
-            exp.GTE(this=dialects.add_days(prev[time], days - 1), expression=cur[time]),
+            exp.GTE(this=end, expression=cur[time]),
         ] + [exp.NullSafeEQ(this=prev[d], expression=cur[d]) for d in dims if d != time]
         owner = self.graph.measure_owner[metric.measure]
         agg = self.graph.models[owner].measures[metric.measure].agg
@@ -1486,6 +1535,16 @@ _FLIPPED: dict[type[exp.Expression], type[exp.Expression]] = {
 # How a bound's reference is read in a widened template: a move (see ``_unshifted``), or ""
 # to keep it as written.
 _Move = Callable[[DimensionRef], str]
+
+
+def _window_reach(metric: CumulativeMetric) -> tuple[int, str] | None:
+    """``(N, "day")`` for a rolling window of N days (weeks read as days, DEC-27),
+    ``(N, "month")`` for one of N months (DEC-59), None for any other window."""
+    days = metric.window_days()
+    if days is not None:
+        return days, "day"
+    months = metric.window_months()
+    return None if months is None else (months, "month")
 
 
 def _days(days: int) -> str:

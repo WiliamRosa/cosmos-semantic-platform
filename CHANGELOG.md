@@ -9,6 +9,20 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Rolling windows in months (DEC-59): `window: 3 months` (trailing 3 months) or
+  `window: 12 months` (last 12 months) over a `sum`, `count`, `min` or `max` measure, queried
+  with the time dimension at month grain. Each month combines the N calendar months ending on
+  it, joined on the month range rather than a frame of N rows, so a month without facts does
+  not shift the window. A filter on the time dimension chooses the output months and each
+  window still reads its N whole months (`<model>_agg_lookback_<N>_months`), as for days
+  (DEC-34). A window in months at another grain, or over `count_distinct` or `avg`, is refused
+  with a reason (the latter by model validation too). The evidence records `time.months`
+  (`time.days` is null) and the formula reads "over the 3 months ending on each month". The
+  example gains `revenue_rolling_3_months`, `order_count_rolling_12_months` and
+  `largest_order_rolling_3_months`, with reference cases A76 to A79 (a year boundary and a
+  month without orders inside the window). The dbt, Cube and Databricks exports refuse such a
+  metric as metric loss. Requests without a window in months keep their SQL and `sql_hash`.
+
 - TPC-H on the container databases (DEC-47): the `examples/tpch` reference cases run on
   Postgres, SQL Server, MySQL, MariaDB and Oracle as well as DuckDB. `tests/test_tpch.py`
   copies DuckDB's scale-factor-0.01 data (about 79,000 rows, decimals and dates kept exact)

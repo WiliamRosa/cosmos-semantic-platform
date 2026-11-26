@@ -816,7 +816,7 @@ class _DbtWriter:
         if parts is None:
             raise _NotExported(
                 f"its window `{metric.window}` is not in days or weeks, the only units the "
-                "engine computes"
+                "dbt export carries"
             )
         node, measure = self.graph.measure(metric.measure)
         problem = combined_window_refusal(measure.agg)

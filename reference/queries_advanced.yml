@@ -1679,3 +1679,157 @@ cases:
         FROM w LEFT JOIN public.orders o
           ON o.ordered_at >= DATEADD(day, -7, w.wk) AND o.ordered_at < w.wk
         GROUP BY w.wk
+
+  # -- Rolling windows in months (DEC-59) ----------------------------------------------------
+  # A window of N months at month grain: the value of month M combines the months M - (N - 1)
+  # to M, a range of calendar months, never the last N rows. The hand-written SQL numbers each
+  # month (year * 12 + month), so a window crossing a year boundary needs no date arithmetic,
+  # and a month without orders still counts as a month of the window.
+
+  # Trailing 3 months of revenue over the 18 months of data, which always hold a January: the
+  # windows of January and February read the months of the year before.
+  - id: A76
+    category: tempo
+    phase: 3
+    title: Trailing 3-month revenue by month, across a year boundary
+    request:
+      metrics: [revenue, revenue_rolling_3_months]
+      dimensions: [orders.ordered_at__month]
+    sql: |
+      WITH m AS (
+        SELECT DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM public.orders
+        GROUP BY DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+             SUM(prev.revenue) AS revenue_rolling_3_months
+      FROM m cur LEFT JOIN m prev ON prev.k BETWEEN cur.k - 2 AND cur.k
+      GROUP BY cur.mon, cur.revenue
+    sql_by_dialect:
+      tsql: |
+        WITH m AS (
+          SELECT DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k, SUM(amount) AS revenue
+          FROM public.orders
+          GROUP BY DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+               SUM(prev.revenue) AS revenue_rolling_3_months
+        FROM m cur LEFT JOIN m prev ON prev.k BETWEEN cur.k - 2 AND cur.k
+        GROUP BY cur.mon, cur.revenue
+
+  # Orders of the last 12 months by status, where a filter the planner cannot split (NOT)
+  # leaves out 70 days, at least one whole month without orders among them: such a month is not
+  # a row, but it is still one of the 12 months of every window that spans it, so those windows
+  # hold fewer months of orders (a frame of 12 rows would reach too far back).
+  - id: A77
+    category: tempo
+    phase: 3
+    title: Orders of the last 12 months by status and month, across a month without orders
+    request:
+      metrics: [order_count_rolling_12_months]
+      dimensions: [orders.status, orders.ordered_at__month]
+      filters:
+        - "NOT ({orders.ordered_at} >= CURRENT_DATE - INTERVAL '300' DAY AND {orders.ordered_at} < CURRENT_DATE - INTERVAL '230' DAY)"
+    sql: |
+      WITH f AS (
+        SELECT status, ordered_at FROM public.orders
+        WHERE ordered_at < CURRENT_DATE - INTERVAL '300' DAY
+           OR ordered_at >= CURRENT_DATE - INTERVAL '230' DAY
+      ), m AS (
+        SELECT status, DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               COUNT(*) AS n
+        FROM f
+        GROUP BY status, DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.status AS orders__status, cur.mon AS orders__ordered_at__month,
+             SUM(prev.n) AS order_count_rolling_12_months
+      FROM m cur
+      LEFT JOIN m prev
+        ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
+        AND prev.k BETWEEN cur.k - 11 AND cur.k
+      GROUP BY cur.status, cur.mon
+    sql_by_dialect:
+      tsql: |
+        WITH f AS (
+          SELECT status, ordered_at FROM public.orders
+          WHERE ordered_at < DATEADD(day, -300, CAST(GETDATE() AS DATE))
+             OR ordered_at >= DATEADD(day, -230, CAST(GETDATE() AS DATE))
+        ), m AS (
+          SELECT status, DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k, COUNT(*) AS n
+          FROM f
+          GROUP BY status, DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT cur.status AS orders__status, cur.mon AS orders__ordered_at__month,
+               SUM(prev.n) AS order_count_rolling_12_months
+        FROM m cur
+        LEFT JOIN m prev
+          ON (prev.status = cur.status OR (prev.status IS NULL AND cur.status IS NULL))
+          AND prev.k BETWEEN cur.k - 11 AND cur.k
+        GROUP BY cur.status, cur.mon
+
+  # A filter on the time dimension chooses the output months, and each month's window still
+  # reads its 3 whole months (DEC-34 for days): the first month, cut by the lower bound, reads
+  # the 2 months before the range and all of itself; the last month, cut by the upper bound
+  # inside it, reads all of itself too. max takes the largest order of the window.
+  - id: A78
+    category: tempo
+    phase: 3
+    title: Largest order and revenue of the trailing 3 months, by month, 200 to 20 days ago
+    request:
+      metrics: [largest_order_rolling_3_months, revenue_rolling_3_months]
+      dimensions: [orders.ordered_at__month]
+      filters:
+        - "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '200' DAY"
+        - "{orders.ordered_at} < CURRENT_DATE - INTERVAL '20' DAY"
+    sql: |
+      WITH m AS (
+        SELECT EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               MAX(amount) AS top, SUM(amount) AS revenue
+        FROM public.orders
+        GROUP BY EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      ), kept AS (
+        SELECT DISTINCT DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k
+        FROM public.orders
+        WHERE ordered_at >= CURRENT_DATE - INTERVAL '200' DAY
+          AND ordered_at < CURRENT_DATE - INTERVAL '20' DAY
+      )
+      SELECT kept.mon AS orders__ordered_at__month,
+             MAX(m.top) AS largest_order_rolling_3_months,
+             SUM(m.revenue) AS revenue_rolling_3_months
+      FROM kept LEFT JOIN m ON m.k BETWEEN kept.k - 2 AND kept.k
+      GROUP BY kept.mon
+    sql_by_dialect:
+      tsql: |
+        WITH m AS (
+          SELECT YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
+                 MAX(amount) AS top, SUM(amount) AS revenue
+          FROM public.orders GROUP BY YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        ), kept AS (
+          SELECT DISTINCT DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k
+          FROM public.orders
+          WHERE ordered_at >= DATEADD(day, -200, CAST(GETDATE() AS DATE))
+            AND ordered_at < DATEADD(day, -20, CAST(GETDATE() AS DATE))
+        )
+        SELECT kept.mon AS orders__ordered_at__month,
+               MAX(m.top) AS largest_order_rolling_3_months,
+               SUM(m.revenue) AS revenue_rolling_3_months
+        FROM kept LEFT JOIN m ON m.k BETWEEN kept.k - 2 AND kept.k
+        GROUP BY kept.mon
+
+  - id: A79
+    category: tempo
+    phase: 3
+    title: A window in months by day is refused (only by month)
+    request:
+      metrics: [revenue_rolling_3_months]
+      dimensions: [orders.ordered_at__day]
+    expect_error: QueryError
