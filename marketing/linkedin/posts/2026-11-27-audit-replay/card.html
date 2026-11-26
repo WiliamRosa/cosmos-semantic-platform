@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Cosmos Semantic · audit and replay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0b1220;--bg2:#0f1a2e;--ink:#f8fafc;--muted:#94a3b8;--sky:#38bdf8;--red:#f87171;--green:#4ade80}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#222;font-family:Inter,system-ui,sans-serif;color:var(--ink)}
+#card{width:1080px;height:1350px;position:relative;overflow:hidden;padding:96px 88px;display:flex;flex-direction:column;
+ background:radial-gradient(900px 600px at 110% -10%,rgba(56,189,248,.18),transparent 60%),linear-gradient(180deg,var(--bg),var(--bg2))}
+.kicker{font-size:22px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--sky)}
+h1{margin-top:20px;font-size:68px;line-height:1.06;font-weight:800;letter-spacing:-.03em}
+h1 b{color:var(--sky)}
+.panel{margin-top:48px;border-radius:20px;padding:30px 36px;font-size:26px;line-height:1.45}
+.before{border:1px solid rgba(248,113,113,.4);background:rgba(248,113,113,.07)}
+.after{border:1px solid rgba(56,189,248,.35);background:rgba(56,189,248,.07)}
+.label{font-size:20px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px}
+.before .label{color:var(--red)}.after .label{color:var(--sky)}
+.panel p{color:#cbd5e1}
+ul{margin-top:8px;list-style:none;display:flex;flex-direction:column;gap:10px}
+li{color:#e2e8f0;font-size:26px}
+li::before{content:"✓  ";color:var(--green);font-weight:800}
+code{font:500 24px "JetBrains Mono",monospace;color:var(--sky)}
+.footer{position:absolute;left:88px;right:88px;bottom:56px;display:flex;justify-content:space-between;font-size:22px;color:var(--muted)}
+</style></head><body>
+<div id="card">
+<div class="kicker">Governance · audit</div>
+<h1>Show me how you got <b>that number.</b></h1>
+<div class="panel before"><div class="label">Without</div><p>The SQL was generated on the fly. Nobody kept it. Nobody can say why the figure changed.</p></div>
+<div class="panel after"><div class="label">With Cosmos · evidence and replay</div>
+<ul>
+<li>Formulas, rules and policies applied</li>
+<li>The date the number was computed for</li>
+<li>Hashes of the SQL</li>
+<li>Replay any audited query</li>
+</ul></div>
+<div class="panel after"><p>Replay verdicts: <code>identical</code> · <code>data_changed</code> · <code>model_changed</code> · <code>engine_changed</code></p></div>
+<div class="footer"><span>Open source · Apache 2.0</span><span>wiliamrosa.github.io/cosmos-semantic-platform</span></div>
+</div></body></html>
