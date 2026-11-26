@@ -1,2 +1,3 @@
-# Every change needs the maintainer's review (ADR 0013): agents and collaborators cannot merge alone.
+# The maintainer is requested as reviewer on every change (ADR 0013). Reviews are no longer required to merge:
+# the 18:00 run merges eligible agent pull requests after green checks (ADR 0017).
 * @WiliamRosa
