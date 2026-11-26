@@ -39,7 +39,13 @@
             "toolTip": "The application ID URI or client ID of the Microsoft Entra ID app registration that represents this API. Leave empty for anonymous/test mode.",
             "defaultValue": "",
             "constraints": {
-              "required": false
+              "required": false,
+              "validations": [
+                {
+                  "regex": "^.{0,2048}$",
+                  "message": "Must be 2048 characters or fewer."
+                }
+              ]
             }
           }
         ]
