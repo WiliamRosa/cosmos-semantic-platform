@@ -24,8 +24,12 @@
             "defaultValue": "",
             "constraints": {
               "required": false,
-              "regex": "^$|^https://login\\.microsoftonline\\.com/.+$",
-              "validationMessage": "Must be empty, or a URL starting with https://login.microsoftonline.com/"
+              "validations": [
+                {
+                  "regex": "^$|^https://login\\.microsoftonline\\.com/.+$",
+                  "message": "Must be empty, or a URL starting with https://login.microsoftonline.com/"
+                }
+              ]
             }
           },
           {
