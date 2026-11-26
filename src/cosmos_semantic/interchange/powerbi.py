@@ -1083,23 +1083,22 @@ class _Translator:
             if offset_unit == "month"
             else ""
         )
-        if func == "PARALLELPERIOD":
-            partial = (
-                "a filter on the date that cuts a period still gives DAX the whole earlier "
-                "months, while Cosmos applies the filter to the earlier period's facts too"
-            )
-        else:
-            partial = (
+        # A filter on the date chooses the rows, and Cosmos reads each row's whole earlier
+        # period (DEC-54), as PARALLELPERIOD does; DATEADD moves the dates left in context.
+        partial = (
+            ""
+            if func == "PARALLELPERIOD"
+            else (
                 "a filter on the date that cuts a period, or a date table that ends inside "
                 "one, gives DAX a partial earlier period (the same dates moved back), while "
-                "Cosmos applies the filter to the earlier period's facts too and otherwise "
-                "reads the whole earlier period"
+                "Cosmos reads the whole earlier period of each row the filter keeps; "
             )
+        )
         self.warnings.append(
             f"measure `{pbi_name}`: imported as `{inner}` read {offset} earlier; query it by "
             f"{where} (or by the fact's own date column related to it), where it matches DAX "
             f"on whole periods when `{dates.name}` holds every day of them{clamp}. It differs "
-            f"where DAX moves a set of dates: {partial}; grouping or filtering by other "
+            f"where DAX moves a set of dates: {partial}grouping or filtering by other "
             f"columns of `{dates.name}` (a weekday) gives different numbers, because Cosmos "
             "reads the earlier period with the same value; and Power BI also shows periods "
             "without facts whose earlier period has some, which Cosmos does not output"

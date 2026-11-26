@@ -1,7 +1,9 @@
 """Inputs of derived metrics read at an earlier period (DEC-18): the exact numbers on a small
 table built for the hard cases (a month without facts, December to January, month ends, a
 null period), on every database available, and the refusals at validation and query time.
-An input with an alias is read both shifted and unshifted in one expression (DEC-44)."""
+An input with an alias is read both shifted and unshifted in one expression (DEC-44). A
+filter on the time dimension chooses the rows, and the shifted input still reads the whole
+earlier period (DEC-54)."""
 
 from __future__ import annotations
 
@@ -128,9 +130,9 @@ def _norm(value):
     return value
 
 
-def _run(connector, metrics, dimensions, text: str = MODEL):
+def _run(connector, metrics, dimensions, text: str = MODEL, filters=()):
     compiled = Planner(_graph(text), connector.dialect, connector.config.schema_map).plan(
-        QueryRequest(metrics=metrics, dimensions=dimensions)
+        QueryRequest(metrics=metrics, dimensions=dimensions, filters=list(filters))
     )
     columns = [c.name for c in compiled.columns]
     rows = [
@@ -726,7 +728,8 @@ def test_no_alias_keeps_the_model_hash():
 
 # -- The SQL of existing offset requests does not change (DEC-44) ------------------------------
 # sha256 of the SQL each dialect gets for the requests below (or the refusal), as recorded on
-# main before DEC-44. A planner change that alters them on purpose rewrites the file with
+# main before DEC-44; A36, whose date filter is split since DEC-54, as recorded with DEC-54.
+# A planner change that alters them on purpose rewrites the file with
 # `COSMOS_UPDATE_PINNED_SQL=1 uv run pytest tests/test_offsets.py -k pinned`.
 PINNED = Path(__file__).parent / "fixtures" / "offset_sql_hashes.json"
 PIN_DIALECTS = (
@@ -809,3 +812,329 @@ def test_pinned_sql_of_existing_offset_requests():
     assert sum(not v.startswith("refused") for v in pinned.values()) >= 100
     changed = sorted(k for k in pinned if hashes.get(k) != pinned[k])
     assert not changed, f"{len(changed)} request-dialect pairs changed, such as {changed[:3]}"
+
+
+# -- A filter on the time dimension chooses the rows (DEC-54) --------------------------------
+# The shifted input reads the whole earlier period of every row the filter keeps, before the
+# filter's range too; the other filters apply to its facts first. Reference cases A36 and A66
+# to A69 check the numbers against hand-written SQL on the example; these check the shapes on
+# the small table above, on every database available.
+SINCE_5_JANUARY = "{sales.sold_at} >= DATE '2025-01-05'"
+
+
+def test_a_date_filter_keeps_the_month_before_the_range(source):
+    """January, cut by the filter, reads all of December; March still reads an empty February.
+    The growth compares January's filtered amount with the whole December."""
+    rows = _run(
+        source, ["amount", "amount_prev_month", "amount_growth"], [MONTH], filters=[SINCE_5_JANUARY]
+    )
+    assert rows == [
+        ("2025-01-01", 10.0, 10.0, 0.0),
+        ("2025-03-01", 40.0, None, None),
+        ("2025-04-01", 50.0, 40.0, 0.25),
+    ]
+
+
+def test_an_upper_bound_inside_a_month(source):
+    """The bound keeps January (its 1 January); January reads all of December, which is
+    before the bound anyway, and December all of November."""
+    rows = _run(
+        source,
+        ["amount", "amount_prev_month", "amount_growth"],
+        [MONTH],
+        filters=["{sales.sold_at} < DATE '2025-01-02'"],
+    )
+    assert rows == [
+        ("2024-11-01", 5.0, None, None),
+        ("2024-12-01", 10.0, 5.0, 1.0),
+        ("2025-01-01", 20.0, 10.0, 1.0),
+    ]
+
+
+def test_other_filters_still_apply_to_the_earlier_period(source):
+    """Of kind `b`, January's month before has no facts: the kind filter cuts December too."""
+    kind_b = _run(
+        source,
+        ["amount", "amount_prev_month"],
+        [MONTH],
+        filters=[SINCE_5_JANUARY, "{sales.kind} = 'b'"],
+    )
+    assert kind_b == [("2025-01-01", 7.0, None)]
+    kind_a = _run(
+        source,
+        ["amount", "amount_prev_month"],
+        [MONTH],
+        filters=[SINCE_5_JANUARY, "{sales.kind} = 'a'"],
+    )
+    assert kind_a == [
+        ("2025-01-01", 3.0, 10.0),
+        ("2025-03-01", 40.0, None),
+        ("2025-04-01", 50.0, 40.0),
+    ]
+
+
+def test_day_and_week_offsets_under_a_date_filter(source):
+    """By week, the week of 6 January reads the week of 30 December, before the range. By day,
+    an equality and an IN list keep their days, which read the day before."""
+    rows = _run(
+        source,
+        ["amount", "amount_week_before"],
+        ["sales.sold_at__week"],
+        filters=["{sales.sold_at} >= DATE '2025-01-07'"],
+    )
+    assert rows == [
+        ("2025-01-06", 3.0, 30.0),
+        ("2025-01-27", 7.0, None),
+        ("2025-03-31", 40.0, None),
+        ("2025-04-28", 50.0, None),
+    ]
+    day = "sales.sold_at__day"
+    assert _run(
+        source, ["lines_day_before"], [day], filters=[f"{{{day}}} = DATE '2025-01-01'"]
+    ) == [("2025-01-01", 1)]
+    assert _run(
+        source,
+        ["lines_day_before"],
+        [day],
+        filters=[f"{{{day}}} IN (DATE '2025-01-01', DATE '2025-01-08')"],
+    ) == [("2025-01-01", 1), ("2025-01-08", None)]
+
+
+def test_quarter_and_year_offsets_under_a_filter_at_another_grain(source):
+    """A month filter by quarter keeps the first quarter of 2025, which reads all of the
+    fourth quarter of 2024; a year filter keeps 2025, which reads all of 2024."""
+    assert _run(
+        source,
+        ["amount", "amount_prev_quarter"],
+        ["sales.sold_at__quarter"],
+        filters=["{sales.sold_at__month} IN (DATE '2025-01-01')"],
+    ) == [("2025-01-01", 30.0, 15.0)]
+    assert _run(
+        source,
+        ["amount", "amount_prev_year"],
+        ["sales.sold_at__year"],
+        filters=["{sales.sold_at__year} = DATE '2025-01-01'"],
+    ) == [("2025-01-01", 120.0, 15.0)]
+
+
+def test_ranges_joined_by_or(source):
+    rows = _run(
+        source,
+        ["amount", "amount_prev_month", "amount_growth"],
+        [MONTH],
+        filters=[
+            "{sales.sold_at} < DATE '2024-12-01' OR {sales.sold_at__month} = DATE '2025-01-01'"
+        ],
+    )
+    assert rows == [("2024-11-01", 5.0, None, None), ("2025-01-01", 30.0, 10.0, 2.0)]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "NOT ({sales.sold_at} < DATE '2025-01-05')",  # a shape the planner cannot split
+        "{sales.shipped_at} >= DATE '2025-01-05'",  # another time dimension
+    ],
+)
+def test_other_filters_on_time_still_cut_the_earlier_period(source, text):
+    """As before DEC-54: the filter applies to the facts first, so January has no month
+    before."""
+    rows = _run(source, ["amount", "amount_prev_month"], [MONTH], filters=[text])
+    assert rows == [
+        ("2025-01-01", 10.0, None),
+        ("2025-03-01", 40.0, None),
+        ("2025-04-01", 50.0, 40.0),
+    ]
+
+
+# Filters on the time dimension the planner splits: bounds on the column and at a grain, open
+# at either end, BETWEEN, equality, IN lists, AND and OR, with a filter on another member.
+SPLIT_FILTERS = [
+    [SINCE_5_JANUARY],
+    ["{sales.sold_at} > DATE '2025-01-01'"],
+    ["{sales.sold_at} <= DATE '2025-01-08'"],
+    ["{sales.sold_at} BETWEEN DATE '2025-01-05' AND DATE '2025-04-01'"],
+    ["{sales.sold_at__day} >= DATE '2025-01-08'", "{sales.sold_at__day} < DATE '2025-04-30'"],
+    ["{sales.sold_at__week} = DATE '2024-12-30'"],
+    ["{sales.sold_at__month} IN (DATE '2025-01-01', DATE '2025-04-01')"],
+    ["{sales.sold_at__quarter} >= DATE '2025-01-01'"],
+    ["{sales.sold_at__year} = DATE '2025-01-01'", "{sales.kind} = 'a'"],
+    ["{sales.sold_at} < DATE '2024-12-01' OR {sales.sold_at} >= DATE '2025-03-31'"],
+]
+SHIFTED_BY_GRAIN = [
+    ("amount_prev_month", "month"),
+    ("avg_amount_prev_month", "month"),
+    ("amount_prev_quarter", "quarter"),
+    ("amount_prev_year", "month"),
+    ("amount_prev_year", "year"),
+    ("amount_week_before", "day"),
+    ("amount_week_before", "week"),
+    ("lines_day_before", "day"),
+]
+
+
+@pytest.mark.parametrize(("metric", "grain"), SHIFTED_BY_GRAIN)
+def test_a_split_filter_only_chooses_the_rows(source, metric, grain):
+    """For every split filter: the rows are those of the input read unshifted under the same
+    filters, and each row's shifted value is the one the request gives without the date
+    filter (with only the other filters), so the earlier period is read whole."""
+    dim = f"sales.sold_at__{grain}"
+    for filters in SPLIT_FILTERS:
+        others = [f for f in filters if "sold_at" not in f]
+        whole = {r[0]: r[1] for r in _run(source, [metric], [dim], filters=others)}
+        unshifted = metric.replace("_prev_month", "").replace("_prev_quarter", "")
+        unshifted = unshifted.replace("_prev_year", "").replace("_week_before", "")
+        unshifted = unshifted.replace("_day_before", "")
+        rows = _run(source, [unshifted, metric], [dim], filters=filters)
+        kept = _run(source, [unshifted], [dim], filters=filters)
+        assert [r[:2] for r in rows] == kept, filters
+        assert [r[2] for r in rows] == [whole[r[0]] for r in rows], filters
+
+
+def test_the_split_is_in_the_trace_and_the_evidence(source):
+    """Each requested metric that reads a shifted input records the split; the evidence says
+    `time_after`, or `before` with a shape the planner cannot split."""
+    from cosmos_semantic.evidence import EvidenceBuilder
+
+    graph = _graph()
+    request = QueryRequest(
+        metrics=["amount", "amount_prev_month", "amount_growth"],
+        dimensions=[MONTH],
+        filters=[SINCE_5_JANUARY, "{sales.kind} = 'a'"],
+    )
+    trace = Planner(graph, source.dialect).plan(request).trace
+    split = {"after": [SINCE_5_JANUARY], "before": []}
+    assert trace.window_filters == {"amount_prev_month": split, "amount_growth": split}
+    builder = EvidenceBuilder(graph)
+    assert builder.time("amount_growth", request, trace)["filters_applied"] == "time_after"
+    unsplit = request.model_copy(update={"filters": ["NOT ({sales.sold_at} < DATE '2025-01-05')"]})
+    trace = Planner(graph, source.dialect).plan(unsplit).trace
+    assert builder.time("amount_growth", unsplit, trace)["filters_applied"] == "before"
+
+
+def _offset_cte(sql: str, name: str = "sales_agg_offset_1_month") -> str:
+    return sql.split(f"{name} AS (")[1].split("), ")[0]
+
+
+def test_bounds_are_read_on_the_later_period():
+    """A fact of the period P is read for the row P + offset: an upper bound at that row's
+    start, a lower bound at the start of the period after it, and a bound at a grain whose
+    periods hold whole rows at the row's start too."""
+    planner = Planner(_graph(), "postgres")
+
+    def cte(metric, dimension, text, name="sales_agg_offset_1_month"):
+        request = QueryRequest(metrics=[metric], dimensions=[dimension], filters=[text])
+        return _offset_cte(planner.plan(request).sql, name)
+
+    month = "DATE_TRUNC('MONTH', sales.sold_at)"
+    lower = cte("amount_prev_month", MONTH, "{sales.sold_at} >= DATE '2025-01-05'")
+    assert f"{month} + INTERVAL '2 MONTH' >= CAST('2025-01-05' AS DATE)" in lower
+    upper = cte("amount_prev_month", MONTH, "{sales.sold_at} < DATE '2025-01-05'")
+    assert f"{month} + INTERVAL '1 MONTH' < CAST('2025-01-05' AS DATE)" in upper
+    equal = cte("amount_prev_month", MONTH, f"{{{MONTH}}} = DATE '2025-01-01'")
+    assert f"DATE_TRUNC('MONTH', {month} + INTERVAL '1 MONTH') <= " in equal
+    assert f"DATE_TRUNC('MONTH', {month} + INTERVAL '1 MONTH') >= " in equal
+    week = "DATE_TRUNC('WEEK', sales.sold_at)"
+    weekly = cte(
+        "amount_week_before",
+        "sales.sold_at__week",
+        "{sales.sold_at__day} >= DATE '2025-01-07'",
+        "sales_agg_offset_7_day",
+    )
+    assert f"DATE_TRUNC('DAY', {week} + INTERVAL '14 DAY') >= " in weekly
+    yearly = cte(
+        "amount_prev_year",
+        MONTH,
+        "{sales.sold_at__year} = DATE '2025-01-01'",
+        "sales_agg_offset_12_month",
+    )
+    assert f"DATE_TRUNC('YEAR', {month} + INTERVAL '12 MONTH') >= " in yearly
+
+
+def test_rows_come_from_the_filter_alone():
+    """Alone in the request, the shifted input adds the periods of an aggregate under the
+    request's own filters, with no measure, to the rows instead of its own."""
+    request = QueryRequest(
+        metrics=["amount_prev_month"], dimensions=[MONTH], filters=[SINCE_5_JANUARY]
+    )
+    sql = Planner(_graph(), "postgres").plan(request).sql
+    rows = sql.split("sales_agg AS (")[1].split("), ")[0]
+    assert "SUM(" not in rows and "sales.sold_at >= CAST('2025-01-05' AS DATE)" in rows
+    spine = sql.split("dimensions AS (")[1]
+    assert "FROM sales_agg" in spine and "FROM sales_agg_offset_1_month" not in spine.split(")")[0]
+
+
+@pytest.mark.parametrize("dialect", PIN_DIALECTS + ("trino",))
+def test_date_filtered_offset_sql_for_every_dialect(dialect):
+    request = QueryRequest(
+        metrics=["amount_growth", "amount_prev_year"],
+        dimensions=["sales.kind", MONTH],
+        filters=[
+            "{sales.sold_at} >= CURRENT_DATE - INTERVAL '90' DAY",
+            "{sales.sold_at__month} IN (CURRENT_DATE - INTERVAL '30' DAY, CURRENT_DATE)",
+            "{sales.kind} <> 'c'",
+        ],
+    )
+    compiled = Planner(_graph(), dialect).plan(request)
+    ensure_read_only(compiled.sql, dialect)
+    assert set(compiled.trace.window_filters) == {"amount_growth", "amount_prev_year"}
+    if dialect == "tsql":
+        assert "INTERVAL" not in compiled.sql.upper()
+
+
+# Digest of the SQL of each request on every dialect, from the planner before DEC-54, on the
+# example. An offset request without a filter on its time dimension that the planner splits
+# keeps its SQL, so its `sql_hash` too (the requests without filters are pinned above). A
+# SQLGlot upgrade that changes how SQL is printed changes them all; regenerate them then.
+UNSPLIT_DIALECTS = [
+    "duckdb",
+    "postgres",
+    "tsql",
+    "databricks",
+    "snowflake",
+    "mysql",
+    "oracle",
+    "bigquery",
+    "trino",
+]
+UNSPLIT = {
+    "c376e71610660b56": {
+        "metrics": ["revenue", "revenue_mom_growth"],
+        "dimensions": ["orders.status", "orders.ordered_at__month"],
+        "filters": ["{orders.status} <> 'cancelled'"],
+    },
+    # A filter on another time dimension applies to the facts first, as before.
+    "05e85f09aeaa4a2c": {
+        "metrics": ["revenue_prev_month", "revenue_yoy_growth"],
+        "dimensions": ["orders.ordered_at__month"],
+        "filters": ["{customers.created_at} >= CURRENT_DATE - INTERVAL '400' DAY"],
+    },
+    # Shapes the planner cannot split (NOT, a function, the hour grain) keep cutting.
+    "7c5250a114df4c8f": {
+        "metrics": ["order_count_7_days_earlier"],
+        "dimensions": ["orders.ordered_at__day"],
+        "filters": ["NOT ({orders.ordered_at} < CURRENT_DATE - INTERVAL '45' DAY)"],
+    },
+    "ae09ab29753bf87f": {
+        "metrics": ["revenue_prev_month"],
+        "dimensions": ["orders.ordered_at__month"],
+        "filters": ["EXTRACT(MONTH FROM {orders.ordered_at}) <> 2"],
+    },
+    "8666c44b8f600f78": {
+        "metrics": ["revenue_mom_growth"],
+        "dimensions": ["orders.ordered_at__month"],
+        "filters": ["{orders.ordered_at__hour} >= CURRENT_DATE - INTERVAL '45' DAY"],
+    },
+}
+
+
+@pytest.mark.parametrize("digest", list(UNSPLIT))
+def test_offset_requests_without_a_split_date_filter_keep_their_sql_hash(graph, digest):
+    import hashlib
+
+    from cosmos_semantic.evidence import sql_hash
+
+    request = QueryRequest(**UNSPLIT[digest], as_of=dt.date(2026, 11, 20))
+    principal = Principal(user={"region": "Northeast"})
+    hashes = [sql_hash(Planner(graph, d).plan(request, principal).sql) for d in UNSPLIT_DIALECTS]
+    assert hashlib.sha256("\n".join(hashes).encode()).hexdigest()[:16] == digest

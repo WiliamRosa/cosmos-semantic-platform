@@ -487,8 +487,9 @@ def _measure(cube, model, measure, dims, metrics, warnings, notes) -> bool:
                 f"{where}: `time_shift` read as the offset `{offset}`, queried by "
                 f"{' or '.join(grains)}, where the periods both return have the same numbers. "
                 "Cube also answers other grains and returns periods without facts whose earlier "
-                "period has some, and it applies a date range after the shift, while Cosmos "
-                "filters the facts first"
+                "period has some, and it applies a date range to the shifted time, so a range "
+                "that cuts a period reads the same dates moved back, while Cosmos reads the "
+                "whole earlier period of each row the filter keeps"
             )
         metrics.append(metric)
         return True
@@ -1468,8 +1469,9 @@ class _CubeWriter:
             "grains Cosmos refuses (a month shift by day clamps month ends) and shifts every "
             "time dimension of the query; it full-joins the shifted values, so it also returns "
             "periods without facts whose earlier period has some; and it applies a date range "
-            "to the shifted time, while Cosmos filters the facts first, so a time filter leaves "
-            "out the earlier periods in Cosmos only. A Cube query with no time member applies "
+            "to the shifted time, so a range that cuts a period reads the same dates moved "
+            "back, while Cosmos reads the whole earlier period of each row the range keeps. "
+            "A Cube query with no time member applies "
             "no shift and returns the unshifted total, and one with only a date range returns "
             "the earlier period's total; Cosmos refuses both requests"
         )

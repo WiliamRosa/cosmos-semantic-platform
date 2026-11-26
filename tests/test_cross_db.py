@@ -330,6 +330,45 @@ def _offset_requests(graph, count: int, seed: int):
     return produced
 
 
+def _offset_date_filter_requests(graph, count: int, seed: int):
+    """Offset requests with a filter on the request's time dimension and up to one other
+    filter (DEC-54), at the grains each offset fits, with up to one other dimension. Its own
+    generator, as for rolling windows."""
+    rng = random.Random(seed)
+    shifted = sorted(n for n in graph.metrics if _offset_grains(graph, n))
+    times, plain = [], []
+    for m, node in graph.models.items():
+        for d, spec in node.dimensions.items():
+            if not spec.sensitivity:
+                (times if spec.type == "time" else plain).append(f"{m}.{d}")
+    times, plain = sorted(times), sorted(plain)
+    produced, attempts = [], 0
+    while len(produced) < count and attempts < count * 50:
+        attempts += 1
+        metric, time = rng.choice(shifted), rng.choice(times)
+        request = QueryRequest(
+            metrics=[metric],
+            dimensions=[
+                *rng.sample(plain, rng.randint(0, 1)),
+                f"{time}__{rng.choice(_offset_grains(graph, metric))}",
+            ],
+            filters=[
+                rng.choice(DATE_FILTERS).format(t=time),
+                *rng.sample(FILTERS, rng.choice([0, 1])),
+            ],
+        )
+        principal = Principal(
+            user={"region": rng.choice(REGIONS)}, channel=rng.choice(["api", "mcp"])
+        )
+        try:
+            for dialect in DIALECTS:
+                Planner(graph, dialect).plan(request, principal)
+        except CosmosError:
+            continue
+        produced.append((request, principal))
+    return produced
+
+
 METRIC_CONDITIONS = ["> 0", ">= 1000", "< 50000", "<= 2500.5", "IS NOT NULL", "IS NULL"]
 
 
@@ -389,6 +428,7 @@ ROLLING_PER_RUN = 12
 ROLLING_DATE_FILTER_PER_RUN = 8
 TO_DATE_FILTER_PER_RUN = 8
 OFFSET_PER_RUN = 12
+OFFSET_DATE_FILTER_PER_RUN = 8
 METRIC_FILTER_PER_RUN = 8
 
 
@@ -444,6 +484,17 @@ def test_to_date_filter_draws_are_deterministic_and_split(graph):
     assert any(start)
 
 
+def test_offset_date_filter_draws_are_deterministic_and_split(graph):
+    first = _offset_date_filter_requests(graph, OFFSET_DATE_FILTER_PER_RUN, seed=2026)
+    assert len(first) == OFFSET_DATE_FILTER_PER_RUN
+    assert first == _offset_date_filter_requests(graph, OFFSET_DATE_FILTER_PER_RUN, seed=2026)
+    split = [
+        bool(Planner(graph, "duckdb").plan(request, principal).trace.window_filters)
+        for request, principal in first
+    ]
+    assert any(split)
+
+
 def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     failures = []
     requests = _requests(graph, REQUESTS_PER_RUN, seed=2026)
@@ -460,6 +511,9 @@ def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     shifted = _offset_requests(graph, OFFSET_PER_RUN, seed=2026)
     assert len(shifted) == OFFSET_PER_RUN
     requests += shifted
+    shifted_dated = _offset_date_filter_requests(graph, OFFSET_DATE_FILTER_PER_RUN, seed=2026)
+    assert len(shifted_dated) == OFFSET_DATE_FILTER_PER_RUN
+    requests += shifted_dated
     kept = _metric_filter_requests(graph, METRIC_FILTER_PER_RUN, seed=2026)
     assert len(kept) == METRIC_FILTER_PER_RUN
     requests += kept

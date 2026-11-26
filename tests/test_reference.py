@@ -122,14 +122,19 @@ def test_there_are_twenty_cases():
 
 
 def test_offset_cases_cross_a_year_change_and_an_empty_month(graph, duckdb_connector):
-    """A35 and A36 prove what they claim on any day the suite runs (the data follows the
-    clock): A35 has a January that reads the December before, and A36 has a month without
-    orders whose next month gets NULL (DEC-18)."""
+    """A35, A36 and A67 prove what they claim on any day the suite runs (the data follows the
+    clock): A35 has a January that reads the December before (DEC-18). A36's filter leaves a
+    month out, and the month after it still reads that month's whole revenue (DEC-54); A67
+    leaves the same month out with a filter the planner cannot split, so the month after it
+    gets NULL."""
     by_id = {c.id: c for c in ADVANCED}
     month = "orders__ordered_at__month"
 
-    def rows(case_id):
-        compiled = Planner(graph, "duckdb").plan(by_id[case_id].request)
+    def rows(case_id, filters=None):
+        request = by_id[case_id].request
+        if filters is not None:
+            request = request.model_copy(update={"filters": filters})
+        compiled = Planner(graph, "duckdb").plan(request)
         return duckdb_connector.execute(compiled.sql).to_pylist()
 
     def index(value):
@@ -141,13 +146,27 @@ def test_offset_cases_cross_a_year_change_and_an_empty_month(graph, duckdb_conne
     for k in januaries:
         assert a35[k]["revenue_prev_month"] == pytest.approx(a35[k - 1]["revenue"])
 
-    completed = {index(r[month]): r for r in rows("A36") if r["orders__status"] == "completed"}
-    months = sorted(completed)
-    gaps = [k for k, before in zip(months[1:], months, strict=False) if k - before > 1]
-    assert gaps, "the filter must leave a month without orders"
-    for k in gaps:
-        assert completed[k]["revenue_prev_month"] is None
-        assert completed[k]["revenue_mom_growth"] is None
+    def completed(case_id, filters=None):
+        return {
+            index(r[month]): r
+            for r in rows(case_id, filters)
+            if r["orders__status"] == "completed" and r[month] is not None
+        }
+
+    def gaps(found):
+        months = sorted(found)
+        return [k for k, before in zip(months[1:], months, strict=False) if k - before > 1]
+
+    unfiltered = completed("A36", [])
+    a36, a67 = completed("A36"), completed("A67")
+    assert set(a36) == set(a67), "both filters keep the same months"
+    assert gaps(a36), "the filter must leave a month without orders"
+    for k in gaps(a36):
+        assert k - 1 in unfiltered and k - 1 not in a36
+        assert a36[k]["revenue_prev_month"] == pytest.approx(unfiltered[k]["revenue_prev_month"])
+        assert a36[k]["revenue_mom_growth"] is not None
+        assert a67[k]["revenue_prev_month"] is None
+        assert a67[k]["revenue_mom_growth"] is None
 
 
 # -- Offsets in weeks and years (DEC-46) ---------------------------------------------------

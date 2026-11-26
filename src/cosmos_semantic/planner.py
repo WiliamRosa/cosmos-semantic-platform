@@ -327,10 +327,35 @@ class Planner:
         if len(data_sources) > 1:
             raise QueryError("the requested metrics live in different data sources")
 
+        # Inputs read at an earlier period read it whole when the request filters the time
+        # dimension (DEC-54): the filters of their CTE are moved by the offset, and the rows
+        # come from the model's aggregate under the request's own filters (a CTE of its periods
+        # only, when no input reads the model unshifted). Without such a filter the SQL is
+        # unchanged.
+        earlier: dict[str, list[Template]] = {}
+        rows_from: dict[str, str] = {}
+        if time is not None:
+            readers = [
+                name
+                for name, expression in metric_exprs.items()
+                if any(c.table in shifts for c in expression.find_all(exp.Column))
+            ]
+            for group in list(groups.values()):
+                if group.offset is None:
+                    continue
+                widened = self._offset_filters(readers, group.offset, time, filters)
+                if widened is None:
+                    continue
+                earlier[group.cte] = widened
+                rows = groups.setdefault((group.model, None), _Group(group.model))
+                rows_from[group.cte] = rows.cte
+
         ctes: list[tuple[str, exp.Select]] = []
         used_models: set[str] = set()
         for group in groups.values():
-            select, joined = self._group_select(group, dims, filters, principal)
+            select, joined = self._group_select(
+                group, dims, earlier.get(group.cte, filters), principal
+            )
             ctes.append((group.cte, select))
             used_models |= joined
         # Rolling windows read their facts from a CTE of their own when the request filters
@@ -397,7 +422,7 @@ class Planner:
             metric_exprs[name] = exp.column(column.name, table=f"{name}_running")
 
         final = self._final_select(
-            ctes, dims, metric_exprs, cumulative, request, shifts, time, kept
+            ctes, dims, metric_exprs, cumulative, request, shifts, time, kept, rows_from
         )
         clock = now if request.as_of is None else dt.datetime.combine(request.as_of, dt.time())
         final = _pin_clock(final, as_of, clock)
@@ -1045,8 +1070,10 @@ class Planner:
         shifts: dict[str, tuple[int, str]] | None = None,
         time: DimensionRef | None = None,
         kept: exp.Expression | None = None,
+        rows_from: dict[str, str] | None = None,
     ) -> exp.Select:
         shifts = shifts or {}
+        rows_from = rows_from or {}
         # A CTE only feeding another one (an aggregate under a rolling window) is not joined.
         used = {c.table for e in metric_exprs.values() for c in e.find_all(exp.Column)}
         names = [name for name, _ in ctes if name in used]
@@ -1056,7 +1083,9 @@ class Planner:
         # earlier period (DEC-18) adds its own periods to the spine, unshifted, and joins on
         # its period moved forward by the offset: the rows are the periods with facts, and a
         # period whose earlier period has none gets NULL. Plain equality on the period, so a
-        # null period never matches.
+        # null period never matches. A CTE in ``rows_from`` adds the periods of the CTE it
+        # names instead (DEC-54): its own reach before the request's filters on the time
+        # dimension.
         use_spine = (len(names) > 1 or bool(shifts)) and bool(dims)
         anchor = "dimensions" if use_spine else names[0]
 
@@ -1095,7 +1124,8 @@ class Planner:
         for name, cte in ctes:
             select = select.with_(name, as_=cte)
         if use_spine:
-            parts = [exp.select(*[exp.column(d.alias) for d in dims]).from_(n) for n in names]
+            sources = dict.fromkeys(rows_from.get(n, n) for n in names)
+            parts = [exp.select(*[exp.column(d.alias) for d in dims]).from_(n) for n in sources]
             spine: exp.Query = parts[0]
             for part in parts[1:]:
                 spine = exp.union(spine, part, distinct=True)
@@ -1198,6 +1228,47 @@ class Planner:
             return "" if ref.grain and _nests(row, ref.grain) else f"{_START}{row}"
 
         return self._split_time_filters(name, time, filters, later, earlier)
+
+    def _offset_filters(
+        self,
+        readers: list[str],
+        offset: tuple[int, str],
+        time: DimensionRef,
+        filters: list[Template],
+    ) -> list[Template] | None:
+        """The request's filters for the facts of inputs read ``offset`` earlier (DEC-54), or
+        None when none of them is on the request's time dimension or none can be split.
+
+        The shapes split are those of a rolling window (``_lookback_filters``). A fact in the
+        period P (at the query's grain G) is read for the row Q = P + offset, so each bound is
+        read on Q rather than on the fact: an upper bound at Q's start
+        (``trunc(t, G) + offset``), which no moment of Q is before, and a lower bound at the
+        start of the period after Q (``trunc(t, G) + offset + 1 G``), which every moment of Q
+        is before; at a grain whose periods hold whole rows, a bound holds on all of Q or none
+        of it, so it reads Q's start too. The facts kept are then every fact of the earlier
+        period of each row the filter can keep: the shifted input reads the whole earlier
+        period, and the filter chooses the rows. The trace records the split for each
+        requested metric in ``readers``."""
+        grain = time.grain
+        assert grain is not None  # `_offset_time` refuses an offset without a grain
+        amount, unit = offset
+        length, length_unit = _PERIOD_LENGTHS[grain]
+        assert unit == length_unit  # `offset_grain_problem` pairs days with days
+
+        def start(ref: DimensionRef) -> str:
+            return f"{_PRIOR}{grain}:{amount}:{unit}"
+
+        def end(ref: DimensionRef) -> str:
+            if ref.grain and _nests(grain, ref.grain):
+                return start(ref)
+            return f"{_PRIOR}{grain}:{amount + length}:{unit}"
+
+        widened = self._split_time_filters(readers[0], time, filters, end, start)
+        split = self._trace.window_filters.get(readers[0])
+        for name in readers[1:]:
+            if split is not None:
+                self._trace.window_filters[name] = {k: list(v) for k, v in split.items()}
+        return widened
 
     def _split_time_filters(
         self,
@@ -1338,6 +1409,9 @@ class Planner:
             return dialects.shift(self._trunc(column, period), amount, unit)
         if move.startswith(_START):
             return self._trunc(column, move[len(_START) :])
+        if move.startswith(_PRIOR):
+            grain, amount, unit = move[len(_PRIOR) :].split(":")
+            return dialects.shift(self._trunc(column, grain), int(amount), unit)
         return dialects.add_days(column, int(move))
 
     def _cumulative(self, value, metric: CumulativeMetric, dims, dim_out) -> exp.Expression:
@@ -1387,6 +1461,9 @@ class Planner:
 _SHIFT = "@"
 _END = "end:"
 _START = "start:"
+# For an input read at an earlier period (DEC-54), ``{member}@prior:<grain>:<N>:<unit>`` is read
+# at the start of its period at the query's grain, moved N days or months later.
+_PRIOR = "prior:"
 # The length of each period, as ``dialects.shift`` adds it to the period's start.
 _PERIOD_LENGTHS = {
     "day": (1, "day"),
@@ -1423,8 +1500,8 @@ def _nests(fine: str, coarse: str) -> bool:
 
 
 def _unshifted(r: str) -> tuple[str, str]:
-    """A reference of a widened template and how it is read: ``N`` days later, ``end:<period>``
-    or ``start:<grain>`` ("" when as written)."""
+    """A reference of a widened template and how it is read: ``N`` days later, ``end:<period>``,
+    ``start:<grain>`` or ``prior:<grain>:<N>:<unit>`` ("" when as written)."""
     head, mark, move = r.partition(_SHIFT)
     return (head, move) if mark else (r, "")
 
@@ -1439,8 +1516,10 @@ def _widen(
     further back. For a grain-to-date metric (``Planner._to_date_filters``, DEC-48) they reach
     back to the start of the period: ``later`` reads a lower bound at the start of the next
     period, after every moment of the period up to a kept row, and ``earlier`` reads an upper
-    bound at the start of the row, which no fact of the row or of an earlier row is after. The
-    argument below is the rolling window's; the same monotonicity holds for both.
+    bound at the start of the row, which no fact of the row or of an earlier row is after. For
+    an input read at an earlier period (``Planner._offset_filters``, DEC-54) they are read on
+    the row the fact is read for, its period moved forward by the offset. The argument below is
+    the rolling window's; the same monotonicity holds for all three.
 
     The result only has to keep a superset of the facts the windows need: the output days are
     chosen by the original filter, and the self-join keeps only the N days of each window. For

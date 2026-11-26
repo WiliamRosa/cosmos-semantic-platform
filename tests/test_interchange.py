@@ -877,7 +877,7 @@ def test_ossie_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     resolver = _glossary_resolver(other)
     assert {"R17", "R18", "A22", "A24"} <= {c.id for c in REFERENCE}
-    assert len(REFERENCE) == 76
+    assert len(REFERENCE) == 80
     for case in REFERENCE:
         result = run_case(case, other, connector, resolver=resolver)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1299,10 +1299,12 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     cases = _cube_cases(graph.project, policies=False, lost=CUBE_LOST)
     # A08 (year-to-date by month), A09 (month-to-date by status and day), the rolling
     # windows A29, A30 (by status, from 45 days ago) and A34 (a minimum), and the offsets A35
-    # to A37 and the aliased ones A49 to A51 (DEC-51) among them.
+    # to A37, the aliased ones A49 to A51 (DEC-51) and the date-filtered ones A66 to A69
+    # (DEC-54) among them.
     assert {"A08", "A09", "A29", "A30", "A34"} <= {c.id for c in cases}
     assert {"A35", "A36", "A37", "A49", "A50", "A51"} <= {c.id for c in cases}
-    assert len(cases) == 43
+    assert {"A66", "A67", "A68", "A69"} <= {c.id for c in cases}
+    assert len(cases) == 47
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -1314,7 +1316,7 @@ def test_cube_export_same_numbers(graph, tmp_path, source, request):
     # re-imported model too; A33 is the 30-day window of customers by segment.
     assert {"R17", "R18", "A08", "A09", "A32", "A33", "A39", "A40", "A41"} <= {c.id for c in cases}
     assert "A38" in {c.id for c in cases}
-    assert len(cases) == 68
+    assert len(cases) == 72
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -2592,10 +2594,9 @@ def test_dbt_export_round_trip(graph, tmp_path):
     # The importer reads the whole export; it reports only the rolling windows' and the
     # offsets' conditions.
     differences = (
-        "Cosmos moves the start of the query's period, filters the facts before the shift and "
-        "returns only periods with facts; MetricFlow joins a time spine, so it also returns "
-        "periods without facts whose earlier period has some, and it applies filters on "
-        "`metric_time` after the shift"
+        "Cosmos moves the start of the query's period, returns only periods with facts and "
+        "applies filters on the time dimension after the shift; MetricFlow joins a time spine, "
+        "so it also returns periods without facts whose earlier period has some"
     )
     assert back.warnings == [
         *(
@@ -2753,9 +2754,10 @@ def test_dbt_export_round_trip(graph, tmp_path):
         "1 month`) on `metric_time`, which is `orders.ordered_at`; by that dimension at the "
         "grains the engine accepts (month) the periods both return have the same numbers. "
         "MetricFlow joins a time spine, so it also returns periods without facts whose earlier "
-        "period has some, and grains the engine refuses; it applies filters on `metric_time` "
-        "after the shift, while the engine filters the facts first, so a time filter leaves out "
-        "the earlier periods in the engine only"
+        "period has some, and grains the engine refuses. Both apply a filter on that time "
+        "dimension after the shift, so the first period of a range reads the period before it "
+        "(the engine filters the facts first for a shape it cannot split, such as `NOT`); other "
+        "filters restrict the facts first in both"
     ) in exported.warnings
     assert (
         "metrics.order_count_7_days_earlier: MetricFlow shifts `order_count` by `7 days` "
@@ -2787,11 +2789,13 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     other = compile_project(back.project)
     cases = _cube_cases(graph.project, policies=False, lost=DBT_LOST)
     # The rolling windows, the running totals (DEC-31): year-to-date by month (A08) and
-    # month-to-date by status and day from 45 days ago (A09), and the offsets (DEC-36).
+    # month-to-date by status and day from 45 days ago (A09), and the offsets (DEC-36), with
+    # a date filter too (A66 to A69, DEC-54).
     assert {"A08", "A09", "A29", "A30", "A34", "A35", "A36", "A37", "A49", "A51"} <= {
         c.id for c in cases
     }
-    assert len(cases) == 43
+    assert {"A66", "A67", "A68", "A69"} <= {c.id for c in cases}
+    assert len(cases) == 47
     for case in cases:
         result = run_case(case, other, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -2801,7 +2805,7 @@ def test_dbt_export_same_numbers(graph, tmp_path, source, request):
     governed = compile_project(_with_policies(back.project, graph.project))
     cases = _cube_cases(graph.project, policies=True, lost=DBT_LOST)
     assert {"R17", "R18", "A32", "A33", "A38", "A39", "A40", "A41", "A42"} <= {c.id for c in cases}
-    assert len(cases) == 68
+    assert len(cases) == 72
     for case in cases:
         result = run_case(case, governed, connector)
         assert result.status == "pass", f"{case.id}: {result.detail}"
@@ -3365,10 +3369,10 @@ def test_dbt_import_offset_windows_same_numbers(graph, tmp_path, source, request
     )
     assert warnings["metrics.rev_1_year"] == (
         "`revenue` is read `12 months` earlier (`offset_window: 1 year`), queried by month or "
-        "quarter or year. Cosmos moves the start of the query's period, filters the facts "
-        "before the shift and returns only periods with facts; MetricFlow joins a time spine, "
-        "so it also returns periods without facts whose earlier period has some, and it "
-        "applies filters on `metric_time` after the shift"
+        "quarter or year. Cosmos moves the start of the query's period, returns only periods "
+        "with facts and applies filters on the time dimension after the shift; MetricFlow "
+        "joins a time spine, so it also returns periods without facts whose earlier period has "
+        "some"
     )
     # A window in months queried by a coarser grain: MetricFlow shifts each day there.
     assert warnings["metrics.rev_3_months"].endswith(
