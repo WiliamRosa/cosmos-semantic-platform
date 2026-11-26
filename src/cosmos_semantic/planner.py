@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
+import sqlglot
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -607,7 +608,22 @@ class Planner:
         rule = self.graph.rules[ref.name]
         version = rule.version_at(self._rules_as_of)
         self._trace.rule_versions[ref.name] = version.effective_from
-        return bind_rule(rule_logic(version), self.graph.rule_bindings[(ref.name, ref.model)])
+        exprs = dict(self.graph.rule_bindings[(ref.name, ref.model)])
+        dims = self.graph.models[ref.model].dimensions
+        for binding in rule.applies_to:
+            if binding.model != ref.model:
+                continue
+            for name, target in binding.bind.items():
+                dim = dims.get(target)
+                if dim is None or dim.column_type != "timestamp" or name not in exprs:
+                    continue
+                # An input bound to a TIMESTAMP column is read as its UTC civil time (DEC-57),
+                # as the dimension itself is; the other dialects keep the text as it was.
+                tree = sqlglot.parse_one(exprs[name], read=RULE_DIALECT)
+                civil = dialects.civil_time(tree, self.dialect)
+                if civil is not tree:
+                    exprs[name] = civil.sql(dialect=RULE_DIALECT)
+        return bind_rule(rule_logic(version), exprs)
 
     def _check_sensitivity(self, ref: DimensionRef, principal: Principal) -> None:
         level = self.graph.dimension(ref).sensitivity
@@ -833,6 +849,9 @@ class Planner:
                 )
                 expr, read = self._rule_expr(ref), RULE_DIALECT
             column = qualify(expr, ref.model, read)
+            if dim.column_type == "timestamp":
+                # An instant in UTC, read as a civil time (DEC-57); a no-op off BigQuery.
+                column = dialects.civil_time(column, self.dialect)
             if move:
                 # A time reference read later or earlier (DEC-34, DEC-48): moved before the
                 # truncation.

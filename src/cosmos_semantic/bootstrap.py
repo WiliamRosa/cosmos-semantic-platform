@@ -7,7 +7,8 @@ The draft is a starting point for review, never a published model:
 - **Relationships:** a ``<name>_id`` column that matches another table's key becomes a foreign
   entity; its coverage (rows without a match) is measured and reported.
 - **Columns:** text, boolean and date columns become dimensions; numeric columns become
-  candidate ``sum`` measures; every table gets a row count.
+  candidate ``sum`` measures; every table gets a row count. A BigQuery ``TIMESTAMP`` column
+  gets ``column_type: timestamp``, so it is read as its UTC date and time (DEC-57).
 - **LGPD:** column names that usually hold personal or sensitive data get a suggested
   ``sensitivity``, listed in the report for review.
 
@@ -399,6 +400,16 @@ class Bootstrapper:
                 dim: dict[str, Any] = {"name": name, "type": column.kind}
                 if name != column.name:
                     dim["expr"] = column.name
+                if (
+                    self.connector.dialect == "bigquery"
+                    and _base_type(column.data_type) == "timestamp"
+                ):
+                    # An instant in UTC, not a civil time like DATETIME (DEC-57).
+                    dim["column_type"] = "timestamp"
+                    self.report["warnings"].append(
+                        f"{table.name}.{column.name}: TIMESTAMP, read as its date and time in "
+                        "UTC (`column_type: timestamp`)"
+                    )
                 level = _sensitivity(lowered, table.name.lower())
                 if level:
                     dim["sensitivity"] = level

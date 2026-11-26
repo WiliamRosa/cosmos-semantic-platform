@@ -12,6 +12,10 @@ source cannot run before the tree is printed in that source's dialect:
 - **BigQuery:** ``WEEK`` truncates to Sunday, so weeks use ``ISOWEEK`` (Monday), as on the
   other sources. A time without a time zone is a ``DATETIME`` there (SQLGlot writes it for
   ``TIMESTAMP``), and ``TIMESTAMP_TRUNC`` and ``DATE_ADD`` accept it.
+  A ``TIMESTAMP`` is an instant in UTC: comparing it with a ``DATE`` or ``DATETIME`` has no
+  matching signature, so a time dimension marked ``column_type: timestamp`` is read as its UTC
+  civil time, ``DATETIME(column, 'UTC')``, before any truncation, comparison or arithmetic
+  (``civil_time``, DEC-57). Everything after that is the ``DATETIME`` path above.
 - **Trino:** ``DATE_TRUNC('week', ...)`` already starts on Monday and ``/`` on integers
   truncates as in PostgreSQL, so SQLGlot's translation stands. Interval literals have no
   ``WEEK`` or ``QUARTER`` and a ``DATE`` takes no hours, so ``date ± INTERVAL`` becomes
@@ -77,6 +81,18 @@ def trunc(value: exp.Expression, unit: str, dialect: str) -> exp.Expression:
         # the precision, which would move 10:59:59.9996 on a timestamp(6) column to 11:00.
         value = exp.Cast(this=value, to=exp.DataType.build("TIMESTAMP(6)", dialect="trino"))
     return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit))
+
+
+def civil_time(value: exp.Expression, dialect: str) -> exp.Expression:
+    """A ``TIMESTAMP`` column (an instant) as the civil time the other paths expect (DEC-57).
+
+    Only BigQuery needs it: its ``TIMESTAMP`` does not compare with ``DATE`` or ``DATETIME``,
+    and ``TIMESTAMP_TRUNC`` on it truncates in a time zone. The column is read in UTC, written
+    out (``DATETIME(column, 'UTC')``) so the SQL does not depend on a default. Every other
+    dialect gets ``value`` unchanged, so its SQL (and ``sql_hash``) does not change."""
+    if dialect != "bigquery":
+        return value
+    return exp.Datetime(this=value, expression=exp.Literal.string("UTC"))
 
 
 def add_days(value: exp.Expression, days: int) -> exp.Expression:
@@ -182,7 +198,8 @@ def _bigquery(node: exp.Expression) -> exp.Expression:
         if _is_date(node.this) and node.text("unit").upper() not in ("HOUR", "MINUTE", "SECOND"):
             return node
         value = node.this.copy()
-        if not (isinstance(value, exp.Cast) and value.to.is_type(*_TIME_TYPES)):
+        civil = isinstance(value, exp.Datetime)  # DATETIME(timestamp, 'UTC') from civil_time
+        if not civil and not (isinstance(value, exp.Cast) and value.to.is_type(*_TIME_TYPES)):
             value = exp.Cast(this=value, to=exp.DataType.build("TIMESTAMP"))
         # ``transform`` does not descend into a replacement; adapt its value explicitly.
         value = value.transform(_bigquery)
