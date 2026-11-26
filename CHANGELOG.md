@@ -9,6 +9,15 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- TPC-H on the container databases (DEC-47): the `examples/tpch` reference cases run on
+  Postgres, SQL Server, MySQL, MariaDB and Oracle as well as DuckDB. `tests/test_tpch.py`
+  copies DuckDB's scale-factor-0.01 data (about 79,000 rows, decimals and dates kept exact)
+  into each configured database, apart from the e-commerce demo tables (schema or database
+  `tpch`), and requires each case to equal the hand-written SQL there and the engine's result
+  on DuckDB. T02, T07 and T08 gain T-SQL versions of their hand-written SQL.
+  `deploy/oracle-setup.sql` creates the `TPCH` schema: run it again on an existing Oracle
+  container. No engine change; every `sql_hash` is unchanged.
+
 - Reconciliation through MCP and REST (DEC-45): the MCP tool `reconcile` and
   `POST /v1/reconcile/{case}` run a reconciliation case the operator declared in
   `COSMOS_CHECK_CASES` (the file `cosmos check --cases` reads), so an agent can ask whether a
