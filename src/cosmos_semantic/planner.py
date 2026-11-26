@@ -320,7 +320,7 @@ class Planner:
                 (windows if metric.window else cumulative)[name] = metric
         shifts = {grp.cte: grp.offset for grp in groups.values() if grp.offset is not None}
         time = self._offset_time(dims) if shifts else None
-        kept = self._metric_conditions(request, [*cumulative, *windows])
+        kept = self._metric_conditions(request)
 
         models = {g.measure_owner[i.measure] for grp in groups.values() for i in grp.inputs}
         data_sources = {g.models[m].spec.data_source for m in models}
@@ -744,29 +744,17 @@ class Planner:
                 raise QueryError(f"`{use.metric}` reads `{use.input}` earlier: {problem}")
         return time
 
-    def _metric_conditions(
-        self, request: QueryRequest, running: list[str]
-    ) -> exp.Expression | None:
+    def _metric_conditions(self, request: QueryRequest) -> exp.Expression | None:
         """The request's ``metric_filters`` as one condition over the output columns (DEC-29),
         or None without them. Each filter is parsed strictly by ``parse_metric_filter``; only
         requested metrics are compared. Running totals, rolling windows and inputs read at an
-        earlier period are refused for now as a first-slice limit; they are computed inside
-        ``cosmos_result`` before the outer WHERE, so lifting it needs no change to the SQL."""
+        earlier period (DEC-58) are computed inside ``cosmos_result``, before the outer WHERE:
+        the window or the earlier period still sees every row the request's filters allow,
+        and the metric filters remove output rows only."""
         if not request.metric_filters:
             return None
         if len(request.metric_filters) > MAX_METRIC_FILTERS:
             raise QueryError(f"at most {MAX_METRIC_FILTERS} metric_filters are accepted")
-        if running:
-            raise QueryError(
-                f"metric_filters do not combine with cumulative metrics yet (`{running[0]}` "
-                "requested); request it without metric_filters"
-            )
-        if self._offset_uses:
-            use = self._offset_uses[0]
-            raise QueryError(
-                f"metric_filters do not combine with metrics that read an input at an earlier "
-                f"period yet (`{use.metric}` reads `{use.input}` {use.offset} earlier)"
-            )
         conditions: list[exp.Expression] = []
         for text in request.metric_filters:
             for item in parse_metric_filter(text):

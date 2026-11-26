@@ -140,6 +140,15 @@ class EvidenceBuilder:
                 "aggregation at the requested grain): a sum of the returned rows is not the "
                 "metric's total. A comparison with a NULL value keeps no row."
             )
+            shifted = [m["name"] for m in metrics if m["time"] is not None]
+            if shifted:
+                # DEC-58: the filter removes output rows only, after the window or shift.
+                caveats.append(
+                    "The metric_filters apply after the running totals, rolling windows and "
+                    f"earlier periods of {', '.join(f'`{n}`' for n in shifted)} are computed: "
+                    "a row they remove still counts in the window or as the earlier period "
+                    "of the rows returned."
+                )
         rules = []
         for name, uses in sorted(trace.rules.items()):
             rule = g.rules[name]
@@ -286,7 +295,9 @@ class EvidenceBuilder:
         and for an offset (DEC-54): they choose the output rows and each shifted input still
         reads the whole earlier period. Each is ``before`` only when ``trace`` (the query's)
         shows a filter on its time dimension whose shape the planner could not split. A running
-        total over all time stays ``before``.
+        total over all time stays ``before``. With ``metric_filters`` in the request,
+        ``metric_filters_applied`` is ``after`` (DEC-58): they remove output rows once the
+        window or shift is computed, so a row they remove still feeds the others.
         """
         g = self.graph
         metric = g.metrics.get(name) if name not in g.measure_owner else None
@@ -316,11 +327,15 @@ class EvidenceBuilder:
         ):
             split = trace.window_filters.get(name) if trace else None
             applied = "before" if split and split["before"] else "time_after"
-        return time | {
+        time |= {
             "time_dimension": request.dimensions[refs.index(ref)] if ref else None,
             "query_grain": ref.grain if ref else None,
             "filters_applied": applied,
         }
+        if request.metric_filters:
+            # DEC-58: metric filters keep output rows after the window or shift is computed.
+            time["metric_filters_applied"] = "after"
+        return time
 
     def _recomputed(self, metric: CumulativeMetric) -> bool:
         """Whether a rolling window is recomputed from the facts of each window (DEC-49)."""
