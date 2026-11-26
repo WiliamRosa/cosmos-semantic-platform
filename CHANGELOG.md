@@ -9,6 +9,19 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- `metric_filters` on running totals, rolling windows and offsets (DEC-58): a request with a
+  cumulative metric or a metric that reads an input at an earlier period now accepts
+  `metric_filters` instead of refusing them, as in "the months where revenue grew more than
+  10% over the month before" (`{revenue_mom_growth} > 0.1`). They keep output rows only,
+  after the window or shift is computed: a day or month they remove still counts in the
+  window, the running total or as the earlier period of the rows returned, and date filters
+  keep their DEC-34, DEC-48 and DEC-54 behaviour. `order_by` and `limit` apply to the rows
+  kept. The evidence says so in each such metric's `time.metric_filters_applied` (`after`)
+  and in `caveats`. Requests without `metric_filters` get the same SQL as before. Reference
+  cases A73 to A75 and A80 check the numbers against hand-written SQL, A80 with a date
+  filter on an offset; A42, which checked the refusal, now checks a month-to-date by day
+  with a metric filter.
+
 - TPC-H on the container databases (DEC-47): the `examples/tpch` reference cases run on
   Postgres, SQL Server, MySQL, MariaDB and Oracle as well as DuckDB. `tests/test_tpch.py`
   copies DuckDB's scale-factor-0.01 data (about 79,000 rows, decimals and dates kept exact)

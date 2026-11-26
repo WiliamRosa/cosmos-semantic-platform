@@ -944,15 +944,47 @@ cases:
         HAVING CAST(SUM(o.amount) AS FLOAT) / NULLIF(COUNT(*), 0) >= 2600
            AND COUNT(*) > 5
 
+  # Refused until DEC-58: metric filters now apply after the running total, so each day kept
+  # has its month-to-date computed over every day before the filter.
   - id: A42
     category: filtros
     phase: 3
-    title: A metric filter alongside a cumulative metric is refused (not in this slice)
+    title: Month-to-date revenue by day with a metric filter applied after the running total
     request:
       metrics: [revenue_month_to_date, revenue]
       dimensions: [orders.ordered_at__day]
       metric_filters: ["{revenue} > 0"]
-    expect_error: QueryError
+    sql: |
+      WITH daily AS (
+        SELECT DATE_TRUNC('day', ordered_at) AS dd, SUM(amount) AS r
+        FROM public.orders
+        GROUP BY DATE_TRUNC('day', ordered_at)
+      ), mtd AS (
+        SELECT dd AS orders__ordered_at__day,
+               SUM(r) OVER (PARTITION BY DATE_TRUNC('month', dd) ORDER BY dd)
+                 AS revenue_month_to_date,
+               r AS revenue
+        FROM daily
+      )
+      SELECT orders__ordered_at__day, revenue_month_to_date, revenue
+      FROM mtd
+      WHERE revenue > 0
+    sql_by_dialect:
+      tsql: |
+        WITH daily AS (
+          SELECT DATETRUNC(day, ordered_at) AS dd, SUM(amount) AS r
+          FROM public.orders
+          GROUP BY DATETRUNC(day, ordered_at)
+        ), mtd AS (
+          SELECT dd AS orders__ordered_at__day,
+                 SUM(r) OVER (PARTITION BY DATETRUNC(month, dd) ORDER BY dd
+                              ROWS UNBOUNDED PRECEDING) AS revenue_month_to_date,
+                 r AS revenue
+          FROM daily
+        )
+        SELECT orders__ordered_at__day, revenue_month_to_date, revenue
+        FROM mtd
+        WHERE revenue > 0
 
   - id: A43
     category: filtros
@@ -1679,3 +1711,195 @@ cases:
         FROM w LEFT JOIN public.orders o
           ON o.ordered_at >= DATEADD(day, -7, w.wk) AND o.ordered_at < w.wk
         GROUP BY w.wk
+
+  # -- Metric filters on offsets, rolling windows and running totals (DEC-58) -----------
+  # The filter keeps output rows only, after the shift or window: a month or day it removes
+  # is still the earlier period of the next month, or part of the next days' windows.
+
+  # "Months where revenue grew more than 10% over the month before", the three largest: the
+  # filter applies before the ordering and the limit. A month removed by the filter is still
+  # the month before of the month after it (the condition is on `cur` only).
+  - id: A73
+    category: filtros
+    phase: 3
+    title: The three months with the largest growth among those that grew more than 10%
+    request:
+      metrics: [revenue, revenue_mom_growth]
+      dimensions: [orders.ordered_at__month]
+      metric_filters: ["{revenue_mom_growth} > 0.1"]
+      order_by: [-revenue_mom_growth]
+      limit: 3
+    sql: |
+      WITH monthly AS (
+        SELECT DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM public.orders
+        GROUP BY DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+             CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
+               AS revenue_mom_growth
+      FROM monthly cur
+      LEFT JOIN monthly prev ON prev.k = cur.k - 1
+      WHERE CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0) > 0.1
+      ORDER BY revenue_mom_growth DESC
+      LIMIT 3
+    sql_by_dialect:
+      tsql: |
+        WITH monthly AS (
+          SELECT DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k,
+                 SUM(amount) AS revenue
+          FROM public.orders
+          GROUP BY DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT TOP 3 cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+               CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
+                 AS revenue_mom_growth
+        FROM monthly cur
+        LEFT JOIN monthly prev ON prev.k = cur.k - 1
+        WHERE CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0) > 0.1
+        ORDER BY revenue_mom_growth DESC
+
+  # Rolling 7-day revenue on the days of the last 45 with more than 15,000 in revenue. Each
+  # day kept sums the 7 days ending on it, among them days the metric filter removes (their
+  # revenue is 15,000 or less) and days before the date filter (DEC-34): the HAVING tests the
+  # day's own revenue, the SUM reads the whole window.
+  - id: A74
+    category: filtros
+    phase: 3
+    title: Rolling 7-day revenue on the recent days above 15,000, with every day in the window
+    request:
+      metrics: [revenue_rolling_7_days, revenue]
+      dimensions: [orders.ordered_at__day]
+      filters: ["{orders.ordered_at} >= CURRENT_DATE - INTERVAL '45' DAY"]
+      metric_filters: ["{revenue} > 15000"]
+    sql: |
+      WITH f AS (
+        SELECT ordered_at FROM public.orders
+        WHERE ordered_at >= CURRENT_DATE - INTERVAL '45' DAY
+      )
+      SELECT d.dd AS orders__ordered_at__day, SUM(o.amount) AS revenue_rolling_7_days,
+             SUM(CASE WHEN o.ordered_at >= d.dd THEN o.amount END) AS revenue
+      FROM (SELECT DISTINCT DATE_TRUNC('day', ordered_at) AS dd FROM f) d
+      JOIN public.orders o
+        ON o.ordered_at >= d.dd - INTERVAL '6' DAY AND o.ordered_at < d.dd + INTERVAL '1' DAY
+      GROUP BY d.dd
+      HAVING SUM(CASE WHEN o.ordered_at >= d.dd THEN o.amount END) > 15000
+    sql_by_dialect:
+      tsql: |
+        WITH f AS (
+          SELECT ordered_at FROM public.orders
+          WHERE ordered_at >= DATEADD(day, -45, CAST(GETDATE() AS DATE))
+        )
+        SELECT d.dd AS orders__ordered_at__day, SUM(o.amount) AS revenue_rolling_7_days,
+               SUM(CASE WHEN o.ordered_at >= d.dd THEN o.amount END) AS revenue
+        FROM (SELECT DISTINCT DATETRUNC(day, ordered_at) AS dd FROM f) d
+        JOIN public.orders o
+          ON o.ordered_at >= DATEADD(day, -6, d.dd) AND o.ordered_at < DATEADD(day, 1, d.dd)
+        GROUP BY d.dd
+        HAVING SUM(CASE WHEN o.ordered_at >= d.dd THEN o.amount END) > 15000
+
+  # Year-to-date revenue on the months below 280,000, the two largest year-to-date values: the
+  # running total still adds the months the filter removes, and the ordering and the limit
+  # apply to the months kept.
+  - id: A75
+    category: filtros
+    phase: 3
+    title: Year-to-date revenue on the two months below 280,000 with the largest running total
+    request:
+      metrics: [revenue_year_to_date, revenue]
+      dimensions: [orders.ordered_at__month]
+      metric_filters: ["{revenue} < 280000"]
+      order_by: [-revenue_year_to_date]
+      limit: 2
+    sql: |
+      WITH monthly AS (
+        SELECT DATE_TRUNC('month', ordered_at) AS mon, SUM(amount) AS r
+        FROM public.orders
+        GROUP BY DATE_TRUNC('month', ordered_at)
+      ), ytd AS (
+        SELECT mon AS orders__ordered_at__month,
+               SUM(r) OVER (PARTITION BY DATE_TRUNC('year', mon) ORDER BY mon)
+                 AS revenue_year_to_date,
+               r AS revenue
+        FROM monthly
+      )
+      SELECT orders__ordered_at__month, revenue_year_to_date, revenue
+      FROM ytd
+      WHERE revenue < 280000
+      ORDER BY revenue_year_to_date DESC
+      LIMIT 2
+    sql_by_dialect:
+      tsql: |
+        WITH monthly AS (
+          SELECT DATETRUNC(month, ordered_at) AS mon, SUM(amount) AS r
+          FROM public.orders
+          GROUP BY DATETRUNC(month, ordered_at)
+        ), ytd AS (
+          SELECT mon AS orders__ordered_at__month,
+                 SUM(r) OVER (PARTITION BY DATETRUNC(year, mon) ORDER BY mon
+                              ROWS UNBOUNDED PRECEDING) AS revenue_year_to_date,
+                 r AS revenue
+          FROM monthly
+        )
+        SELECT TOP 2 orders__ordered_at__month, revenue_year_to_date, revenue
+        FROM ytd
+        WHERE revenue < 280000
+        ORDER BY revenue_year_to_date DESC
+
+  # A date filter, an offset and a metric filter together: the date filter chooses the months
+  # (the first one cut short), each month still reads the whole month before it, outside the
+  # range too (DEC-54), and the metric filter then keeps the months whose revenue fell. The
+  # first month of the range is partial, so it usually falls against the whole month before.
+  - id: A80
+    category: filtros
+    phase: 3
+    title: Months of the last 120 days whose completed-order revenue fell versus the month before
+    request:
+      metrics: [revenue, revenue_prev_month, revenue_mom_growth]
+      dimensions: [orders.ordered_at__month]
+      filters:
+        - "{orders.ordered_at} >= CURRENT_DATE - INTERVAL '120' DAY"
+        - "{orders.status} = 'completed'"
+      metric_filters: ["{revenue_mom_growth} < 0"]
+    sql: |
+      WITH c AS (SELECT ordered_at, amount FROM public.orders WHERE status = 'completed'),
+      monthly AS (
+        SELECT EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM c GROUP BY EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      ), kept AS (
+        SELECT DATE_TRUNC('month', ordered_at) AS mon,
+               EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at) AS k,
+               SUM(amount) AS revenue
+        FROM c WHERE ordered_at >= CURRENT_DATE - INTERVAL '120' DAY
+        GROUP BY DATE_TRUNC('month', ordered_at),
+                 EXTRACT(YEAR FROM ordered_at) * 12 + EXTRACT(MONTH FROM ordered_at)
+      )
+      SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+             prev.revenue AS revenue_prev_month,
+             CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0)
+               AS revenue_mom_growth
+      FROM kept cur LEFT JOIN monthly prev ON prev.k = cur.k - 1
+      WHERE CAST(cur.revenue - prev.revenue AS DOUBLE PRECISION) / NULLIF(prev.revenue, 0) < 0
+    sql_by_dialect:
+      tsql: |
+        WITH c AS (SELECT ordered_at, amount FROM public.orders WHERE status = 'completed'),
+        monthly AS (
+          SELECT YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k, SUM(amount) AS revenue
+          FROM c GROUP BY YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        ), kept AS (
+          SELECT DATETRUNC(month, ordered_at) AS mon,
+                 YEAR(ordered_at) * 12 + MONTH(ordered_at) AS k, SUM(amount) AS revenue
+          FROM c WHERE ordered_at >= DATEADD(day, -120, CAST(GETDATE() AS DATE))
+          GROUP BY DATETRUNC(month, ordered_at), YEAR(ordered_at) * 12 + MONTH(ordered_at)
+        )
+        SELECT cur.mon AS orders__ordered_at__month, cur.revenue AS revenue,
+               prev.revenue AS revenue_prev_month,
+               CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0)
+                 AS revenue_mom_growth
+        FROM kept cur LEFT JOIN monthly prev ON prev.k = cur.k - 1
+        WHERE CAST(cur.revenue - prev.revenue AS FLOAT) / NULLIF(prev.revenue, 0) < 0
