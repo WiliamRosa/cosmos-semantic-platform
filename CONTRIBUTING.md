@@ -37,7 +37,7 @@ export COSMOS_ORACLE_DSN=127.0.0.1:11521/FREEPDB1 COSMOS_ORACLE_PASSWORD=cosmos
 uv run pytest
 ```
 
-Without these variables, the database-specific tests are skipped and only DuckDB runs; CI runs Postgres, SQL Server, MySQL, MariaDB and Oracle on every pull request. The Docker credentials are for local tests only.
+Without these variables, the database-specific tests are skipped and only DuckDB runs; CI runs Postgres, SQL Server, MySQL, MariaDB and Oracle on every pull request. The Docker credentials are for local tests only, and the containers listen on `127.0.0.1` only.
 
 Databricks is optional and needs a SQL warehouse: set `DATABRICKS_HTTP_PATH`, plus `DATABRICKS_CONFIG_PROFILE` (after `databricks auth login --profile <name>`) or `DATABRICKS_TOKEN` with `DATABRICKS_SERVER_HOSTNAME`. The tests load the example data into the catalog in `DATABRICKS_CATALOG` (default `cosmos_demo`, which must exist). On Git Bash for Windows, also set `MSYS_NO_PATHCONV=1`.
 
