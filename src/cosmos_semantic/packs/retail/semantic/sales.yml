@@ -178,6 +178,14 @@ metrics:
     measure: smallest_order
     window: 7 days
     description: Value of the smallest order of the 7 days ending on each day
+  - name: active_customers_30d
+    type: cumulative
+    owner: sales-leadership
+    measure: buyers
+    window: 30 days
+    description: >-
+      Distinct customers who bought in the 30 days ending on each day; a customer who buys on
+      several days of the window counts once
   - name: revenue_prev_month
     type: derived
     owner: controllership

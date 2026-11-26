@@ -3,7 +3,8 @@
 Generates random requests (fixed seed) combining metrics, dimensions, grains, business rules
 and users, and requires DuckDB, Postgres and SQL Server to return exactly the same result.
 Rolling-window metrics, valid only at day grain, get draws of their own so every run has them,
-also with a filter on their time dimension (DEC-34); so do grain-to-date metrics with a filter
+also with a filter on their time dimension (DEC-34); so do rolling windows over a distinct count,
+recomputed from the facts of each window (DEC-49), grain-to-date metrics with a filter
 on their time dimension (DEC-48), and metrics that read an input at an earlier period, valid
 only at the grains it fits.
 Also checks that a refused request is refused on every data source.
@@ -21,7 +22,12 @@ import pytest
 from cosmos_semantic.compiler import TIME_GRAINS, metrics_under, to_date_grain_problem
 from cosmos_semantic.errors import CosmosError
 from cosmos_semantic.planner import Planner, Principal, QueryRequest
-from cosmos_semantic.spec import CumulativeMetric, DerivedMetric, offset_grain_problem
+from cosmos_semantic.spec import (
+    RECOMPUTED_WINDOW_AGGS,
+    CumulativeMetric,
+    DerivedMetric,
+    offset_grain_problem,
+)
 
 REGIONS = ["Midwest", "Northeast", "South", "West", "Mountain"]
 FILTERS = [
@@ -236,6 +242,71 @@ def _rolling_date_filter_requests(graph, count: int, seed: int):
     return produced
 
 
+def _distinct_windows(graph) -> list[str]:
+    """The rolling windows recomputed from the facts of each window: those over a distinct
+    count (DEC-49)."""
+    return sorted(
+        name
+        for name, metric in graph.metrics.items()
+        if isinstance(metric, CumulativeMetric)
+        and metric.window_days()
+        and graph.models[graph.measure_owner[metric.measure]].measures[metric.measure].agg
+        in RECOMPUTED_WINDOW_AGGS
+    )
+
+
+def _distinct_window_requests(graph, count: int, seed: int):
+    """Requests with a rolling window over a distinct count (DEC-49) and a time dimension at
+    day grain, the only grain a window in days accepts: beside up to one other rolling window
+    (a sum or a minimum combined from daily values) and one metric without a window, by up to
+    one other dimension, with a filter on the window's time dimension or none (DEC-34) and up
+    to one other filter. A window is never part of another metric (the planner refuses it), so
+    the other metric is a plain one. Its own generator, as for rolling windows."""
+    rng = random.Random(seed)
+    distinct = _distinct_windows(graph)
+    rolling = sorted(
+        name
+        for name, metric in graph.metrics.items()
+        if isinstance(metric, CumulativeMetric) and metric.window_days() and name not in distinct
+    )
+    others = sorted(
+        name
+        for name in set(graph.metrics) | set(graph.measure_owner)
+        if not isinstance(graph.metrics.get(name), CumulativeMetric)
+        and not _offset_grains(graph, name)
+    )
+    times, plain = [], []
+    for m, node in graph.models.items():
+        for d, spec in node.dimensions.items():
+            if not spec.sensitivity:
+                (times if spec.type == "time" else plain).append(f"{m}.{d}")
+    times, plain = sorted(times), sorted(plain)
+    produced, attempts = [], 0
+    while len(produced) < count and attempts < count * 50:
+        attempts += 1
+        time = rng.choice(times)
+        dated = [rng.choice(DATE_FILTERS).format(t=time)] if rng.random() < 0.5 else []
+        request = QueryRequest(
+            metrics=[
+                rng.choice(distinct),
+                *rng.sample(rolling, rng.randint(0, 1)),
+                *rng.sample(others, rng.randint(0, 1)),
+            ],
+            dimensions=[*rng.sample(plain, rng.randint(0, 1)), f"{time}__day"],
+            filters=[*dated, *rng.sample(FILTERS, rng.choice([0, 1]))],
+        )
+        principal = Principal(
+            user={"region": rng.choice(REGIONS)}, channel=rng.choice(["api", "mcp"])
+        )
+        try:
+            for dialect in DIALECTS:
+                Planner(graph, dialect).plan(request, principal)
+        except CosmosError:
+            continue
+        produced.append((request, principal))
+    return produced
+
+
 def _to_date_filter_requests(graph, count: int, seed: int):
     """Grain-to-date requests with a filter on the time dimension and up to one other filter
     (DEC-48), at the grains each period accepts. Its own generator, as for rolling windows."""
@@ -426,6 +497,7 @@ def _metric_filter_requests(graph, count: int, seed: int):
 REQUESTS_PER_RUN = 80
 ROLLING_PER_RUN = 12
 ROLLING_DATE_FILTER_PER_RUN = 8
+DISTINCT_WINDOW_PER_RUN = 10
 TO_DATE_FILTER_PER_RUN = 8
 OFFSET_PER_RUN = 12
 OFFSET_DATE_FILTER_PER_RUN = 8
@@ -460,6 +532,40 @@ def test_rolling_draws_are_deterministic_and_cover_every_rolling_metric(graph):
     assert rolling <= drawn
     for request, _ in first:
         assert sum(d.endswith("__day") for d in request.dimensions) == 1
+
+
+def test_distinct_window_draws_are_deterministic_and_cover_every_shape(graph):
+    distinct = set(_distinct_windows(graph))
+    assert distinct, "the example has a rolling window over a distinct count (DEC-49)"
+    first = _distinct_window_requests(graph, DISTINCT_WINDOW_PER_RUN, seed=2026)
+    assert len(first) == DISTINCT_WINDOW_PER_RUN
+    assert first == _distinct_window_requests(graph, DISTINCT_WINDOW_PER_RUN, seed=2026)
+    assert first != _distinct_window_requests(graph, DISTINCT_WINDOW_PER_RUN, seed=2027)
+    drawn = {m for request, _ in first for m in request.metrics}
+    assert distinct <= drawn
+    for request, _ in first:
+        assert sum(d.endswith("__day") for d in request.dimensions) == 1
+        assert distinct & set(request.metrics)
+    # The draws read the facts of each window both with and without widening them for a
+    # filter on the time dimension (DEC-34), and pair a distinct window with a window combined
+    # from daily values.
+    sqls = [Planner(graph, "duckdb").plan(r, p).sql for r, p in first]
+    assert all("_facts" in sql for sql in sqls)
+    assert any("_facts_lookback_" in sql for sql in sqls)
+    assert any("_facts_lookback_" not in sql for sql in sqls)
+    rolling = {
+        name
+        for name, metric in graph.metrics.items()
+        if isinstance(metric, CumulativeMetric) and metric.window_days()
+    }
+    assert any(len(rolling & set(r.metrics)) == 2 for r, _ in first)
+
+
+@pytest.mark.parametrize("seed", [1, 7, 2026, 31337])
+def test_distinct_window_draws_plan_on_every_dialect_for_any_seed(graph, seed):
+    """Whatever the seed, the generator fills its quota with requests every dialect plans."""
+    drawn = _distinct_window_requests(graph, DISTINCT_WINDOW_PER_RUN, seed=seed)
+    assert len(drawn) == DISTINCT_WINDOW_PER_RUN
 
 
 def test_rolling_date_filter_draws_are_deterministic_and_split(graph):
@@ -505,6 +611,9 @@ def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     dated = _rolling_date_filter_requests(graph, ROLLING_DATE_FILTER_PER_RUN, seed=2026)
     assert len(dated) == ROLLING_DATE_FILTER_PER_RUN
     requests += dated
+    distinct = _distinct_window_requests(graph, DISTINCT_WINDOW_PER_RUN, seed=2026)
+    assert len(distinct) == DISTINCT_WINDOW_PER_RUN
+    requests += distinct
     to_date = _to_date_filter_requests(graph, TO_DATE_FILTER_PER_RUN, seed=2026)
     assert len(to_date) == TO_DATE_FILTER_PER_RUN
     requests += to_date

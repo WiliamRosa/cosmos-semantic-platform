@@ -9,6 +9,19 @@ format or the API; such changes are listed under **Changed**.
 
 ### Added
 
+- Distinct windows in the example and the randomized cross-database test (DEC-61): the
+  e-commerce example (and the `retail` pack seeded from it) gains `active_customers_30d`, the
+  distinct customers who bought in the 30 days ending on each day, a rolling window over the
+  `count_distinct` measure `buyers` (DEC-49). `tests/test_cross_db.py` draws such windows on
+  requests of their own (seeded, planned on every dialect before they are kept): by day of any
+  time dimension, beside a window combined from daily values and a plain metric, by another
+  dimension, with a filter on the time dimension or not (DEC-34) and another filter, so every
+  configured database must return the same numbers for them. The dbt and Cube exports refuse
+  the new metric as metric loss, as for any distinct window, so exporting the example to them
+  reports it next to `max_order_value_year_to_date` (dropped with `--allow-metric-loss`, which
+  the example already needed); the Databricks export refuses it as it does every cumulative
+  metric, and the Ossie export keeps it in its Cosmos extension with a warning. No engine change; existing `sql_hash` values are unchanged.
+
 - TPC-H on the container databases (DEC-47): the `examples/tpch` reference cases run on
   Postgres, SQL Server, MySQL, MariaDB and Oracle as well as DuckDB. `tests/test_tpch.py`
   copies DuckDB's scale-factor-0.01 data (about 79,000 rows, decimals and dates kept exact)
