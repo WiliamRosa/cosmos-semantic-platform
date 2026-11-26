@@ -45,6 +45,24 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
   location: location
 }
 
+// Customer usage attribution (Partner Center "PID tracking"): a no-op nested
+// deployment Microsoft uses to count deployments of this specific Marketplace
+// offer. Partner Center normally injects this automatically, but can't when
+// the template already has its own Microsoft.Resources/deployments resources
+// (the acr-pull-role module below), so it has to be declared explicitly here
+// with the exact ID Partner Center assigned to this offer's "Free" plan.
+resource customerUsageAttribution 'Microsoft.Resources/deployments@2021-04-01' = {
+  name: 'pid-dc977a1e-3a10-4764-a48d-aac14416cd0d-partnercenter'
+  properties: {
+    mode: 'Incremental'
+    template: {
+      '$schema': 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
+      contentVersion: '1.0.0.0'
+      resources: []
+    }
+  }
+}
+
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsName
   location: location
@@ -94,7 +112,11 @@ resource keyVaultSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-0
 // AcrPull somewhere useless.
 module acrPullRole 'acr-pull-role.bicep' = if (!empty(registryResourceId)) {
   name: 'acr-pull-role'
-  scope: resourceGroup(split(registryResourceId, '/')[4])
+  // ARM evaluates `scope` even when the module's `if` condition is false, so
+  // this falls back to the current resource group (harmless; the module
+  // itself still never deploys) instead of indexing into split('', '/'),
+  // which is only 1 element long and would throw "index out of bounds".
+  scope: resourceGroup(empty(registryResourceId) ? resourceGroup().name : split(registryResourceId, '/')[4])
   params: {
     registryName: last(split(registryResourceId, '/'))
     principalId: identity.properties.principalId
