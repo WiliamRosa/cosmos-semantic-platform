@@ -42,16 +42,19 @@ if (loader && frame) {
 }
 
 // Keep the hero badge on the latest release without a redeploy. The static text is the fallback.
-fetch("https://api.github.com/repos/WiliamRosa/cosmos-semantic-platform/releases/latest", {
-  headers: { Accept: "application/vnd.github+json" },
-})
-  .then((response) => (response.ok ? response.json() : null))
-  .then((release) => {
-    if (release && /^v\d+\.\d+\.\d+$/.test(release.tag_name)) {
-      document.getElementById("release").textContent = release.tag_name;
-    }
+const badge = document.querySelector("[data-release-repo]");
+if (badge) {
+  fetch(`https://api.github.com/repos/${badge.dataset.releaseRepo}/releases/latest`, {
+    headers: { Accept: "application/vnd.github+json" },
   })
-  .catch(() => {});
+    .then((response) => (response.ok ? response.json() : null))
+    .then((release) => {
+      if (release && /^v\d+\.\d+\.\d+$/.test(release.tag_name)) {
+        badge.textContent = release.tag_name;
+      }
+    })
+    .catch(() => {});
+}
 
 // Contact form: posts JSON to the Worker; without JavaScript the form posts normally.
 const contact = document.getElementById("contact-form");

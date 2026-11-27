@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CosmosProof terms of use</title>
+  <meta name="description" content="Terms of use of the CosmosProof offer on the Azure Marketplace.">
+  <link rel="canonical" href="https://cosmosdata.ai/proof/terms">
+  <meta name="theme-color" content="#0b1220">
+  <link rel="icon" href="/assets/cosmosproof/icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <!-- Generated from deploy/azure/marketplace/terms-of-use.md in github.com/WiliamRosa/cosmosproof. Change it there first. -->
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/proof/" aria-label="CosmosProof">
+        <img class="brand-logo" src="/assets/cosmosproof/logo-horizontal-dark.svg" alt="CosmosProof" width="154" height="36">
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="/proof/">CosmosProof</a>
+        <a href="/proof/privacy">Privacy</a>
+        <a href="/proof/terms">Terms</a>
+        <a href="/proof/#contact">Contact</a>
+      </nav>
+    </div>
+  </header>
+  <main id="main" class="section">
+    <article class="wrap doc">
+        <h1>CosmosProof terms of use</h1>
+        <p>Last updated: 2026-11-27</p>
+        <h2>What you are getting</h2>
+        <p>The CosmosProof offer on the Azure Marketplace ("the Offer") deploys CosmosProof as an Azure Managed Application into <b>your own Azure subscription</b>, and lets you install its app in your own Azure Databricks workspaces. Cosmos Data ("the Publisher") provides the deployment template, the scanner image and the app; it does not host, operate or have access to your deployment.</p>
+        <h2>License</h2>
+        <p>CosmosProof is source-available under the Business Source License 1.1, published at <a href="https://github.com/WiliamRosa/cosmosproof/blob/main/LICENSE" rel="noopener">https://github.com/WiliamRosa/cosmosproof/blob/main/LICENSE</a>. That license allows production use only for non-commercial purposes. <b>An active subscription to a paid plan of the Offer is the commercial license</b> that allows your organization to use CosmosProof in production on its own data, for as long as the subscription is active and within the scope of the plan you chose.</p>
+        <p>These terms do not reduce any right the Business Source License already gives you, including evaluation and other non-production use.</p>
+        <h2>How CosmosProof works with your data</h2>
+        <ul><li>It only reads: it never deletes, moves or changes your data, and its only write is to the storage and Log Analytics workspace the deployment creates.</li><li>It reads metadata (names, paths, sizes, tiers, access times, lineage), never the contents of your tables or files.</li><li>Findings are evidence for a decision, not the decision. Every finding states what was checked, what could not be seen and a confidence level. Before you archive, move or delete anything, confirm it with the owner of the data. The Publisher is not responsible for actions you take based on a finding.</li><li>Cost figures are estimates from public list prices and the discount you configure, not your invoice.</li></ul>
+        <p>See the privacy policy at <a href="/proof/privacy">https://cosmosdata.ai/proof/privacy</a>.</p>
+        <h2>Your responsibilities</h2>
+        <ul><li>The Azure and Azure Databricks resources CosmosProof uses run in your subscription and your workspaces, and you pay their cost directly (the scheduled job, its storage and logs, the Databricks App and the SQL warehouse queries).</li><li>You decide which read roles to grant and to which resources, and you keep your deployment's image and app up to date.</li><li>You remain responsible for complying with the law that applies to the data in your lakehouse.</li></ul>
+        <h2>Support and updates</h2>
+        <p>Support is given by e-mail and through the contact form at <a href="/proof/#contact">https://cosmosdata.ai/proof/#contact</a>, on business days, with no response time guarantee unless your plan states one. New versions are announced in the GitHub repository's releases.</p>
+        <h2>Warranty and liability</h2>
+        <p>CosmosProof is provided "as is", without warranty of any kind, as stated in its license. To the extent permitted by law, the Publisher's total liability under the Offer is limited to the amount you paid for the Offer in the twelve months before the claim.</p>
+        <h2>Ending the subscription</h2>
+        <p>Cancelling the Marketplace subscription ends the commercial license and the support. The resources in your subscription stay there until you delete them; deleting the Managed Application removes everything the deployment created.</p>
+        <h2>Changes</h2>
+        <p>Changes to these terms or to the Offer's plans are published at this same address, with the date above updated, and do not apply retroactively to a period already paid.</p>
+        <h2>Contact</h2>
+        <p><a href="/proof/#contact">https://cosmosdata.ai/proof/#contact</a></p>
+    </article>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <p class="footer-brand"><img src="/assets/cosmosproof/icon.svg" alt="" width="22" height="22"> © 2026 <a href="/">Cosmos Data</a></p>
+      <nav aria-label="Footer">
+        <a href="https://github.com/WiliamRosa/cosmosproof" rel="noopener">GitHub</a>
+        <a href="/proof/privacy">Privacy</a>
+        <a href="/proof/terms">Terms</a>
+        <a href="/proof/#contact">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

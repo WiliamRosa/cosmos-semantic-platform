@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://cosmosdata.ai/</loc></url>
+  <url><loc>https://cosmosdata.ai/semantic/</loc></url>
+  <url><loc>https://cosmosdata.ai/proof/</loc></url>
+  <url><loc>https://cosmosdata.ai/proof/privacy</loc></url>
+  <url><loc>https://cosmosdata.ai/proof/terms</loc></url>
 </urlset>
