@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CosmosProof: Lakehouse FinOps for Azure Databricks, with proof</title>
+  <meta name="description" content="CosmosProof shows what in your Azure Databricks costs money, creates risk or holds PII without being used, with the evidence, confidence and proof hash behind each finding. Read-only, runs in your tenant.">
+  <link rel="canonical" href="https://cosmosdata.ai/proof/">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://cosmosdata.ai/proof/">
+  <meta property="og:title" content="CosmosProof: stop paying for data nobody reads, and prove it">
+  <meta property="og:description" content="Lakehouse FinOps for Azure Databricks: unused data that costs money, creates risk or holds PII, each finding with its proof.">
+  <meta property="og:image" content="https://cosmosdata.ai/assets/cosmosproof/01-overview.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="theme-color" content="#0b1220">
+  <link rel="icon" href="/assets/cosmosproof/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/cosmosproof/icon-180.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"SoftwareApplication","name":"CosmosProof",
+   "applicationCategory":"BusinessApplication","operatingSystem":"Azure",
+   "url":"https://cosmosdata.ai/proof/","codeRepository":"https://github.com/WiliamRosa/cosmosproof",
+   "publisher":{"@type":"Organization","name":"Cosmos Data","url":"https://cosmosdata.ai/"}}
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#top" aria-label="CosmosProof, top of the page">
+        <img class="brand-logo" src="/assets/cosmosproof/logo-horizontal-dark.svg" alt="CosmosProof" width="154" height="36">
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="#how">How it works</a>
+        <a href="#readings">Readings</a>
+        <a href="#app">The app</a>
+        <a href="#trust">Security</a>
+        <a href="#deploy">Deploy</a>
+        <a href="#contact">Contact</a>
+        <a href="/" class="nav-home">Cosmos Data</a>
+      </nav>
+      <div class="header-cta">
+        <a class="btn btn-ghost btn-small" href="https://github.com/WiliamRosa/cosmosproof" rel="noopener">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+        <a class="btn btn-primary btn-small" href="#contact">Request a pilot</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="wrap hero-inner">
+        <div class="hero-copy">
+          <a class="pill" href="#deploy"><span class="dot"></span> Lakehouse FinOps · Azure Marketplace soon</a>
+          <h1>Stop paying for data nobody reads, <em>and prove it.</em></h1>
+          <p class="lead">
+            CosmosProof shows what in your Azure Databricks costs money, creates risk or holds PII
+            without being used. It crosses Unity Catalog lineage with ADLS Gen2 storage activity, and
+            only calls something unused when the evidence agrees.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#contact">Request a pilot</a>
+            <button class="install" type="button" data-copy="pip install git+https://github.com/WiliamRosa/cosmosproof && cosmosproof demo" aria-label="Copy the demo commands">
+              <span class="prompt">$</span> cosmosproof demo
+              <span class="copy-label">Copy</span>
+            </button>
+          </div>
+          <p class="hero-note">The demo runs on a fictional bank lake, with no Azure or Databricks needed.</p>
+        </div>
+        <figure class="hero-media">
+          <img class="shot" src="/assets/cosmosproof/03-overview-dark.png" alt="The CosmosProof app: open findings, estimated monthly cost, unused storage, PII at rest and risks" width="1280" height="720">
+          <figcaption>The app, over a fictional bank. No customer data.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="problem">
+      <div class="wrap problem-inner">
+        <p class="quote">Nobody deletes the table, because nobody can prove it is unused.</p>
+        <p>So the lake keeps paying for it, the pipeline keeps feeding it, and the personal data in it stays there with no purpose. CosmosProof brings the proof.</p>
+      </div>
+    </section>
+
+    <section id="how" class="section">
+      <div class="wrap">
+        <p class="eyebrow">How it works</p>
+        <h2>Discover. Cross the evidence. Prove each finding.</h2>
+        <ol class="steps">
+          <li>
+            <span class="step-n">1</span>
+            <h3>Discover</h3>
+            <p>Every Azure Databricks workspace and ADLS Gen2 account in the subscriptions or management group you choose, through Azure Resource Graph. Development and POC start unselected.</p>
+          </li>
+          <li>
+            <span class="step-n">2</span>
+            <h3>Cross the evidence</h3>
+            <p>Unity Catalog says who reads each table; ADLS Gen2 says when each file was last read, by any tool. A finding needs both to agree. If storage shows a read, there is no finding.</p>
+          </li>
+          <li>
+            <span class="step-n">3</span>
+            <h3>Prove</h3>
+            <p>Each finding lists the evidence, what could not be seen, a confidence level and a proof hash. Run after run, new findings are alerts and resolved ones are savings.</p>
+          </li>
+        </ol>
+        <div class="terminal" role="img" aria-label="A CosmosProof finding with its evidence">
+          <div class="term-bar"><span></span><span></span><span></span></div>
+<pre><span class="c-k">main.raw.clientes_legado</span>
+unused_table · confidence <span class="c-p">high</span> · owner data-eng-legado · 180.0 GB · 3.74 USD/month
+
+<span class="c-k">evidence</span>
+  system.access.table_lineage: no read inside the 180-day window; last read 2026-01-20
+  Azure Blob Inventory: 40 files, 180.00 GB, by tier: hot 180.00 GB
+  Azure Blob Inventory: no file read inside the window; last read 2026-01-25
+<span class="c-k">could not be seen</span>
+  Unity Catalog lineage records only the reads it can infer; ...
+<span class="c-k">proof</span>  sha256:…  id ab8825127671</pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="readings" class="section section-alt">
+      <div class="wrap">
+        <p class="eyebrow">One map, three readings</p>
+        <h2>Cost, risk and PII, from the same evidence.</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>Cost</h3>
+            <p>Tables and files nobody reads, sized from storage, with the estimated monthly cost and the cheaper tier they could move to. With Unity Catalog system tables, also the jobs and pipelines still feeding them, with their compute cost.</p>
+          </article>
+          <article class="card">
+            <h3>Risk</h3>
+            <p>Production credentials and federated connections that exist with no real use: access that nobody needs and somebody could misuse.</p>
+          </article>
+          <article class="card">
+            <h3>PII</h3>
+            <p>Personal data such as tax IDs, e-mails and names, stored in tables nobody reads. Recognized from column names; the values are never read.</p>
+          </article>
+        </div>
+        <div class="confidence">
+          <h3>How confidence works</h3>
+          <dl>
+            <dt><span class="tag tag-high">high</span></dt><dd>No read in lineage <b>and</b> storage access covers the window and shows no read.</dd>
+            <dt><span class="tag tag-medium">medium</span></dt><dd>No read in lineage and storage cannot confirm; or storage no table owns, with storage confirming no read.</dd>
+            <dt><span class="tag tag-low">low</span></dt><dd>Storage no table owns, with no storage confirmation.</dd>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section id="app" class="section">
+      <div class="wrap">
+        <p class="eyebrow">The app</p>
+        <h2>For the people who decide, not only for engineers.</h2>
+        <p class="section-lead">A Databricks App in English and Portuguese. People sign in with the workspace's existing single sign-on: no app registration, no new user database. Light and dark mode.</p>
+        <div class="shots">
+          <figure>
+            <img class="shot" src="/assets/cosmosproof/02-findings-evidence.png" alt="A finding with its recommendation, evidence, what could not be seen and proof hash" loading="lazy" width="1280" height="720">
+            <figcaption><b>Findings.</b> The recommendation, the evidence behind it, what could not be seen, and the proof.</figcaption>
+          </figure>
+          <figure>
+            <img class="shot" src="/assets/cosmosproof/04-resources.png" alt="Discovered workspaces and ADLS accounts with suggested environment" loading="lazy" width="1280" height="720">
+            <figcaption><b>Resources.</b> Everything discovered, with its suggested environment and a switch to analyze it.</figcaption>
+          </figure>
+          <figure>
+            <img class="shot" src="/assets/cosmosproof/05-connections.png" alt="Status of each resource and what access is missing" loading="lazy" width="1280" height="720">
+            <figcaption><b>Connections.</b> What is ready and what lacks access, with one script for the administrators.</figcaption>
+          </figure>
+          <figure>
+            <img class="shot" src="/assets/cosmosproof/01-overview.png" alt="Overview in light mode" loading="lazy" width="1280" height="720">
+            <figcaption><b>Overview.</b> Open findings, cost, unused storage, PII and risks, by reading, by owner and over time.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="trust" class="section section-alt">
+      <div class="wrap">
+        <p class="eyebrow">Security</p>
+        <h2>Built to pass a bank's security review.</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>Read-only</h3>
+            <p>CosmosProof never deletes, moves or changes your data. Its only write is to its own reports container. <code>cosmosproof grants</code> prints every read-only grant for a person to review and run.</p>
+          </article>
+          <article class="card">
+            <h3>Inside your tenant</h3>
+            <p>A managed identity in your subscription, with no stored credential. It reads metadata, never the contents of tables or files. Nothing is sent to us.</p>
+          </article>
+          <article class="card">
+            <h3>Code you can read</h3>
+            <p>Source-available under the Business Source License 1.1, on <a href="https://github.com/WiliamRosa/cosmosproof" rel="noopener">GitHub</a>. Your security team can read exactly what runs.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="deploy" class="section">
+      <div class="wrap start-inner">
+        <div>
+          <p class="eyebrow">Deploy</p>
+          <h2>From the Azure Marketplace, in your own subscription.</h2>
+          <p class="section-lead">CosmosProof is coming to the Azure Marketplace as a Managed Application. Until then, we run pilots on your platform with the same package. The audit store, <code>cosmosproof.audit</code>, is yours: open it in the app, in Power BI or in a Databricks dashboard.</p>
+          <div class="links">
+            <a href="https://github.com/WiliamRosa/cosmosproof#readme" rel="noopener">Documentation →</a>
+            <a href="https://github.com/WiliamRosa/cosmosproof/tree/main/lab" rel="noopener">Lab with every scenario →</a>
+            <a href="#contact">Request a pilot →</a>
+          </div>
+        </div>
+        <ol class="steps steps-compact">
+          <li><span class="step-n">1</span><h3>Deploy the Managed Application</h3><p>Choose the subscriptions or management group, the window and the schedule. It creates the identity, the daily job and the reports storage.</p></li>
+          <li><span class="step-n">2</span><h3>Grant read access</h3><p>Reader on the scope, and the read-only grants that <code>cosmosproof grants</code> prints.</p></li>
+          <li><span class="step-n">3</span><h3>Install the app</h3><p>A workspace administrator installs it; people open it with single sign-on and choose what to analyze.</p></li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="contact" class="section section-alt">
+      <div class="wrap contact-inner">
+        <div>
+          <p class="eyebrow">Contact</p>
+          <h2>Request a pilot.</h2>
+          <p class="section-lead">Tell us about your Azure Databricks estate: how many workspaces, and whether cost, risk or PII matters most.</p>
+          <p class="contact-direct">Or write to <a href="mailto:administrator@cosmosdata.ai">administrator@cosmosdata.ai</a>.</p>
+          <p class="contact-note">Bugs and feature requests are best as <a href="https://github.com/WiliamRosa/cosmosproof/issues" rel="noopener">GitHub issues</a>.</p>
+        </div>
+        <form class="contact-form card" id="contact-form" action="/api/contact" method="post" novalidate>
+          <div class="field-row">
+            <label>Name <input name="name" autocomplete="name" required maxlength="120"></label>
+            <label>Work email <input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+          </div>
+          <label><span>Company <span class="optional">(optional)</span></span> <input name="company" autocomplete="organization" maxlength="120"></label>
+          <label>Message <textarea name="message" rows="6" required maxlength="5000"></textarea></label>
+          <label class="hp" aria-hidden="true">Leave this empty <input name="website" tabindex="-1" autocomplete="off"></label>
+          <input type="hidden" name="started_at" value="">
+          <input type="hidden" name="product" value="CosmosProof">
+          <div class="form-foot">
+            <button class="btn btn-primary" type="submit">Send message</button>
+            <p class="form-status" role="status" aria-live="polite"></p>
+          </div>
+          <p class="form-privacy">We use your details only to answer you. Nothing is stored on this site.</p>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <p class="footer-brand"><img src="/assets/cosmosproof/icon.svg" alt="" width="22" height="22"> © 2026 <a href="/">Cosmos Data</a> · CosmosProof is source-available (BSL 1.1)</p>
+      <nav aria-label="Footer">
+        <a href="https://github.com/WiliamRosa/cosmosproof" rel="noopener">GitHub</a>
+        <a href="/proof/privacy">Privacy</a>
+        <a href="/proof/terms">Terms</a>
+        <a href="/semantic/">Cosmos Semantic</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="/main.js" defer></script>
+</body>
+</html>

@@ -8,6 +8,8 @@
 import { EmailMessage } from "cloudflare:email";
 
 const LIMITS = { name: 120, email: 254, company: 120, message: 5000 };
+// Which product a message is about: a hidden field on each product page, a choice on the home page.
+const PRODUCTS = ["Cosmos Semantic", "CosmosProof", "Both, or something else"];
 const MIN_SECONDS_ON_PAGE = 3;
 const EMAIL_RE = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
 
@@ -33,7 +35,7 @@ async function handleContact(request, env) {
   const reply = (status, ok, error) =>
     wantsJson
       ? json(ok ? { ok: true } : { ok: false, error }, status)
-      : Response.redirect(new URL(`/?contact=${ok ? "sent" : "error"}#contact`, request.url).toString(), 303);
+      : Response.redirect(new URL(`${backTo(request)}?contact=${ok ? "sent" : "error"}#contact`, request.url).toString(), 303);
 
   // Only the site's own pages may post here (browsers always send Origin on POST).
   const origin = request.headers.get("Origin");
@@ -58,6 +60,7 @@ async function handleContact(request, env) {
   for (const field of Object.keys(LIMITS)) {
     form[field] = String(data[field] ?? "").trim();
   }
+  form.product = PRODUCTS.includes(data.product) ? data.product : "";
   if (!form.name || !form.email || !form.message) {
     return reply(400, false, "Name, email and message are required.");
   }
@@ -80,6 +83,17 @@ async function handleContact(request, env) {
   return reply(200, true);
 }
 
+// The page the form was posted from, for the no-JavaScript redirect: only a path of this site.
+function backTo(request) {
+  try {
+    const referer = new URL(request.headers.get("Referer") || "");
+    if (referer.origin === new URL(request.url).origin && /^\/[\w\-/]*$/.test(referer.pathname)) {
+      return referer.pathname;
+    }
+  } catch {}
+  return "/";
+}
+
 function buildMessage(env, form, request) {
   const oneLine = (value) => value.replace(/[\r\n]+/g, " ");
   const country = request.cf?.country || "unknown";
@@ -87,6 +101,7 @@ function buildMessage(env, form, request) {
     `Name: ${form.name}`,
     `Email: ${form.email}`,
     `Company: ${form.company || "-"}`,
+    `About: ${form.product || "-"}`,
     `Country: ${country}`,
     "",
     form.message,
@@ -97,10 +112,10 @@ function buildMessage(env, form, request) {
 
   const domain = env.CONTACT_FROM.split("@")[1];
   const headers = [
-    `From: "Cosmos Semantic website" <${env.CONTACT_FROM}>`,
+    `From: "Cosmos Data website" <${env.CONTACT_FROM}>`,
     `To: <${env.CONTACT_TO}>`,
     `Reply-To: ${encodeWord(oneLine(form.name))} <${oneLine(form.email)}>`,
-    `Subject: ${encodeWord(`Contact: ${oneLine(form.name)}${form.company ? ` (${oneLine(form.company)})` : ""}`)}`,
+    `Subject: ${encodeWord(`Contact${form.product ? ` (${form.product})` : ""}: ${oneLine(form.name)}${form.company ? ` (${oneLine(form.company)})` : ""}`)}`,
     `Message-ID: <${crypto.randomUUID()}@${domain}>`,
     `Date: ${new Date().toUTCString()}`,
     "MIME-Version: 1.0",

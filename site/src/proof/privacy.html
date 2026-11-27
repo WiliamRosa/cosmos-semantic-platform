@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CosmosProof privacy policy</title>
+  <meta name="description" content="What CosmosProof reads and writes inside your tenant, and what Cosmos Data does and does not receive.">
+  <link rel="canonical" href="https://cosmosdata.ai/proof/privacy">
+  <meta name="theme-color" content="#0b1220">
+  <link rel="icon" href="/assets/cosmosproof/icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <!-- Generated from deploy/azure/marketplace/privacy-policy.md in github.com/WiliamRosa/cosmosproof. Change it there first. -->
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/proof/" aria-label="CosmosProof">
+        <img class="brand-logo" src="/assets/cosmosproof/logo-horizontal-dark.svg" alt="CosmosProof" width="154" height="36">
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="/proof/">CosmosProof</a>
+        <a href="/proof/privacy">Privacy</a>
+        <a href="/proof/terms">Terms</a>
+        <a href="/proof/#contact">Contact</a>
+      </nav>
+    </div>
+  </header>
+  <main id="main" class="section">
+    <article class="wrap doc">
+        <h1>CosmosProof privacy policy</h1>
+        <p>Last updated: 2026-11-27</p>
+        <h2>Summary</h2>
+        <p>CosmosProof, as offered on the Azure Marketplace, is an <b>Azure Managed Application</b>: everything it creates runs <b>inside your own Azure subscription</b>, and its app runs inside your own Azure Databricks workspace. Cosmos Data, the publisher, does not host, operate or have access to your deployment, the metadata it reads, or the findings it produces. There is no publisher backend that your data passes through.</p>
+        <h2>What CosmosProof reads, inside your tenant</h2>
+        <p>Only with the read roles you grant to its managed identity:</p>
+        <ul><li><b>Azure Resource Graph:</b> the names, resource groups, tags and locations of Azure Databricks workspaces and storage accounts in the scope you chose.</li><li><b>Unity Catalog metadata:</b> catalogs, schemas, tables, columns and their storage paths; and, when you grant access to the Unity Catalog system tables, lineage, query history, billing and job metadata.</li><li><b>ADLS Gen2 metadata:</b> file paths, sizes, access tiers and last access times, from listing, Blob Inventory reports or storage read logs in your Log Analytics workspace.</li></ul>
+        <p>CosmosProof does <b>not</b> read the contents of your tables or files. Column names are used to recognize personal data (for example, a column called <code>email</code>); the values in those columns are never read.</p>
+        <h2>What CosmosProof writes, inside your tenant</h2>
+        <ul><li>Its audit store (<code>cosmosproof.audit</code>), reports and run logs, in the storage account and Log Analytics workspace that the deployment creates in your subscription.</li><li>In the app, the choice of which resources to analyze, with the e-mail address of the person who changed it, as given by your workspace's single sign-on. It is kept with that choice in a Unity Catalog volume of your workspace, so you can see who chose what.</li></ul>
+        <p>CosmosProof never deletes, moves or changes your data.</p>
+        <h2>What Cosmos Data receives</h2>
+        <p><b>Does not receive:</b> any of the metadata, findings, reports, logs, selections or user identities above, nor any credential. The deployed code makes no call to any endpoint controlled by Cosmos Data. Its source is public at <a href="https://github.com/WiliamRosa/cosmosproof" rel="noopener">https://github.com/WiliamRosa/cosmosproof</a>, so this can be verified.</p>
+        <p><b>May receive</b>, through the normal Azure Marketplace flow and not through the product:</p>
+        <ul><li>The purchase and usage information that Microsoft shares with every Marketplace publisher (such as your subscription and tenant identifiers and the plan you chose), for billing and support.</li><li>A customer usage attribution record, the standard Azure mechanism that tells a publisher a deployment of its offer exists. It carries no customer data.</li><li>What you send us yourself when you contact support (an e-mail, a website form or a public GitHub issue).</li></ul>
+        <p>The scanner image is downloaded from GitHub Container Registry when the job runs, so GitHub, not Cosmos Data, sees that download.</p>
+        <h2>Retention and deletion</h2>
+        <p>Your findings and audit store stay in your subscription for as long as you keep them. Deleting the Managed Application removes every resource the deployment created. The app is removed from your workspace by a workspace administrator. Cosmos Data keeps support messages only for as long as needed to answer them.</p>
+        <h2>Contact</h2>
+        <p>Questions about this policy: use the contact form at <a href="/proof/#contact">https://cosmosdata.ai/proof/#contact</a>.</p>
+        <h2>Changes</h2>
+        <p>Changes are published at this same address, with the date above updated.</p>
+    </article>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <p class="footer-brand"><img src="/assets/cosmosproof/icon.svg" alt="" width="22" height="22"> © 2026 <a href="/">Cosmos Data</a></p>
+      <nav aria-label="Footer">
+        <a href="https://github.com/WiliamRosa/cosmosproof" rel="noopener">GitHub</a>
+        <a href="/proof/privacy">Privacy</a>
+        <a href="/proof/terms">Terms</a>
+        <a href="/proof/#contact">Contact</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

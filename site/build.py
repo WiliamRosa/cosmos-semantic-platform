@@ -1,7 +1,10 @@
-"""Build the project website (cosmosdata.ai) into site/dist.
+"""Build the Cosmos Data website (cosmosdata.ai) into site/dist.
 
-The pages live in site/src. Media and logos are copied from where the repository already keeps
-them (docs/assets, the published LinkedIn posts and marketing/brand), so nothing is committed twice.
+The pages live in site/src: the company home (/), Cosmos Semantic (/semantic/) and CosmosProof
+(/proof/). Cosmos Semantic media and logos are copied from where the repository already keeps them
+(docs/assets, the published LinkedIn posts and marketing/brand), so nothing is committed twice.
+CosmosProof lives in its own repository; its logo and app screenshots are copied into
+site/media/cosmosproof from there (brand/ and deploy/azure/marketplace/screenshots/).
 
 Usage: python site/build.py
 """
@@ -17,6 +20,7 @@ DIST = ROOT / "site" / "dist"
 POSTS = ROOT / "marketing" / "linkedin" / "posts"
 BRAND = ROOT / "marketing" / "brand"
 MEDIA_DIR = ROOT / "site" / "media"
+PROOF = MEDIA_DIR / "cosmosproof"
 
 # Published path under dist/ -> logo file; the logo's single source is marketing/brand.
 LOGOS = {
@@ -33,6 +37,20 @@ MEDIA = {
     "console-answer.png": MEDIA_DIR / "console-answer.png",
     "console-process.png": MEDIA_DIR / "console-process.png",
     "console-demo.mp4": MEDIA_DIR / "console-demo.mp4",
+    # CosmosProof: logo and app screenshots from the CosmosProof repository.
+    "cosmosproof/logo-horizontal-dark.svg": PROOF / "cosmosproof-horizontal-dark.svg",
+    "cosmosproof/icon.svg": PROOF / "cosmosproof-icon.svg",
+    "cosmosproof/icon-180.png": PROOF / "cosmosproof-icon-180.png",
+    **{
+        f"cosmosproof/{name}": PROOF / name
+        for name in (
+            "01-overview.png",
+            "02-findings-evidence.png",
+            "03-overview-dark.png",
+            "04-resources.png",
+            "05-connections.png",
+        )
+    },
     # As published on LinkedIn.
     "cosmos-semantic-carousel.pdf": POSTS / "2026-11-20-carousel" / "cosmos-semantic-carousel.pdf",
     "walkthrough.mp4": POSTS / "2026-11-20-walkthrough" / "cosmos-semantic-walkthrough.mp4",
@@ -54,6 +72,7 @@ def main() -> None:
     if missing:
         raise SystemExit("missing media: " + ", ".join(missing))
     for name, path in MEDIA.items():
+        (assets / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, assets / name)
     for name, path in LOGOS.items():
         shutil.copy2(path, DIST / name)

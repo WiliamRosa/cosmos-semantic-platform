@@ -1,8 +1,20 @@
 # Website
 
-The project website, served at [cosmosdata.ai](https://cosmosdata.ai/) by the Cloudflare Worker
-`cosmos-semantic-site` (configured in `wrangler.jsonc`, which also attaches the domain). One static
-page, no framework and no build dependencies.
+The Cosmos Data website, served at [cosmosdata.ai](https://cosmosdata.ai/) by the Cloudflare
+Worker `cosmos-semantic-site` (configured in `wrangler.jsonc`, which also attaches the domain).
+Static pages, no framework and no build dependencies:
+
+| Path | Page |
+|---|---|
+| `/` | Cosmos Data: the two products and the contact form (old `/#demo`-style links redirect to `/semantic/`) |
+| `/semantic/` | Cosmos Semantic |
+| `/proof/` | CosmosProof |
+| `/proof/privacy`, `/proof/terms` | CosmosProof's privacy policy and terms, the URLs of its Marketplace offer |
+
+Pages use root-absolute paths (`/styles.css`, `/assets/...`), since they live in subfolders.
+CosmosProof has its own repository: its logo and app screenshots are copied into
+`media/cosmosproof/`, and its privacy and terms pages are generated from the Markdown reviewed there
+with `python site/legal_pages.py ../cosmosproof/deploy/azure/marketplace`. Change them there first.
 
 - `src/` holds the page, styles, script and the files Cloudflare reads (`_headers`, `404.html`).
 - `build.py` copies `src/` to `dist/` and adds the media and logos the repository already keeps:
@@ -23,7 +35,8 @@ cd site && npx wrangler dev      # page + contact form; emails are written to .w
 `worker/index.js` serves the assets, redirects `www` to the apex, and handles `POST /api/contact`:
 it validates the form (JSON from the page script, or a plain form post without JavaScript) and mails
 it to `CONTACT_TO` through the Cloudflare Email Routing binding, with the visitor's address as
-Reply-To. Spam guards: a hidden honeypot field, a minimum of three seconds on the page, a
+Reply-To and the product the message is about (`product`: a hidden field on each product page,
+a choice on the home page). Spam guards: a hidden honeypot field, a minimum of three seconds on the page, a
 same-origin check and size limits. Nothing is stored. Email Routing must stay enabled on
 cosmosdata.ai. Cloudflare sends only to a *verified destination address* of Email Routing (the
 mailbox that administrator@cosmosdata.ai forwards to), so `CONTACT_TO` comes from the repository
