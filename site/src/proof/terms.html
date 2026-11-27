@@ -31,11 +31,11 @@
   <main id="main" class="section">
     <article class="wrap doc">
         <h1>CosmosProof terms of use</h1>
-        <p>Last updated: 2026-11-27</p>
+        <p>Last updated: 2026-11-28</p>
         <h2>What you are getting</h2>
         <p>The CosmosProof offer on the Azure Marketplace ("the Offer") deploys CosmosProof as an Azure Managed Application into <b>your own Azure subscription</b>, and lets you install its app in your own Azure Databricks workspaces. Cosmos Data ("the Publisher") provides the deployment template, the scanner image and the app; it does not host, operate or have access to your deployment.</p>
         <h2>License</h2>
-        <p>CosmosProof is source-available under the Business Source License 1.1, published at <a href="https://github.com/WiliamRosa/cosmosproof/blob/main/LICENSE" rel="noopener">https://github.com/WiliamRosa/cosmosproof/blob/main/LICENSE</a>. That license allows production use only for non-commercial purposes. <b>An active subscription to a paid plan of the Offer is the commercial license</b> that allows your organization to use CosmosProof in production on its own data, for as long as the subscription is active and within the scope of the plan you chose.</p>
+        <p>CosmosProof is source-available under the Business Source License 1.1, published at <a href="https://github.com/WiliamRosa/cosmosproof/blob/main/LICENSE" rel="noopener">https://github.com/WiliamRosa/cosmosproof/blob/main/LICENSE</a>. That license allows production use only for non-commercial purposes. <b>An active subscription to the Offer is the commercial license</b> that allows your organization to use CosmosProof in production on its own data, for as long as the subscription is active. The Offer currently has one plan, <b>Free</b>: no charge and no limit on the number of workspaces, storage accounts, subscriptions or users. If paid plans are introduced later, they will be announced as described under "Changes", and existing Free subscriptions keep their license.</p>
         <p>These terms do not reduce any right the Business Source License already gives you, including evaluation and other non-production use.</p>
         <h2>How CosmosProof works with your data</h2>
         <ul><li>It only reads: it never deletes, moves or changes your data, and its only write is to the storage and Log Analytics workspace the deployment creates.</li><li>It reads metadata (names, paths, sizes, tiers, access times, lineage), never the contents of your tables or files.</li><li>Findings are evidence for a decision, not the decision. Every finding states what was checked, what could not be seen and a confidence level. Before you archive, move or delete anything, confirm it with the owner of the data. The Publisher is not responsible for actions you take based on a finding.</li><li>Cost figures are estimates from public list prices and the discount you configure, not your invoice.</li></ul>
@@ -43,13 +43,13 @@
         <h2>Your responsibilities</h2>
         <ul><li>The Azure and Azure Databricks resources CosmosProof uses run in your subscription and your workspaces, and you pay their cost directly (the scheduled job, its storage and logs, the Databricks App and the SQL warehouse queries).</li><li>You decide which read roles to grant and to which resources, and you keep your deployment's image and app up to date.</li><li>You remain responsible for complying with the law that applies to the data in your lakehouse.</li></ul>
         <h2>Support and updates</h2>
-        <p>Support is given by e-mail and through the contact form at <a href="/proof/#contact">https://cosmosdata.ai/proof/#contact</a>, on business days, with no response time guarantee unless your plan states one. New versions are announced in the GitHub repository's releases.</p>
+        <p>Support is given by e-mail and through the contact form at <a href="/proof/#contact">https://cosmosdata.ai/proof/#contact</a>, on business days, on a best-effort basis with no response time guarantee. New versions are announced in the GitHub repository's releases.</p>
         <h2>Warranty and liability</h2>
-        <p>CosmosProof is provided "as is", without warranty of any kind, as stated in its license. To the extent permitted by law, the Publisher's total liability under the Offer is limited to the amount you paid for the Offer in the twelve months before the claim.</p>
+        <p>CosmosProof is provided "as is", without warranty of any kind, as stated in its license. To the extent permitted by law, the Publisher's total liability under the Offer is limited to the amount you paid for the Offer in the twelve months before the claim (nothing, while the Offer is free).</p>
         <h2>Ending the subscription</h2>
-        <p>Cancelling the Marketplace subscription ends the commercial license and the support. The resources in your subscription stay there until you delete them; deleting the Managed Application removes everything the deployment created.</p>
+        <p>Cancelling the Marketplace subscription ends the commercial license. The resources in your subscription stay there until you delete them; deleting the Managed Application removes everything the deployment created.</p>
         <h2>Changes</h2>
-        <p>Changes to these terms or to the Offer's plans are published at this same address, with the date above updated, and do not apply retroactively to a period already paid.</p>
+        <p>Changes to these terms or to the Offer's plans are published at this same address, with the date above updated, and do not apply retroactively.</p>
         <h2>Contact</h2>
         <p><a href="/proof/#contact">https://cosmosdata.ai/proof/#contact</a></p>
     </article>
