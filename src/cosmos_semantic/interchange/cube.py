@@ -53,6 +53,7 @@ from cosmos_semantic.errors import QueryError
 from cosmos_semantic.expressions import REF_RE, USER_RE
 from cosmos_semantic.interchange import ExportResult, ImportResult
 from cosmos_semantic.spec import (
+    MONTH_WINDOW_IMPORT_REFUSAL,
     RECOMPUTED_WINDOW_AGGS,
     WINDOW_AGGS,
     CumulativeMetric,
@@ -61,6 +62,7 @@ from cosmos_semantic.spec import (
     RatioMetric,
     SimpleMetric,
     offset_grain_problem,
+    parse_month_window,
     parse_offset,
     window_parts,
 )
@@ -504,6 +506,15 @@ def _measure(cube, model, measure, dims, metrics, warnings, notes) -> bool:
             "does not end on the row's day, as Cosmos windows do; measure skipped"
         )
         return False
+    if (
+        window
+        and window.get("type") != "to_date"
+        and parse_month_window(str(window.get("trailing", ""))) is not None
+    ):
+        # Skipped as a distinct-count window is (DEC-49): Cube's month interval over its buckets
+        # is not checked against the engine's calendar months (DEC-59).
+        warnings.append(f"{where}: {MONTH_WINDOW_IMPORT_REFUSAL}; measure skipped")
+        return False
     if window and _AGG[kind] not in WINDOW_AGGS:
         # Cosmos accumulates per-period values, which only sums, counts, minima and maxima
         # allow (DEC-21), so model validation refuses any running total or window over this
@@ -552,8 +563,8 @@ def _measure(cube, model, measure, dims, metrics, warnings, notes) -> bool:
         else:
             metric["window"] = str(window.get("trailing", "unbounded"))
             warnings.append(
-                f"{where}: only rolling windows in days or weeks (`trailing: 7 day`) are "
-                "imported; queries using the metric will be refused"
+                f"{where}: a trailing window not in days, weeks or months is kept as written; "
+                "queries using the metric will be refused"
             )
         if filters:
             warnings.append(f"{where}: filters on a cumulative measure were dropped")

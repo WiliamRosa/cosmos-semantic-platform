@@ -95,7 +95,15 @@ def _equal(a, b) -> bool:
 
 def _requests(graph, count: int, seed: int):
     rng = random.Random(seed)
-    metrics = sorted(set(graph.metrics) | set(graph.measure_owner))
+    # Windows in months (DEC-59) have their own generator, so this sequence draws as before.
+    metrics = sorted(
+        name
+        for name in set(graph.metrics) | set(graph.measure_owner)
+        if not (
+            isinstance(graph.metrics.get(name), CumulativeMetric)
+            and graph.metrics[name].window_months()
+        )
+    )
     dims = sorted(
         f"{m}.{d}"
         for m, node in graph.models.items()
@@ -223,6 +231,59 @@ def _rolling_date_filter_requests(graph, count: int, seed: int):
                 rng.choice(DATE_FILTERS).format(t=time),
                 *rng.sample(FILTERS, rng.choice([0, 1])),
             ],
+        )
+        principal = Principal(
+            user={"region": rng.choice(REGIONS)}, channel=rng.choice(["api", "mcp"])
+        )
+        try:
+            for dialect in DIALECTS:
+                Planner(graph, dialect).plan(request, principal)
+        except CosmosError:
+            continue
+        produced.append((request, principal))
+    return produced
+
+
+# Filters on the time dimension of a window in months (DEC-59), written for `{t}`: ranges that
+# cut a month at both ends, a coarser grain, an IN list of days, and a shape not split (NOT).
+MONTH_DATE_FILTERS = [
+    "{{{t}}} >= CURRENT_DATE - INTERVAL '200' DAY",
+    "{{{t}}} >= CURRENT_DATE - INTERVAL '250' DAY AND {{{t}}} < CURRENT_DATE - INTERVAL '40' DAY",
+    "{{{t}__month}} BETWEEN CURRENT_DATE - INTERVAL '300' DAY AND CURRENT_DATE - INTERVAL '60' DAY",
+    "{{{t}__quarter}} >= CURRENT_DATE - INTERVAL '270' DAY",
+    "{{{t}__day}} IN (CURRENT_DATE - INTERVAL '15' DAY, CURRENT_DATE - INTERVAL '130' DAY)",
+    "NOT ({{{t}}} < CURRENT_DATE - INTERVAL '180' DAY)",
+]
+
+
+def _month_window_requests(graph, count: int, seed: int):
+    """Requests with a rolling window in months (DEC-59) and a time dimension at month grain
+    (the only grain such a window accepts), with up to one other dimension and one filter, and
+    about half with a filter on the window's time dimension, so the lookback CTE runs too. Its
+    own generator, as for rolling windows."""
+    rng = random.Random(seed)
+    months = sorted(
+        name
+        for name, metric in graph.metrics.items()
+        if isinstance(metric, CumulativeMetric) and metric.window_months()
+    )
+    times, plain = [], []
+    for m, node in graph.models.items():
+        for d, spec in node.dimensions.items():
+            if not spec.sensitivity:
+                (times if spec.type == "time" else plain).append(f"{m}.{d}")
+    times, plain = sorted(times), sorted(plain)
+    produced, attempts = [], 0
+    while len(produced) < count and attempts < count * 50:
+        attempts += 1
+        time = rng.choice(times)
+        filters = rng.sample(FILTERS, rng.choice([0, 1]))
+        if rng.random() < 0.5:
+            filters = [rng.choice(MONTH_DATE_FILTERS).format(t=time), *filters]
+        request = QueryRequest(
+            metrics=[rng.choice(months)],
+            dimensions=[*rng.sample(plain, rng.randint(0, 1)), f"{time}__month"],
+            filters=filters,
         )
         principal = Principal(
             user={"region": rng.choice(REGIONS)}, channel=rng.choice(["api", "mcp"])
@@ -430,6 +491,27 @@ TO_DATE_FILTER_PER_RUN = 8
 OFFSET_PER_RUN = 12
 OFFSET_DATE_FILTER_PER_RUN = 8
 METRIC_FILTER_PER_RUN = 8
+MONTH_WINDOW_PER_RUN = 10
+
+
+def test_month_window_draws_are_deterministic_and_cover_the_lookback(graph):
+    first = _month_window_requests(graph, MONTH_WINDOW_PER_RUN, seed=2026)
+    assert len(first) == MONTH_WINDOW_PER_RUN
+    assert first == _month_window_requests(graph, MONTH_WINDOW_PER_RUN, seed=2026)
+    drawn = {m for request, _ in first for m in request.metrics}
+    months = {
+        name
+        for name, metric in graph.metrics.items()
+        if isinstance(metric, CumulativeMetric) and metric.window_months()
+    }
+    assert months and months <= drawn
+    for request, _ in first:
+        assert sum(d.endswith("__month") for d in request.dimensions) == 1
+    lookback = [
+        "_lookback_" in Planner(graph, "duckdb").plan(request, principal).sql
+        for request, principal in first
+    ]
+    assert any(lookback) and not all(lookback)
 
 
 def test_metric_filter_draws_are_deterministic(graph):
@@ -517,6 +599,9 @@ def test_random_requests_give_the_same_numbers_everywhere(graph, connectors):
     kept = _metric_filter_requests(graph, METRIC_FILTER_PER_RUN, seed=2026)
     assert len(kept) == METRIC_FILTER_PER_RUN
     requests += kept
+    monthly = _month_window_requests(graph, MONTH_WINDOW_PER_RUN, seed=2026)
+    assert len(monthly) == MONTH_WINDOW_PER_RUN
+    requests += monthly
     for i, (request, principal) in enumerate(requests):
         results = {}
         for name, connector in connectors.items():

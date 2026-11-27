@@ -129,7 +129,7 @@ The `time` block of a metric (DEC-37) states its time semantics as fields, next 
 | --- | --- |
 | `kind` | `grain_to_date` (a running total or extreme within each period), `window` (a rolling window) or `offset` (inputs read at an earlier period) |
 | `period` | For `grain_to_date`: `day`, `week`, `month`, `quarter` or `year`; null for a running total over all time |
-| `window`, `days` | For `window`: the window as written (`7 days`) and its number of days |
+| `window`, `days`, `months` | For `window`: the window as written (`7 days`) and its number of days; for a window in months (DEC-59, `3 months`), `days` is null and `months` (present only then) is its number of months |
 | `from_facts` | For `window`, present (`true`) only when the window is recomputed from the facts of each window instead of combined from daily values: a window over a `count_distinct` measure (DEC-49) |
 | `shifts` | For `offset`: each input read at an earlier period, with the metric that reads it and the `offset` (`1 month`, `7 days`), through nested metrics too |
 | `time_dimension`, `query_grain` | The request's time dimension, spelled as in the request (`orders.ordered_at__month`), and its grain; `query_grain` is null when the time dimension is requested without a grain |

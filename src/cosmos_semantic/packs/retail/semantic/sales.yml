@@ -178,6 +178,24 @@ metrics:
     measure: smallest_order
     window: 7 days
     description: Value of the smallest order of the 7 days ending on each day
+  - name: revenue_rolling_3_months
+    type: cumulative
+    owner: controllership
+    measure: revenue
+    window: 3 months
+    description: Revenue of the 3 months ending on each month (trailing 3 months)
+  - name: order_count_rolling_12_months
+    type: cumulative
+    owner: sales-leadership
+    measure: order_count
+    window: 12 months
+    description: Orders of the 12 months ending on each month (last 12 months)
+  - name: largest_order_rolling_3_months
+    type: cumulative
+    owner: sales-leadership
+    measure: max_order_value
+    window: 3 months
+    description: Value of the largest order of the 3 months ending on each month
   - name: revenue_prev_month
     type: derived
     owner: controllership

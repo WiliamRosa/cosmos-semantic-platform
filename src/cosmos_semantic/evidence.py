@@ -271,7 +271,8 @@ class EvidenceBuilder:
         """The time semantics of a cumulative or offset metric (DEC-37), None for the others.
 
         ``kind`` is ``grain_to_date`` (``period`` null for a running total over all time),
-        ``window`` (``window`` as written and its ``days``; with ``from_facts`` true when the
+        ``window`` (``window`` as written and its ``days``, or, for a window in months, null
+        ``days`` and its ``months``, DEC-59; with ``from_facts`` true when the
         window is recomputed from the facts of each window, as a distinct count is, DEC-49,
         rather than combined from daily values) or ``offset`` (each input read at
         an earlier period, through nested metrics too). ``time_dimension`` and ``query_grain``
@@ -297,6 +298,10 @@ class EvidenceBuilder:
                     "window": metric.window,
                     "days": metric.window_days(),
                 }
+                months = metric.window_months()
+                if months is not None:
+                    # Only present for a window in months (DEC-59), whose `days` is null.
+                    time["months"] = months
                 if self._recomputed(metric):
                     # Only present for such a window, so other envelopes keep their shape.
                     time["from_facts"] = True
@@ -431,9 +436,10 @@ class EvidenceBuilder:
         if isinstance(metric, CumulativeMetric):
             inner = self.formula(metric.measure, seen)
             if metric.window:
+                each = "month" if metric.window_months() is not None else "day"
                 if self._recomputed(metric):
-                    return f"{inner} recomputed over the {metric.window} ending on each day"
-                return f"{inner} over the {metric.window} ending on each day"
+                    return f"{inner} recomputed over the {metric.window} ending on each {each}"
+                return f"{inner} over the {metric.window} ending on each {each}"
             period = metric.grain_to_date or "all time"
             owner = g.measure_owner.get(metric.measure)
             agg = g.models[owner].measures[metric.measure].agg if owner else None

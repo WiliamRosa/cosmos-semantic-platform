@@ -39,6 +39,7 @@ from cosmos_semantic.interchange.cube import (
     skip_dependents,
 )
 from cosmos_semantic.spec import (
+    MONTH_WINDOW_IMPORT_REFUSAL,
     CumulativeMetric,
     DerivedMetric,
     Project,
@@ -47,6 +48,7 @@ from cosmos_semantic.spec import (
     combined_window_refusal,
     cumulative_agg_problem,
     offset_grain_problem,
+    parse_month_window,
     parse_offset,
     window_parts,
 )
@@ -444,11 +446,17 @@ class _Builder:
             item["grain_to_date"] = grain_to_date
         elif window:
             item["window"] = str(window)
-            self.warnings.append(
-                f"metrics.{name}: rolling window `{window}`: only windows in days or weeks, "
-                "queried by day, are supported, and only days with data appear (MetricFlow "
-                "uses a time spine)"
-            )
+            if window_parts(str(window)) is not None:
+                self.warnings.append(
+                    f"metrics.{name}: rolling window `{window}`: queried by day only, and only "
+                    "days with data appear (MetricFlow uses a time spine)"
+                )
+            elif parse_month_window(str(window)) is None:
+                # A window in months is skipped by `skip_invalid_cumulative` (DEC-59).
+                self.warnings.append(
+                    f"metrics.{name}: rolling window `{window}`: not in days, weeks or months; "
+                    "queries using the metric will be refused"
+                )
         self.metrics.append(item)
 
     def skip_invalid_cumulative(self) -> None:
@@ -457,7 +465,9 @@ class _Builder:
         `count_distinct`), and the metrics that use them, each with a warning (DEC-32). The
         condition is the validator's own (``cumulative_agg_problem``), and for windows
         ``combined_window_refusal``: a `count_distinct` window is valid in Cosmos (DEC-49) but
-        not imported until MetricFlow's numbers are checked against the engine's."""
+        not imported until MetricFlow's numbers are checked against the engine's. A window in
+        months (DEC-59) is skipped too: MetricFlow subtracts the interval from each day of its
+        time spine, while the engine combines calendar months."""
         aggs = {m["name"]: m["agg"] for model in self.models for m in model.get("measures", [])}
         skipped: set[str] = set()
         for metric in self.metrics:
@@ -465,9 +475,12 @@ class _Builder:
                 continue
             agg = aggs[metric["measure"]]
             spec = CumulativeMetric.model_validate(metric)
-            problem = (
-                combined_window_refusal(agg) if spec.window else cumulative_agg_problem(spec, agg)
-            )
+            if spec.window_months() is not None:
+                problem: str | None = MONTH_WINDOW_IMPORT_REFUSAL
+            elif spec.window:
+                problem = combined_window_refusal(agg)
+            else:
+                problem = cumulative_agg_problem(spec, agg)
             if problem:
                 self.warnings.append(
                     f"metrics.{metric['name']}: over measure `{metric['measure']}`: {problem}; "
@@ -816,7 +829,7 @@ class _DbtWriter:
         if parts is None:
             raise _NotExported(
                 f"its window `{metric.window}` is not in days or weeks, the only units the "
-                "engine computes"
+                "dbt export carries"
             )
         node, measure = self.graph.measure(metric.measure)
         problem = combined_window_refusal(measure.agg)

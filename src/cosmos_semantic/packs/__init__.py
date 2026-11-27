@@ -413,7 +413,8 @@ def _smoke(project: Project, connector: Connector) -> list[dict[str, Any]]:
         measure, grain = None, "month"
         if metric.type == "cumulative":  # needs one time dimension of the measure's model
             measure = metric.measure
-            grain = "day" if metric.window else "month"  # windows in days need day grain
+            # Windows in days or weeks need day grain; windows in months, month grain (DEC-59).
+            grain = "day" if metric.window and not metric.window_months() else "month"
         elif units := _offset_units(graph, metric.name):  # offsets need one too (DEC-18)
             measure = _first_measure(graph, metric.name)
             grain = "day" if "day" in units else "month"
